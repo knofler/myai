@@ -1,6 +1,6 @@
 {
   "name": "ai-management",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "mcpName": "io.github.knofler/myai",
   "description": "myai — a self-owned, git-versioned AI memory + multi-agent framework. Plug any agent (Claude, Cursor, Gemini, Codex, opencode) into your own portable brain so it boots already knowing your projects, decisions, and context. Local-first (Docker), MCP-native, with an autonomous runner, RAG search, a live dashboard, and one-command full-stack app blueprints.",
   "bin": {
@@ -53,6 +53,7 @@
     "TRY_BRAIN.md",
     "CHANGELOG.md",
     "LICENSE",
+    "SECURITY.md",
     "!**/*.test.ts",
     "!**/tests/**",
     "!scripts/tests/**",
@@ -64,6 +65,7 @@
     "!scripts/build_clone_ready_branch.sh",
     "!scripts/fleet_resume.sh",
     "!scripts/remote_fleet.sh",
+    "!scripts/publish_public_mirror.sh",
     "!scripts/cli_task_runner.sh",
     "!scripts/machine_selfheal.sh",
     "!scripts/update_all.sh",
@@ -113,10 +115,13 @@
     "llm",
     "developer-tools"
   ],
-  "homepage": "https://knofler.github.io/ai_management/",
+  "homepage": "https://github.com/knofler/myai#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/knofler/ai_management.git"
+    "url": "git+https://github.com/knofler/myai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/knofler/myai/issues"
   },
   "license": "MIT",
   "author": "knofler"

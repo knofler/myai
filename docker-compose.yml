@@ -75,7 +75,7 @@ services:
       - ${REPOS_HOST_ROOT:-~/repos}:/repos:ro
       # Operator brain (git repo) — brain_delta/brain_commit/brain_merge read and
       # write THIS mount. Without it the container-local /root/.myai dies on every
-      # recreate (bit work-desktop 2026-07-07: "no brain repo" after a stack rebuild).
+      # recreate (observed 2026-07-07: "no brain repo" after a stack rebuild).
       # Pushing to the remote stays host-side (brain_sync_verify.sh) — the
       # container has no SSH keys, by design.
       - ${MYAI_HOME_HOST:-~/.myai}:/root/.myai

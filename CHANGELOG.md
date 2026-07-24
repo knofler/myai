@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-07-24
+
+### Added
+- docs(security): ship root `SECURITY.md` in the npm package (`files[]`) — data-locality guarantee + threat model now travel with the package
+- build(mirror): `scripts/publish_public_mirror.sh` — one-way, scrubbed publish of the curated public file set to the `knofler/myai` showcase repo (never exposes the private working repo's history/state/logs/brain)
+
+### Changed
+- fix(meta): repoint `homepage`/`repository`/`bugs` to the public `knofler/myai` mirror (the old GitHub Pages / private-repo links were dead)
+- chore(privacy): genericize machine hostnames + Atlas cluster identifiers in shipped source/docs (`MULTI_MACHINE_WORKFLOW.md`, `runtime/src/**`, `docker-compose.yml`)
+
 ## [0.6.2] — 2026-07-24
 
 ### Added

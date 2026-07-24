@@ -1,6 +1,6 @@
 # Multi-Machine Workflow (Dropbox Sync)
 
-> The developer works across multiple machines (e.g. work-desktop at work, MacBook Pro at home) with the codebase synced via Dropbox. This creates specific challenges that every AI agent and the developer must handle on session start.
+> The developer works across multiple machines (e.g. a work desktop and a home laptop) with the codebase synced via Dropbox. This creates specific challenges that every AI agent and the developer must handle on session start.
 
 ---
 
@@ -134,7 +134,7 @@ When an AI agent starts a session (`session start`, `agent mode`, or `hello`), i
 ```bash
 # Get current machine name
 hostname -s
-# e.g. "work-desktop" (work) or "runner-host" (home)
+# e.g. "work-desktop" or "home-laptop" (whatever `hostname -s` returns on each machine)
 ```
 
 Agents should log the hostname in `claude_log.md` on every session start so the next session can compare.
