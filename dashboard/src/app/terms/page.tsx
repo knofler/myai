@@ -29,7 +29,7 @@ export default function TermsPage() {
         <p>
           The myAI software is released under the{' '}
           <a
-            href="https://github.com/knofler/ai_management/blob/main/LICENSE"
+            href="https://github.com/knofler/myai/blob/main/LICENSE"
             target="_blank"
             rel="noopener noreferrer"
             className="text-teal-300 hover:underline"
@@ -110,7 +110,7 @@ export default function TermsPage() {
           We may update these terms; material changes will be posted here with a new &ldquo;Last updated&rdquo; date, and
           for the hosted service we will give reasonable notice. Questions: open a thread via{' '}
           <a
-            href="https://github.com/knofler/ai_management"
+            href="https://github.com/knofler/myai"
             target="_blank"
             rel="noopener noreferrer"
             className="text-teal-300 hover:underline"

@@ -131,7 +131,7 @@ export function WhatsNewWidget() {
           </div>
 
           <Link
-            href="https://github.com/knofler/ai_management/blob/main/CHANGELOG.md"
+            href="https://github.com/knofler/myai/blob/main/CHANGELOG.md"
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => setOpen(false)}

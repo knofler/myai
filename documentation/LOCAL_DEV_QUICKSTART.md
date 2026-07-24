@@ -23,8 +23,8 @@ you haven't already, for what each piece is.
 ## 1. Clone and branch
 
 ```bash
-git clone https://github.com/knofler/ai_management.git
-cd ai_management
+git clone https://github.com/knofler/myai.git
+cd myai
 git checkout main && git pull
 git checkout -b test          # see CONTRIBUTING.md — branch NAME matters for CI
 ```

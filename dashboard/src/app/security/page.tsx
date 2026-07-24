@@ -60,7 +60,7 @@ export default function SecurityPage() {
           configuration, myAI makes <strong className="text-zinc-200">zero outbound network calls</strong>. This page is
           a plain-English summary of{' '}
           <a
-            href="https://github.com/knofler/ai_management/blob/main/SECURITY.md"
+            href="https://github.com/knofler/myai/blob/main/SECURITY.md"
             target="_blank"
             rel="noopener noreferrer"
             className="text-teal-300 hover:underline"
@@ -182,7 +182,7 @@ export default function SecurityPage() {
         <p>
           Report privately via{' '}
           <a
-            href="https://github.com/knofler/ai_management/security/advisories/new"
+            href="https://github.com/knofler/myai/security/advisories/new"
             target="_blank"
             rel="noopener noreferrer"
             className="text-teal-300 hover:underline"
@@ -205,7 +205,7 @@ export default function SecurityPage() {
           safe-harbor policy. Use the same intake as §7, tagged <code className="text-teal-300">[BUG-BOUNTY]</code>.
           Full scope, payout tiers, safe-harbor terms, and the submission → triage → payout workflow are in{' '}
           <a
-            href="https://github.com/knofler/ai_management/blob/main/documentation/BUG_BOUNTY_PROGRAM.md"
+            href="https://github.com/knofler/myai/blob/main/documentation/BUG_BOUNTY_PROGRAM.md"
             target="_blank"
             rel="noopener noreferrer"
             className="text-teal-300 hover:underline"

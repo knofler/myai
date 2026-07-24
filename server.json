@@ -3,11 +3,11 @@
   "name": "io.github.knofler/myai",
   "description": "Self-hosted continuity OS for AI agents — persistent memory, state, tasks, and budgets.",
   "repository": {
-    "url": "https://github.com/knofler/ai_management",
+    "url": "https://github.com/knofler/myai",
     "source": "github"
   },
   "version": "0.5.1",
-  "websiteUrl": "https://github.com/knofler/ai_management",
+  "websiteUrl": "https://github.com/knofler/myai",
   "packages": [
     {
       "registryType": "npm",

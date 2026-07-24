@@ -418,7 +418,7 @@ export default async function Welcome() {
             fleet console. Self-hosted, plugged into any MCP-capable agent.
           </p>
           <a
-            href="https://github.com/knofler/ai_management/blob/main/docs/compare.md"
+            href="https://github.com/knofler/myai/blob/main/docs/compare.md"
             target="_blank"
             rel="noopener noreferrer"
             className="mt-4 inline-flex text-xs text-zinc-500 hover:text-teal-300 underline underline-offset-2"
@@ -496,7 +496,7 @@ export default async function Welcome() {
               The data-locality guarantee
             </h2>
             <a
-              href="https://github.com/knofler/ai_management/blob/main/SECURITY.md"
+              href="https://github.com/knofler/myai/blob/main/SECURITY.md"
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-zinc-500 hover:text-teal-300"

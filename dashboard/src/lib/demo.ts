@@ -25,4 +25,4 @@ export const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 
 /** Where the banner's install CTA sends visitors. */
 export const DEMO_INSTALL_URL =
-  process.env.NEXT_PUBLIC_DEMO_INSTALL_URL || 'https://github.com/knofler/ai_management#readme';
+  process.env.NEXT_PUBLIC_DEMO_INSTALL_URL || 'https://github.com/knofler/myai#readme';

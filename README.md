@@ -2212,7 +2212,7 @@ Full integration guide with DB queries, status lifecycle, and troubleshooting: `
 ## 🔧 Maintenance & contributing
 
 To update the global standards, modify `documentation/AI_RULES.md` in this repository and push to GitHub:
-`git@github.com:knofler/ai_management.git`
+`https://github.com/knofler/myai`
 
 Every change goes through the branching workflow: push to `test` → CI → PR to `main` → merge. Never push directly to `main`. See [Branching Strategy](#branching-strategy--production-safety).
 

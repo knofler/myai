@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-07-24
+
+### Fixed
+- fix(links): repoint every packaged file that still linked to the **private** `knofler/ai_management` repo → the public `knofler/myai` mirror. These URLs 404'd for anyone installing from npm. Covers the README "Maintenance & contributing" push URL, `SECURITY.md` advisory link, `CHANGELOG.md` compare links, `documentation/LOCAL_DEV_QUICKSTART.md` clone URL, `server.json` (`url`/`websiteUrl`), the generated docs footer (`scripts/build_docs.mjs`), and the dashboard legal/security/welcome UI + demo install URL. The live `knofler.github.io/ai_management/` docs-site links (HTTP 200) are intentionally kept.
+
 ## [0.6.3] — 2026-07-24
 
 ### Added
@@ -1147,6 +1152,7 @@ on any machine, with no access to the operator's private context.
   `CLAUDE.md`, env files, and managed-repo lists are excluded from the package
   by both the allowlist and the leak scanner.
 
-[Unreleased]: https://github.com/knofler/ai_management/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/knofler/ai_management/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/knofler/ai_management/releases/tag/v0.1.0
+[Unreleased]: https://github.com/knofler/myai/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/knofler/myai/compare/v0.6.3...v0.6.4
+[0.2.0]: https://github.com/knofler/myai/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/knofler/myai/releases/tag/v0.1.0

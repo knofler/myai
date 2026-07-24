@@ -111,7 +111,7 @@ export default function PrivacyPage() {
         <p>
           Questions or data requests: open a private thread via{' '}
           <a
-            href="https://github.com/knofler/ai_management"
+            href="https://github.com/knofler/myai"
             target="_blank"
             rel="noopener noreferrer"
             className="text-teal-300 hover:underline"

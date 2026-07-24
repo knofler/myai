@@ -62,7 +62,7 @@ export function LegalShell({
               </Link>
             ))}
             <a
-              href="https://github.com/knofler/ai_management/blob/main/SECURITY.md"
+              href="https://github.com/knofler/myai/blob/main/SECURITY.md"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-zinc-400"
@@ -70,7 +70,7 @@ export function LegalShell({
               SECURITY.md
             </a>
             <a
-              href="https://github.com/knofler/ai_management/blob/main/LICENSE"
+              href="https://github.com/knofler/myai/blob/main/LICENSE"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-zinc-400"
