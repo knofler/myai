@@ -1,0 +1,62 @@
+# Template: Copy to .github/workflows/merge-gate.yml
+# No placeholders — this file is the same for all repos.
+#
+# Purpose: Enforce that PRs to main come only from the test branch
+# or hotfix/* branches. This prevents accidental feature/* -> main merges.
+#
+# Usage in init_ai.sh:
+#   cp AI/templates/merge-gate.yml .github/workflows/merge-gate.yml
+
+name: Merge Gate
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  # CI-THRIFT-V2 changes gate — decide whether this change needs a build at all.
+  # code=false when ONLY AI/ docs/ state/ logs/ .claude/ *.md changed
+  # (framework/doc propagation); the heavy jobs below key off this and skip, so
+  # an AI/docs-only PR spends ~one cheap runner-minute instead of the full
+  # matrix. Always runs -> never a hanging required check. Non-PR events build.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          base="${{ github.event.pull_request.base.sha }}"
+          if git diff --quiet "$base"...HEAD -- \
+              ':(exclude)AI' ':(exclude)docs' ':(exclude)state' ':(exclude)logs' \
+              ':(exclude).claude' ':(exclude)*.md'; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "AI/docs-only change -> heavy jobs skip (CI-thrift v2)"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+  require-test-branch:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check source branch
+        run: |
+          SOURCE="${{ github.head_ref }}"
+          if [[ "$SOURCE" != "test" && ! "$SOURCE" =~ ^hotfix/ ]]; then
+            echo "::error::PRs to main must come from 'test' branch or 'hotfix/*' branches."
+            echo ""
+            echo "Branch '$SOURCE' is not allowed to merge directly into main."
+            echo "Please merge into 'test' first, verify on staging, then PR test -> main."
+            exit 1
+          fi
+          echo "Source branch '$SOURCE' is allowed. Proceeding."

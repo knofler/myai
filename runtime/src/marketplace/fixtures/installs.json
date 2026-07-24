@@ -1,0 +1,49 @@
+[
+  {
+    "installerTenantId": "tenant-globex",
+    "installId": "ins_globex_seo",
+    "listingId": "lst_seo_auditor",
+    "version": "1.2.0",
+    "status": "active",
+    "installedBy": "user-globex-admin",
+    "pricePaidUsd": 29.0,
+    "billingRef": "ch_globex_0001",
+    "installedAt": "2028-03-05T09:15:00.000Z",
+    "updatedAt": "2028-03-05T09:15:00.000Z"
+  },
+  {
+    "installerTenantId": "tenant-globex",
+    "installId": "ins_globex_pg",
+    "listingId": "lst_pg_migrator",
+    "version": "0.9.1",
+    "status": "active",
+    "installedBy": "user-globex-admin",
+    "pricePaidUsd": 9.0,
+    "billingRef": "sub_globex_0002",
+    "installedAt": "2028-04-06T10:00:00.000Z",
+    "updatedAt": "2028-04-06T10:00:00.000Z"
+  },
+  {
+    "installerTenantId": "tenant-initech",
+    "installId": "ins_initech_seo",
+    "listingId": "lst_seo_auditor",
+    "version": "1.2.0",
+    "status": "uninstalled",
+    "installedBy": "user-initech-ops",
+    "pricePaidUsd": 29.0,
+    "billingRef": "ch_initech_0003",
+    "installedAt": "2028-03-08T13:00:00.000Z",
+    "updatedAt": "2028-03-09T08:00:00.000Z"
+  },
+  {
+    "installerTenantId": "tenant-initech",
+    "installId": "ins_initech_changelog",
+    "listingId": "lst_changelog_bot",
+    "version": "2.0.0",
+    "status": "active",
+    "installedBy": "user-initech-ops",
+    "pricePaidUsd": 0.0,
+    "installedAt": "2028-02-01T00:00:00.000Z",
+    "updatedAt": "2028-02-01T00:00:00.000Z"
+  }
+]

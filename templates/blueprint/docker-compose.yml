@@ -1,0 +1,44 @@
+# Local dev stack — RAM ceiling 2 GB total (CLAUDE.md): app 1g + mongo 512m.
+# container_name uses the project prefix (CLAUDE.md Docker naming rule).
+services:
+  app:
+    container_name: __PROJECT_NAME__-app
+    build:
+      context: .
+      target: dev
+    ports:
+      - "3000:3000"
+    environment:
+      - MONGODB_URI=mongodb://admin:password@mongo:27017/__PROJECT_NAME__?authSource=admin
+      - NODE_ENV=development
+    env_file:
+      - .env.local
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      mongo:
+        condition: service_healthy
+    mem_limit: 1g
+
+  mongo:
+    container_name: __PROJECT_NAME__-mongo
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand({ping:1})", "--quiet"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 512m
+
+volumes:
+  mongo_data:

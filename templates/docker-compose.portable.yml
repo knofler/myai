@@ -1,0 +1,129 @@
+# docker-compose.portable.yml — PORTABLE myAI self-contained stack
+#
+# Dropped into any target repo by `myai init <path>` (lands at
+# AI/docker-compose.myai.yml, and at the repo root as docker-compose.yml when the
+# repo has none). `myai up` launches it. It brings the whole single-tenant myAI
+# surface up on localhost:
+#
+#   gateway   (MCP + HTTP/WS API)   → :3100 / :3200 / :3201
+#   dashboard (Next.js console)     → :3210
+#   mongo     (RAG corpus + state)  → :27200
+#
+# PORTABILITY: the gateway/dashboard images are BUILT from the framework install,
+# not from the target repo (the target only carries the AI/ folder). Point
+# MYAI_HOME at wherever the framework lives — default assumes the common sibling
+# layout (../ai_management). Override in .env:
+#
+#   MYAI_HOME=/abs/path/to/ai_management
+#
+# Everything else is env-driven with safe loopback defaults — see .env.example.
+# No operator paths, no secrets, no hardcoded hostnames: portable to any machine.
+
+name: ${MYAI_PROJECT_NAME:-myai}
+
+services:
+  gateway:
+    build: ${MYAI_HOME:-../ai_management}/runtime
+    container_name: ${MYAI_PROJECT_NAME:-myai}-gateway
+    ports:
+      - "${MYAI_MCP_PORT:-3100}:3100"
+      - "${MYAI_GATEWAY_HTTP_PORT:-3200}:3200"
+      - "${MYAI_GATEWAY_WS_PORT:-3201}:3201"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Unset MONGODB_URI → falls back to the bundled mongo container. Set it in
+      # .env to point at Atlas / an external Mongo. Same var for the dashboard.
+      - MONGODB_URI=${MONGODB_URI:-mongodb://admin:password@mongo:27017/myai?authSource=admin}
+      - MONGODB_NAME=${MONGODB_NAME:-myai}
+      - AI_ROOT=/app/AI
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - GATEWAY_HTTP_PORT=3200
+      - GATEWAY_WS_PORT=3201
+      - MCP_PORT=3100
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
+      # Loopback bridge token — the in-cluster dashboard authenticates with it over
+      # the Docker bridge; host callers stay trusted via loopback. Override for hosted.
+      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}
+      - JWT_SECRET=${JWT_SECRET:-myai-dev-jwt-secret-change-me}
+      # Anti-lockout bootstrap admin — set BOTH in .env to seed an owner login.
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    mem_limit: ${GATEWAY_MEM_LIMIT:-1g}
+    mem_reservation: ${GATEWAY_MEM_RESERVATION:-256m}
+    volumes:
+      # The target repo's AI/ framework folder, mounted read-only. A standalone/
+      # greenfield `myai up` (no per-project AI/ folder — scripts/myai_up.sh)
+      # overrides this to the framework install itself via MYAI_AI_MOUNT.
+      - ${MYAI_AI_MOUNT:-./AI}:/app/AI:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3200/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - myai-net
+
+  dashboard:
+    build: ${MYAI_HOME:-../ai_management}/dashboard
+    container_name: ${MYAI_PROJECT_NAME:-myai}-dashboard
+    ports:
+      - "${MYAI_DASHBOARD_PORT:-3210}:3210"
+    environment:
+      - MONGODB_URI=${MONGODB_URI:-mongodb://admin:password@mongo:27017/myai?authSource=admin}
+      - AI_ROOT=/app/AI
+      - GATEWAY_MCP_URL=http://gateway:3100/mcp
+      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}
+      # Loopback default → no login wall. Set true only for an internet-exposed deploy.
+      - REQUIRE_LOGIN=${REQUIRE_LOGIN:-false}
+    mem_limit: ${DASHBOARD_MEM_LIMIT:-512m}
+    mem_reservation: ${DASHBOARD_MEM_RESERVATION:-128m}
+    volumes:
+      - ${MYAI_AI_MOUNT:-./AI}:/app/AI:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3210/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - myai-net
+
+  mongo:
+    image: mongo:7
+    container_name: ${MYAI_PROJECT_NAME:-myai}-mongo
+    ports:
+      - "${MYAI_MONGO_PORT:-27200}:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:-password}
+    mem_limit: ${MONGO_MEM_LIMIT:-512m}
+    mem_reservation: ${MONGO_MEM_RESERVATION:-128m}
+    volumes:
+      - myai-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - myai-net
+
+volumes:
+  myai-mongo-data:
+
+networks:
+  myai-net:
+    driver: bridge

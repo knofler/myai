@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "namespace": "my-repo",
+  "repo": "my-repo",
+  "gateway": "http://localhost:3100",
+  "blurb": "myAI repo pointer — brain namespace 'my-repo'. Full identity/state loads via context_boot; this is the degraded-boot cache."
+}

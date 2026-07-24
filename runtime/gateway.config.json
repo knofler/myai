@@ -1,0 +1,44 @@
+{
+  "server": {
+    "httpPort": 3200,
+    "wsPort": 3201,
+    "host": "0.0.0.0"
+  },
+  "database": {
+    "uri": "mongodb://admin:password@localhost:27017/myai?authSource=admin",
+    "name": "myai"
+  },
+  "aiRoot": "../",
+  "sessions": {
+    "compactionThreshold": 50,
+    "compactionKeepRecent": 10,
+    "idleTimeoutMinutes": 1440,
+    "maxConcurrentSessions": 100
+  },
+  "memory": {
+    "embedding": {
+      "provider": "local",
+      "model": "all-MiniLM-L6-v2",
+      "dimensions": 384
+    },
+    "search": {
+      "topN": 5,
+      "weights": {
+        "vector": 0.5,
+        "tagOverlap": 0.2,
+        "confidence": 0.2,
+        "recency": 0.1
+      }
+    }
+  },
+  "hooks": {
+    "enableBashCompat": true,
+    "bashHooksDir": "../hooks",
+    "userHooksDir": "./hooks",
+    "defaultTimeout": 5000
+  },
+  "logging": {
+    "level": "info",
+    "pretty": true
+  }
+}

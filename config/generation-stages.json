@@ -1,0 +1,52 @@
+{
+  "stages": [
+    {
+      "id": "idea",
+      "name": "Idea Refinement",
+      "description": "Refine the raw idea into a structured concept with target audience, value proposition, and key features",
+      "instructions": "Produce a structured Idea Document with:\n1. **Project Name** — clear, memorable name\n2. **One-Line Pitch** — what it does in one sentence\n3. **Problem Statement** — what pain point does this solve?\n4. **Target Audience** — who is this for? (2-3 personas)\n5. **Value Proposition** — why would they use this over alternatives?\n6. **Core Features** (5-8) — numbered list with brief descriptions\n7. **Tech Stack Recommendation** — based on the requirements (must follow AI_RULES.md: Next.js, Docker, MongoDB, Vercel/Render)\n8. **Success Metrics** — how do we know this works?\n9. **Risks & Assumptions** — what could go wrong?"
+    },
+    {
+      "id": "plan",
+      "name": "Project Plan",
+      "description": "Create a detailed project plan with milestones, phases, and task breakdown",
+      "instructions": "Given the idea document, create a Project Plan with:\n1. **Project Overview** — summary\n2. **Architecture Overview** — system design (frontend, backend, database, infrastructure)\n3. **Phase Breakdown** (3-5 phases) — phase name, tasks (S/M/L complexity), deliverables, dependencies\n4. **Data Model** — key entities and relationships\n5. **API Endpoints** — grouped by resource (method, path, description)\n6. **Frontend Pages** — routes and descriptions\n7. **Infrastructure** — Docker, CI/CD, deployment targets\n8. **Testing Strategy** — unit, integration, E2E\n9. **MVP Scope** — v1 vs later"
+    },
+    {
+      "id": "brd",
+      "name": "Business Requirements Document",
+      "description": "Formal BRD with functional and non-functional requirements",
+      "instructions": "Produce a formal BRD with:\n1. **Executive Summary**\n2. **Business Objectives** (SMART format)\n3. **Scope** — in/out of scope\n4. **Functional Requirements** (FR-001, FR-002...) — ID, Title, Description, Priority (Must/Should/Could), Acceptance Criteria\n5. **Non-Functional Requirements** (NFR-001...) — Performance, Security, Scalability, Accessibility (WCAG 2.1 AA)\n6. **User Stories** (5-10) — As a... I want... So that... with acceptance criteria\n7. **Data Requirements**\n8. **Integration Requirements**\n9. **Constraints & Assumptions**"
+    },
+    {
+      "id": "gap-analysis",
+      "name": "Gap Analysis",
+      "description": "Identify gaps between requirements and plan, risks, and mitigation strategies",
+      "instructions": "Perform a gap analysis:\n1. **Requirements Coverage Matrix** — table: each FR/NFR → Covered/Partial/Gap\n2. **Identified Gaps** — requirements not fully addressed\n3. **Technical Risks** — High/Medium/Low with mitigations\n4. **Missing Components**\n5. **Dependency Risks** — third-party services, libraries\n6. **Security Gaps** — OWASP top 10 considerations\n7. **Scalability Concerns** — bottlenecks\n8. **Recommendations** — prioritized actions to close gaps\n9. **Updated Scope** — adjustments needed"
+    },
+    {
+      "id": "trd",
+      "name": "Technical Requirements Document",
+      "description": "Detailed technical specification with architecture, schemas, and API contracts",
+      "instructions": "Produce a TRD with:\n1. **System Architecture** — components and interactions (ASCII diagram)\n2. **Technology Stack** — exact versions and justification\n3. **Database Schema** — full Mongoose schema definitions: fields, types, validation, indexes, relationships\n4. **API Specification** — per endpoint: method, path, auth, request/response schemas (TypeScript), error codes, examples\n5. **Authentication & Authorization** — complete auth flow\n6. **Frontend Architecture** — routes, layouts, component hierarchy, state management, TypeScript interfaces\n7. **Infrastructure** — Docker Compose services, environment variables, CI/CD stages\n8. **Error Handling Strategy**\n9. **Monitoring & Logging**"
+    },
+    {
+      "id": "design",
+      "name": "Design Specification",
+      "description": "UI/UX design specification with component library and page layouts",
+      "instructions": "Produce a Design Spec with:\n1. **Design System** — color palette (hex, dark/light), typography, spacing, border radius, shadows, Tailwind extensions\n2. **Component Library** — per component: name, props (TS interface), variants, states, a11y, Tailwind classes\n3. **Page Layouts** — per page: wireframe description, components used, responsive breakpoints, loading/error/empty states\n4. **Navigation Flow**\n5. **Form Specifications** — fields, validation, error messages\n6. **Animation & Transitions**\n7. **Accessibility Checklist** — WCAG 2.1 AA\n8. **Dark/Light Mode**"
+    },
+    {
+      "id": "build",
+      "name": "Build Specification",
+      "description": "Implementation guide with file structure, code patterns, and build order",
+      "instructions": "Produce a Build Spec with:\n1. **Project Scaffolding** — file/folder tree, package.json deps (versions), Docker setup, .env.example\n2. **Build Order** — numbered steps: scaffold → models → API → frontend → auth → tests → CI/CD\n3. **Key Implementation Files** — per file: path, purpose, imports, TypeScript types, implementation notes\n4. **Testing Plan** — unit tests per module, integration scenarios, E2E flows\n5. **Deployment Checklist** — pre-deploy, env setup (Vercel/Render/Atlas), DNS, monitoring\n6. **Post-Launch** — smoke tests, rollback procedure"
+    },
+    {
+      "id": "ship",
+      "name": "Ship Plan",
+      "description": "Deployment plan, launch checklist, and go-live strategy",
+      "instructions": "Produce a Ship Plan with:\n1. **Pre-Launch Checklist** — tests, security audit, performance, docs, env vars, DB migrations, SSL\n2. **Deployment Steps** — infrastructure provisioning, branching (main+test), CI/CD verification, DB seeding, deploy backend → frontend, DNS\n3. **Monitoring Setup** — health checks, error alerting, dashboards\n4. **Rollback Plan** — exact revert steps\n5. **Post-Launch** — smoke tests, UAT, 24h monitoring\n6. **Launch Communication**"
+    }
+  ]
+}

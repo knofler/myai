@@ -1,0 +1,35 @@
+# .dockerignore — fleet template (AI_RULES §12)
+# FIRST CONDITION of every repo: node_modules must NEVER enter the Docker build
+# context (and never sync to Dropbox). Host node_modules bloat/poison the image
+# (wrong-arch binaries, stale deps) and balloon build time; deps install INSIDE
+# the image. Keep node_modules at the very top — it is the mandated entry.
+node_modules/
+**/node_modules/
+
+# Build output & caches (regenerable — never ship into the context)
+.next/
+out/
+build/
+dist/
+coverage/
+.turbo/
+.parcel-cache/
+.nuxt/
+.svelte-kit/
+*.tsbuildinfo
+
+# VCS & local env (never bake into an image)
+.git/
+.gitignore
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Compose/Docker meta & misc
+docker-compose.yml
+Dockerfile
+.dockerignore
+npm-debug.log*
+.DS_Store

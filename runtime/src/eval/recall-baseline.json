@@ -1,0 +1,9 @@
+{
+  "k": 5,
+  "meanPrecisionAtK": 0.22,
+  "meanRecallAtK": 1,
+  "mrr": 1,
+  "map": 1,
+  "hitRate": 1,
+  "recommendedThreshold": 0
+}

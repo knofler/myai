@@ -1,0 +1,18 @@
+# Repos EXCLUDED from autonomous scheduling — NO autonomous runner work without
+# your clear, explicit consent.
+#
+# Effect:
+#   • The CLI task runner SKIPS any pending task whose repo is listed here on its
+#     autonomous (fleet) picks. A CONSENTED run still works: `cli_task_runner.sh
+#     --repo <name> --force` or `--task <id>` bypasses this list (manual = consent).
+#   • `schedule plan` / `schedule_task.sh` / `push_schedule.sh` REFUSE to queue work
+#     for these repos. Override for a single consented call: env SCHEDULE_CONSENT=1.
+#
+# One repo name per line (task-store convention = git basename). '#' lines ignored.
+#
+# Example:
+#   client-production-app
+#   do-not-touch-legacy
+#
+# This .example file is the fork-ready template. Copy to `schedule_ignore.txt`
+# and list the repo basenames you never want auto-scheduled.

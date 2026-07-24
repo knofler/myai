@@ -1,0 +1,26 @@
+# .dockerignore — node_modules must NEVER enter the build context (AI_RULES §12).
+node_modules/
+**/node_modules/
+
+# Build output & caches (regenerable)
+.next/
+out/
+build/
+dist/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
+
+# VCS & local env
+.git/
+.gitignore
+.env
+.env.local
+
+# Compose/Docker meta & misc
+docker-compose.yml
+Dockerfile
+.dockerignore
+npm-debug.log*
+.DS_Store

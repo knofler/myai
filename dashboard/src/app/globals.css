@@ -1,0 +1,218 @@
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────────
+   myAI — dark zinc base + refined BLUE-GREEN accent (teal→emerald).
+   Accents are applied ONLY to interactive surfaces (buttons, active
+   nav, links, focus rings, key badges) — NOT a full-page repaint.
+   ────────────────────────────────────────────────────────────── */
+
+:root {
+  /* blue-green accent ramp */
+  --accent-teal: 20 184 166;     /* teal-500  */
+  --accent-cyan: 6 182 212;      /* cyan-500  */
+  --accent-emerald: 16 185 129;  /* emerald-500 */
+
+  /* Claude-orange BRAND token — reserved for the 'myAI' wordmark + every
+     page H1. Interactive accents stay blue-green (above); brand identity
+     is orange. Single source of truth — never hardcode #D97757 elsewhere. */
+  --brand-orange: 217 119 87;    /* #D97757 */
+
+  /* ── Theme tokens (dark = default, unchanged from the values this
+     dashboard already shipped) ─────────────────────────────────────
+     `.light` on <html> (set by lib/theme-context.tsx, see THEME_PALETTE
+     in lib/theme.ts for the WCAG-AA-checked source of truth) overrides
+     these. Only the site-wide chrome (globals.css + nav.tsx) consumes
+     them today — per-page content keeps its existing dark-only classes
+     until it's retrofitted incrementally. */
+  --bg-page: 9 9 11;        /* zinc-950 */
+  --bg-surface: 24 24 27;   /* zinc-900 */
+  --bg-hover: 39 39 42;     /* zinc-800 */
+  --border-subtle: 39 39 42; /* zinc-800 */
+  --text-primary: 244 244 245;   /* zinc-100 */
+  --text-secondary: 161 161 170; /* zinc-400 */
+  --text-muted: 113 113 122;     /* zinc-500 */
+  --accent-text: 153 246 228;    /* teal-200 — active nav label on gel-brand */
+}
+
+:root.light {
+  --bg-page: 248 250 252;   /* slate-50 */
+  --bg-surface: 255 255 255; /* white */
+  --bg-hover: 241 245 249;   /* slate-100 */
+  --border-subtle: 226 232 240; /* slate-200 */
+  --text-primary: 15 23 42;      /* slate-900 */
+  --text-secondary: 71 85 105;   /* slate-600 */
+  --text-muted: 100 116 139;     /* slate-500 */
+  --accent-text: 15 118 110;     /* teal-700 — enough contrast on the light gel-brand tint */
+}
+
+/* Brand identity colour — the myAI wordmark + page H1 headings.
+   Bold is applied at the element; this only sets the hue. */
+.text-brand-orange { color: rgb(var(--brand-orange)); }
+
+/* Orange brand gel — hero band on the showcase page only. */
+.gel-orange {
+  background-image: linear-gradient(
+    180deg,
+    rgba(217, 119, 87, 0.18),
+    rgba(217, 119, 87, 0.06) 60%,
+    rgba(217, 119, 87, 0.03)
+  );
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px rgba(217, 119, 87, 0.28),
+    0 4px 16px -6px rgba(217, 119, 87, 0.35);
+}
+
+/* Subtle teal-tinted ambient gradient over the dark zinc base — depth
+   without repainting. */
+body {
+  background-color: rgb(var(--bg-page));
+  color: rgb(var(--text-primary));
+  background-image:
+    radial-gradient(1100px 600px at 12% -8%, rgba(20, 184, 166, 0.07), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(6, 182, 212, 0.05), transparent 55%);
+  background-attachment: fixed;
+}
+
+/* ── Gel skin ──────────────────────────────────────────────────
+   Soft gradient + inner highlight + layered shadow. Applied to
+   cards and buttons only (NOT every element). */
+
+/* Neutral gel surface — for cards & stat tiles */
+.gel-surface {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 42%);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px 0 rgba(0, 0, 0, 0.4),
+    0 8px 24px -12px rgba(0, 0, 0, 0.6);
+}
+
+/* Brand gel — teal→emerald, for the active nav item & primary buttons */
+.gel-brand {
+  background-image: linear-gradient(
+    180deg,
+    rgba(45, 212, 191, 0.22),
+    rgba(16, 185, 129, 0.12) 55%,
+    rgba(6, 182, 212, 0.10)
+  );
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.10),
+    inset 0 0 0 1px rgba(45, 212, 191, 0.30),
+    0 4px 14px -6px rgba(20, 184, 166, 0.45);
+}
+
+/* Badge gel — gentle top highlight for key status/priority badges */
+.gel-badge {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0) 60%);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Teal focus ring for keyboard/interactive accessibility */
+*:focus-visible {
+  outline: 2px solid rgba(45, 212, 191, 0.7);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Never let anything force the page wider than the viewport on phones. */
+html, body { max-width: 100%; overflow-x: hidden; }
+
+/* ── Responsive card-table ─────────────────────────────────────
+   Below md, ANY <table class="card-table"> collapses into stacked
+   cards — one card per row, each cell shown as a labelled line via
+   the cell's data-label attribute. Kills horizontal scroll on phones.
+   Mark a column to hide on mobile with class "m-hide" on its <td>.
+   md and up: renders as a normal table (no effect). */
+@media (max-width: 767px) {
+  .card-table { display: block; width: 100%; }
+  .card-table thead { display: none; }
+  .card-table tbody { display: block; width: 100%; }
+  .card-table tr {
+    display: block;
+    width: 100%;
+    margin: 0 0 0.5rem;
+    padding: 0.625rem 0.875rem;
+    border: 1px solid rgb(var(--border-subtle));
+    border-radius: 0.75rem;
+    background: rgb(var(--bg-surface) / 0.55);
+    background-image: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0) 42%);
+  }
+  .card-table tr:last-child { margin-bottom: 0; }
+  .card-table td {
+    display: block;
+    width: 100%;
+    padding: 0.2rem 0 !important;
+    border: 0 !important;
+    text-align: left !important;
+    max-width: 100% !important;
+    white-space: normal !important;
+    word-break: break-word;
+  }
+  .card-table td.m-hide { display: none; }
+  /* Cells that declare a label render as a labelled left/right line. */
+  .card-table td[data-label] {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    text-align: right !important;
+  }
+  .card-table td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    font-size: 10px;
+    line-height: 1.4;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: rgb(var(--text-muted));
+    text-align: left;
+    white-space: nowrap;
+  }
+  /* The row's lead cell (title/primary) gets emphasis, no label clutter. */
+  .card-table td.m-title {
+    text-align: left !important;
+    font-weight: 600;
+    padding-bottom: 0.4rem !important;
+  }
+  .card-table td.m-title::before { content: ''; }
+  .card-table td.m-title > * { max-width: 100% !important; }
+}
+
+/* Give page content room above the mobile bottom tab bar. */
+@media (max-width: 767px) {
+  main { padding-bottom: 5rem !important; }
+}
+
+/* Notification toast slide-in (REALTIME_NOTIFICATIONS Phase 5). */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(1rem) scale(0.98); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+/* Detail-panel entrance (registry drawers). Mobile slides up from the bottom
+   like a sheet; sm+ slides in from the right. Backdrop fades. Gives taps a
+   visible, physical response instead of an instant pop. */
+@keyframes panel-in-up {
+  from { opacity: 0; transform: translateY(2.5rem); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes panel-in-right {
+  from { opacity: 0; transform: translateX(2rem); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.panel-enter { animation: panel-in-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@media (min-width: 640px) {
+  .panel-enter { animation-name: panel-in-right; }
+}
+.backdrop-enter { animation: backdrop-in 0.18s ease-out; }
+
+/* Touch press feedback for tappable cards — hover styles are inert on touch
+   screens, so give fingers a scale response. */
+.tap-press {
+  transition: transform 0.1s ease-out, border-color 0.15s ease-out, background-color 0.15s ease-out;
+}
+.tap-press:active { transform: scale(0.98); }

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Docker-only dev helper for __PROJECT_NAME__ (no host npm install — AI_RULES).
+#   ./dev            → start the stack (app + mongo), follow app logs
+#   ./dev up         → start detached
+#   ./dev down       → stop the stack
+#   ./dev build      → rebuild images
+#   ./dev logs       → follow app logs
+#   ./dev shell      → shell into the app container
+#   ./dev test       → run unit tests inside the container
+#   ./dev typecheck  → tsc --noEmit inside the container
+#   ./dev lint       → eslint inside the container
+set -euo pipefail
+cd "$(dirname "$0")"
+
+APP=__PROJECT_NAME__-app
+[[ -f .env.local ]] || { echo "→ creating .env.local from .env.example"; cp .env.example .env.local; }
+
+cmd="${1:-start}"
+case "$cmd" in
+  start)     docker compose up -d --build && docker compose logs -f app ;;
+  up)        docker compose up -d --build ;;
+  down)      docker compose down ;;
+  build)     docker compose build ;;
+  logs)      docker compose logs -f app ;;
+  shell)     docker compose exec app sh ;;
+  test)      docker compose exec app npm test ;;
+  typecheck) docker compose exec app npm run type-check ;;
+  lint)      docker compose exec app npm run lint ;;
+  *)         echo "Unknown command: $cmd"; sed -n '2,12p' "$0"; exit 1 ;;
+esac

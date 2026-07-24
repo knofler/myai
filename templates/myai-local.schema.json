@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://knofler.dev/schemas/myai-local.schema.json",
+  "title": ".myai-local",
+  "description": "Gitignored per-repo myAI pointer file dropped by `myai init` (ADR-016 §0.2/§4). Carries repo/namespace identity, a gateway-discovery hint, and a short cached identity blurb for degraded boot. NEVER carries state, history, or secrets — those live in the brain and the gateway, never in the code repo.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "namespace"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Bump on any breaking change to this shape."
+    },
+    "namespace": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "description": "Brain namespace id for this repo (repos/<ns>/ in ~/.myai/brain). Collision-safe slug derived from the repo name/group by `myai init` (S-INIT-4)."
+    },
+    "repo": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Human-readable repo name/slug. Advisory only; namespace is authoritative."
+    },
+    "gateway": {
+      "type": "string",
+      "format": "uri",
+      "description": "Gateway-discovery hint — base URL the client shim tries first (default http://localhost:3100). A hint, not a secret; carries no token."
+    },
+    "blurb": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Short cached identity blurb (<=200 chars) read by the client shim ONLY when the gateway is entirely unreachable, so a session still boots degraded. Never state, never secrets."
+    }
+  }
+}

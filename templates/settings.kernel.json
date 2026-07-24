@@ -1,0 +1,51 @@
+{
+  "$comment": "myAI kernel settings \u2014 dropped by `myai init` (greenfield) into a kernel-only repo's .claude/settings.json. Wires the PreToolUse SAFETY hooks (block-push-main, secret-scan, no-local-npm, protected-files) from the installed ai-management module, resolved at hook-exec time via `myai root`. The hook BODIES live in the module, never a per-repo copy (plan S-INIT-5, ADR-016 \u00a70.5). Each command FAILS LOUD (exit 2 = block the tool) if the module is unresolvable, so a broken/missing install can never silently run this repo WITHOUT its safety rails.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "_R=\"$(myai root 2>/dev/null)\"; if [ -z \"$_R\" ]; then echo 'myAI module unresolvable \u2014 safety hook (block-push-main) cannot run. Reinstall: npm i -g ai-management' >&2; exit 2; fi; exec bash \"$_R/hooks/pre-tool/01-block-push-main.sh\""
+          },
+          {
+            "type": "command",
+            "command": "_R=\"$(myai root 2>/dev/null)\"; if [ -z \"$_R\" ]; then echo 'myAI module unresolvable \u2014 safety hook (secret-scan) cannot run. Reinstall: npm i -g ai-management' >&2; exit 2; fi; exec bash \"$_R/hooks/pre-tool/03-secret-scan.sh\""
+          },
+          {
+            "type": "command",
+            "command": "_R=\"$(myai root 2>/dev/null)\"; if [ -z \"$_R\" ]; then echo 'myAI module unresolvable \u2014 safety hook (no-local-npm) cannot run. Reinstall: npm i -g ai-management' >&2; exit 2; fi; exec bash \"$_R/hooks/pre-tool/05-no-local-npm.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "_R=\"$(myai root 2>/dev/null)\"; if [ -z \"$_R\" ]; then echo 'myAI module unresolvable \u2014 safety hook (protected-files) cannot run. Reinstall: npm i -g ai-management' >&2; exit 2; fi; exec bash \"$_R/hooks/pre-tool/04-protected-files.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "c=$(jq -r '.tool_input.command // empty' 2>/dev/null); case \"$c\" in *bin/myai.cjs*|*\"myai \"*|\"myai\") printf '\\033[48;5;208;38;5;16m  myai \u25b8 %s  \\033[0m\\n' \"$c\";; esac; exit 0"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__myai__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "t=$(jq -r '.tool_name // empty' 2>/dev/null); case \"$t\" in mcp__myai__*) printf '\\033[48;5;208;38;5;16m  myai \u25b8 %s  \\033[0m\\n' \"${t#mcp__myai__}\";; esac; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}

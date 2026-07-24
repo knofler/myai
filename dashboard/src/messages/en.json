@@ -1,0 +1,28 @@
+{
+  "common": {
+    "loading": "Loading…",
+    "error": "Something went wrong",
+    "retry": "Retry",
+    "save": "Save",
+    "cancel": "Cancel"
+  },
+  "nav": {
+    "tagline": "Mission Control",
+    "openNav": "Open navigation",
+    "closeNav": "Close navigation",
+    "primary": "Primary",
+    "tourReplay": "✦ Take the tour",
+    "commandHint": "⌘K to jump anywhere"
+  },
+  "theme": {
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark",
+    "ariaLabel": "Theme: {label} (currently {resolved}). Click to change.",
+    "title": "Theme: {label} (currently {resolved})"
+  },
+  "locale": {
+    "label": "Language",
+    "ariaLabel": "Change language"
+  }
+}

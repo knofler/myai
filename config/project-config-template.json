@@ -1,0 +1,26 @@
+{
+  "project_name": "",
+  "monitor_interval": "manual",
+  "active_agents": ["all"],
+  "excluded_agents": [],
+  "auto_test_on_ship": true,
+  "auto_monitor": false,
+  "connect_hub_enabled": false,
+  "scan_completed": false,
+  "last_scan_date": null,
+  "autonomy": {
+    "auto_assign_tasks": true,
+    "auto_execute_low_risk": true,
+    "require_approval_for": ["merge_to_main", "deploy", "delete_files", "schema_migration"],
+    "max_autonomous_tasks_per_session": 10
+  },
+  "agent_teams": {
+    "enabled": false,
+    "team_size": 3,
+    "roles": ["project-manager", "dev-fullstack", "qa-specialist"]
+  },
+  "remote_control": {
+    "enabled": false,
+    "telegram_channel": false
+  }
+}

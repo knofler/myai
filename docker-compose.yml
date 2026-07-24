@@ -1,0 +1,184 @@
+name: myai
+
+services:
+  gateway:
+    build: ./runtime
+    container_name: myai-gateway
+    ports:
+      # HOST_BIND=127.0.0.1 locks the gateway to this machine (SECURITY.md).
+      # Default stays all-interfaces so LAN/phone dashboard workflows keep working.
+      - "${HOST_BIND:-0.0.0.0}:3100:3100"
+      - "${HOST_BIND:-0.0.0.0}:3200:3200"
+      - "${HOST_BIND:-0.0.0.0}:3201:3201"
+    env_file:
+      - .env
+      - path: /tmp/.myai-host-env
+        required: false
+    environment:
+      # Atlas cutover (ADR-011): set MONGODB_URI in AI/.env to point at Atlas.
+      # REQUIRED — no silent local-mongo default (LL 2026-07-04): a compose-up
+      # from an env-less checkout (runner ci-workspace) used to fall back to the
+      # empty local mongo container and split-brain the fleet queue for 10.5h.
+      # Deliberate local-mongo stack? Set it explicitly in .env:
+      #   MONGODB_URI=mongodb://admin:password@mongo:27017/myai?authSource=admin
+      # Same var + rule for the dashboard below.
+      - MONGODB_URI=${MONGODB_URI:?MONGODB_URI is required — set it in AI/.env (Atlas, or an explicit local-mongo URI). Refusing to silently default to local mongo (LL 2026-07-04 gateway split-brain)}
+      - MONGODB_NAME=${MONGODB_NAME:-myai}
+      - AI_ROOT=/app/AI
+      - LOG_LEVEL=info
+      - GATEWAY_HTTP_PORT=3200
+      - GATEWAY_WS_PORT=3201
+      - MCP_PORT=3100
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
+      # When set, repo-registry rewrites <your sibling-repos dir>/<x> → ${REPOS_BASE}/<x>
+      # so sibling repos read through the bind mount below.
+      - REPOS_BASE=/repos
+      # ADR-010 multi-tenancy: enforcement is on by default. This token lets the
+      # in-cluster dashboard authenticate over the Docker bridge (non-loopback);
+      # host callers (CLI runner, hooks) stay trusted via loopback. Override in
+      # .env for hosted, and set TENANT_ENFORCE=false to disable enforcement.
+      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}
+      # JWT signing secret for dashboard password sessions (M2). A stable value
+      # keeps sessions valid across restarts/instances; override in .env for
+      # hosted. Unset → the gateway falls back to an ephemeral per-process secret
+      # (logs a warning; sessions drop on restart).
+      - JWT_SECRET=${JWT_SECRET:-myai-dev-jwt-secret-change-me}
+      # Anti-lockout bootstrap admin (M2). When BOTH are set, the gateway seeds /
+      # re-syncs an `owner` user on the default tenant on every boot — the .env is
+      # the source of truth, so this password ALWAYS works (never locked out of a
+      # login-walled deploy). Unset → no-op (local relies on loopback trust).
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      # Web push (REALTIME_NOTIFICATIONS Phase 6). Generate a key pair with
+      # `npx web-push generate-vapid-keys` and set in AI/.env. Unset → push
+      # delivery is a silent no-op (in-app SSE notifications unaffected).
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_SUBJECT=${VAPID_SUBJECT:-}
+      # Pin the brain dir to the container-side mount path — the host's
+      # ~/.myai/brain.path pointer holds a HOST-absolute path that resolves to
+      # nothing inside the container.
+      - MYAI_BRAIN_DIR=/root/.myai/brain
+      # The bind-mounted brain repo is owned by the host user while the gateway
+      # runs as root — without this, every git call dies on "dubious ownership".
+      - GIT_CONFIG_COUNT=1
+      - GIT_CONFIG_KEY_0=safe.directory
+      - GIT_CONFIG_VALUE_0=*
+    # Memory limits — override in .env for beefier machines
+    # Defaults sized for 16 GB RAM host (stack totals ~2 GB ≈ 12 % of host)
+    mem_limit: ${GATEWAY_MEM_LIMIT:-1g}
+    mem_reservation: ${GATEWAY_MEM_RESERVATION:-256m}
+    volumes:
+      - ./:/app/AI:ro
+      # Sibling repos for repo-registry / morning_sweep — read-only.
+      # Set REPOS_HOST_ROOT in .env to the dir where your managed repos live.
+      - ${REPOS_HOST_ROOT:-~/repos}:/repos:ro
+      # Operator brain (git repo) — brain_delta/brain_commit/brain_merge read and
+      # write THIS mount. Without it the container-local /root/.myai dies on every
+      # recreate (bit work-desktop 2026-07-07: "no brain repo" after a stack rebuild).
+      # Pushing to the remote stays host-side (brain_sync_verify.sh) — the
+      # container has no SSH keys, by design.
+      - ${MYAI_HOME_HOST:-~/.myai}:/root/.myai
+    # Writable overlay for vitest's .vite-temp/ cache — parent node_modules is
+    # bind-mounted RO from Dropbox, so vitest can't write there directly.
+    # NB: the HOST dir runtime/node_modules/.vite-temp MUST pre-exist — Docker
+    # cannot create this mountpoint on the read-only bind. The §12 node_modules
+    # purge deletes it → a rebuild then fails to START ("make mountpoint .vite-temp:
+    # read-only file system"). machine_selfheal.sh recreates it every session; if
+    # the gateway won't start with that error, run: mkdir -p runtime/node_modules/.vite-temp
+    tmpfs:
+      - /app/AI/runtime/node_modules/.vite-temp
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3200/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - myai-net
+
+  dashboard:
+    build: ./dashboard
+    container_name: myai-dashboard
+    ports:
+      # See gateway ports note — HOST_BIND=127.0.0.1 to lock to this machine.
+      - "${HOST_BIND:-0.0.0.0}:3210:3210"
+    environment:
+      # REQUIRED, same as the gateway — never silently default to local mongo.
+      - MONGODB_URI=${MONGODB_URI:?MONGODB_URI is required — set it in AI/.env (Atlas, or an explicit local-mongo URI). Refusing to silently default to local mongo (LL 2026-07-04 gateway split-brain)}
+      # /documentation + /showcase read markdown straight off these mounts.
+      - AI_ROOT=/app/AI
+      - GATEWAY_MCP_URL=http://gateway:3100/mcp
+      # ADR-010: under enforce=true the dashboard reaches the gateway over the
+      # Docker bridge (non-loopback), so it must present the local bridge token.
+      # Must match the gateway's GATEWAY_LOCAL_TOKEN. Override both in .env for hosted.
+      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}
+      # Hosted login-wall (src/middleware.ts). false (default) → no gate, the
+      # dashboard renders without login (local dev). true → public/non-loopback
+      # requests without a session are redirected to /login; localhost is ALWAYS
+      # exempt. Set true only for an internet-exposed deploy.
+      - REQUIRE_LOGIN=${REQUIRE_LOGIN:-false}
+      # The bind-mounted repo is owned by the host user while the dashboard
+      # runs as a different container UID — without this, the agent/skill
+      # source editor's `git commit` (src/lib/md-editor.ts) dies on "dubious
+      # ownership", same fix as the gateway's brain mount above.
+      - GIT_CONFIG_COUNT=1
+      - GIT_CONFIG_KEY_0=safe.directory
+      - GIT_CONFIG_VALUE_0=*
+    mem_limit: ${DASHBOARD_MEM_LIMIT:-512m}
+    mem_reservation: ${DASHBOARD_MEM_RESERVATION:-128m}
+    volumes:
+      # Master repo (README, SHOWCASE, documentation/) — read-write: the
+      # agent/skill source editor (MYAI_DASHBOARD.md §3.2) writes .md edits
+      # straight back to agents/*.md and skills/*/SKILL.md and commits them
+      # with git. Everything else the dashboard reads off this mount is
+      # unaffected by the rw flip — only the new /api/*/[name]/file PUT route
+      # writes.
+      - ./:/app/AI
+      # Sibling repos for per-repo README rendering — read-only, mirrors the gateway.
+      - ${REPOS_HOST_ROOT:-~/repos}:/repos:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3210/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - myai-net
+
+  mongo:
+    image: mongo:7
+    container_name: myai-mongo
+    ports:
+      # Loopback-only by default (SECURITY.md data-locality guarantee): the
+      # store ships with default creds, so never expose it on the LAN. Override
+      # with MONGO_HOST_BIND=0.0.0.0 only behind a trusted firewall.
+      - "${MONGO_HOST_BIND:-127.0.0.1}:27200:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
+    mem_limit: ${MONGO_MEM_LIMIT:-512m}
+    mem_reservation: ${MONGO_MEM_RESERVATION:-128m}
+    volumes:
+      - myai-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - myai-net
+
+volumes:
+  myai-mongo-data:
+
+networks:
+  myai-net:
+    driver: bridge

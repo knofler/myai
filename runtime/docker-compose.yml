@@ -1,0 +1,63 @@
+name: myai
+
+services:
+  gateway:
+    build: .
+    container_name: myai-gateway
+    # Loopback-only by default (Independent Edition single-operator trust, Day-9
+    # security pass). The gateway treats loopback callers as the local tenant —
+    # publishing on 0.0.0.0 would expose that trust to the whole LAN. Override
+    # the bind address with HOST_BIND=0.0.0.0 only when you intend LAN access.
+    ports:
+      - "${HOST_BIND:-127.0.0.1}:3200:3200"
+      - "${HOST_BIND:-127.0.0.1}:3201:3201"
+    env_file:
+      - .env
+    environment:
+      - MONGODB_URI=${MONGODB_URI:-mongodb://admin:password@mongo:27017/myai?authSource=admin}
+      - MONGODB_NAME=${MONGODB_NAME:-myai}
+      - AI_ROOT=/app/AI
+      - LOG_LEVEL=info
+      - GATEWAY_HTTP_PORT=3200
+      - GATEWAY_WS_PORT=3201
+    volumes:
+      - ../:/app/AI:ro
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3200/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - myai-net
+
+  mongo:
+    image: mongo:7
+    container_name: myai-mongo
+    # Loopback-only by default — the local Mongo holds the operator's data and
+    # ships with the dev root password below; it must never be reachable off-box.
+    ports:
+      - "${HOST_BIND:-127.0.0.1}:27200:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
+    volumes:
+      - myai-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - myai-net
+
+volumes:
+  myai-mongo-data:
+
+networks:
+  myai-net:
+    driver: bridge

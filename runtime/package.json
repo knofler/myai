@@ -1,0 +1,76 @@
+{
+  "name": "myai",
+  "version": "0.1.0",
+  "description": "Self-hosted AI gateway daemon — WebSocket + HTTP API, agent sessions, semantic memory, TypeScript hooks",
+  "type": "module",
+  "main": "./dist/core/index.js",
+  "types": "./dist/core/index.d.ts",
+  "bin": {
+    "myai": "./dist/bin/myai.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/core/index.js",
+    "dev": "tsx watch src/core/index.ts",
+    "bridge": "tsx src/llm/bridge.ts",
+    "cli": "tsx src/cli/main.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "eval:recall": "tsx src/eval/run-recall-eval.ts",
+    "eval:recall:check": "tsx src/eval/run-recall-eval.ts --check",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "gateway.config.json",
+    "README.md"
+  ],
+  "keywords": [
+    "ai",
+    "gateway",
+    "agent",
+    "websocket",
+    "mcp",
+    "claude",
+    "openai",
+    "self-hosted"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@sentry/node": "^8.55.0",
+    "@xenova/transformers": "^2.17.0",
+    "bcryptjs": "^2.4.3",
+    "commander": "^12.1.0",
+    "cron-parser": "^4.9.0",
+    "express": "^4.21.0",
+    "glob": "^11.0.0",
+    "gray-matter": "^4.0.3",
+    "mongoose": "^8.9.0",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "uuid": "^11.1.0",
+    "web-push": "^3.6.7",
+    "ws": "^8.18.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/supertest": "^6.0.0",
+    "@types/uuid": "^10.0.0",
+    "@types/web-push": "^3.6.4",
+    "@types/ws": "^8.5.0",
+    "memfs": "^4.0.0",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

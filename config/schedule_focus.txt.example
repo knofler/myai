@@ -1,0 +1,18 @@
+# FOCUS-TIER repos — standalone products you are driving to market.
+# These sit JUST BELOW the core priority repos (config/schedule_priority.txt)
+# and ABOVE all other repos.
+#
+# Effect (enforced by scripts/reprioritize_queue.sh):
+#   • CORE repos (schedule_priority.txt) — untouched (keep P0/P1).
+#   • FOCUS repos (this file) — any task better than P2 is capped to P2 (so the
+#     core P0/P1 always drains first, but these focus apps still outrank the rest).
+#   • EVERY OTHER repo — capped to P3 (bottom).
+#
+# One repo name per line (task-store convention = git basename). '#' lines ignored.
+#
+# Example:
+#   side-project-one
+#   side-project-two
+#
+# This .example file is the fork-ready template. Copy to `schedule_focus.txt`
+# and list your focus-tier repo basenames.

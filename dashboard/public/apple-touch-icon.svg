@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a83420"/>
+      <stop offset="0.55" stop-color="#cc4426"/>
+      <stop offset="1" stop-color="#e4552e"/>
+    </linearGradient>
+    <linearGradient id="txt" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#ffedd5"/>
+    </linearGradient>
+  </defs>
+  <!-- Apple home-screen icon: FULL-BLEED square — iOS applies its own corner
+       mask, so no transparent rounded corners here. -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <text x="256" y="308" font-family="ui-rounded, -apple-system, system-ui" font-size="150"
+        font-weight="800" text-anchor="middle" fill="url(#txt)" letter-spacing="-4">myAI</text>
+</svg>

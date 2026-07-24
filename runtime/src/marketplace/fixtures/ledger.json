@@ -1,0 +1,58 @@
+[
+  {
+    "creatorTenantId": "tenant-acme",
+    "entryId": "led_acme_0001",
+    "listingId": "lst_seo_auditor",
+    "installId": "ins_globex_seo",
+    "type": "sale",
+    "status": "available",
+    "grossUsd": 29.0,
+    "platformFeeUsd": 8.7,
+    "creatorNetUsd": 20.3,
+    "currency": "USD",
+    "occurredAt": "2028-03-05T09:15:00.000Z",
+    "createdAt": "2028-03-05T09:15:01.000Z"
+  },
+  {
+    "creatorTenantId": "tenant-acme",
+    "entryId": "led_acme_0002",
+    "listingId": "lst_seo_auditor",
+    "installId": "ins_initech_seo",
+    "type": "sale",
+    "status": "available",
+    "grossUsd": 29.0,
+    "platformFeeUsd": 8.7,
+    "creatorNetUsd": 20.3,
+    "currency": "USD",
+    "occurredAt": "2028-03-08T13:00:00.000Z",
+    "createdAt": "2028-03-08T13:00:01.000Z"
+  },
+  {
+    "creatorTenantId": "tenant-acme",
+    "entryId": "led_acme_0003",
+    "listingId": "lst_seo_auditor",
+    "installId": "ins_initech_seo",
+    "type": "refund_reversal",
+    "status": "available",
+    "grossUsd": -29.0,
+    "platformFeeUsd": -8.7,
+    "creatorNetUsd": -20.3,
+    "currency": "USD",
+    "occurredAt": "2028-03-09T08:00:00.000Z",
+    "createdAt": "2028-03-09T08:00:01.000Z"
+  },
+  {
+    "creatorTenantId": "tenant-nimbus",
+    "entryId": "led_nimbus_0001",
+    "listingId": "lst_pg_migrator",
+    "installId": "ins_globex_pg",
+    "type": "subscription_cycle",
+    "status": "pending",
+    "grossUsd": 9.0,
+    "platformFeeUsd": 2.7,
+    "creatorNetUsd": 6.3,
+    "currency": "USD",
+    "occurredAt": "2028-04-06T10:00:00.000Z",
+    "createdAt": "2028-04-06T10:00:01.000Z"
+  }
+]

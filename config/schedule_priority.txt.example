@@ -1,0 +1,17 @@
+# CORE / PRIORITY repos — your highest-value product repos.
+#
+# The autonomous schedule-build PRIORITISES these over every other repo.
+# Tasks for repos listed here keep their assigned priority (P0/P1/P2);
+# every OTHER repo's pending tasks are capped at P3 (bottom of the queue),
+# so the runner always drains your core product before secondary apps.
+#
+# Enforced by scripts/reprioritize_queue.sh (run at session start + wrap up).
+#
+# One repo name per line (task-store convention = git basename). '#' lines ignored.
+#
+# Example:
+#   my-core-app
+#   my-core-api
+#
+# This .example file is the fork-ready template. Copy to `schedule_priority.txt`
+# and list your own core repo basenames.

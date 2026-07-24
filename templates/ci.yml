@@ -1,0 +1,144 @@
+# Template: Copy to .github/workflows/ci.yml
+# Placeholders: __NODE_VERSION__, __WORKING_DIR__ (optional subdirectory)
+#
+# Usage in init_ai.sh:
+#   sed -e "s/__NODE_VERSION__/20/" \
+#       -e "s|__WORKING_DIR__|.|" \
+#       AI/templates/ci.yml > .github/workflows/ci.yml
+
+name: CI
+
+# CI-THRIFT POLICY (fleet-wide, 2026-06-12): CI runs ONCE, at PR-to-main only.
+# Pushes to `test` (or any branch) do NOT trigger CI — verify locally first with
+# `./AI/scripts/local-ci.sh` (Docker tsc + tests + build). This stops the
+# every-push double/triple CI runs that burn Actions credits. Manual runs via
+# the Actions tab (workflow_dispatch). See CLAUDE.md "CI/Vercel Thrift Policy".
+#
+# CI-THRIFT v2 (2026-07-05): AI/docs-only changes must not rebuild the stack.
+# The `changes` job computes whether anything OUTSIDE the AI/docs set changed;
+# the heavy jobs (lint/type-check/test/deploy-check) gate on `needs.changes` and
+# SKIP for AI/docs-only PRs. A skipped required check counts as satisfied for
+# branch protection, so the workflow still completes green and app-pinned
+# required checks stay happy — WITHOUT paths-ignore at the trigger level (which
+# would make a required check hang forever, never posting a conclusion).
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: __WORKING_DIR__
+
+jobs:
+  # CI-THRIFT-V2 changes gate — decide whether this change needs a build at all ─
+  # `code=false` when ONLY AI/, docs/, state/, logs/, .claude/, *.md changed
+  # (framework/doc propagation). Heavy jobs below key off this output and skip,
+  # so an AI/docs-only PR spends ~one cheap runner-minute instead of the full
+  # lint+type-check+test+build matrix. Always runs → never a hanging required
+  # check. workflow_dispatch always builds (code=true).
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "non-PR event → build"
+            exit 0
+          fi
+          base="${{ github.event.pull_request.base.sha }}"
+          if git diff --quiet "$base"...HEAD -- \
+              ':(exclude)AI' ':(exclude)docs' ':(exclude)state' ':(exclude)logs' \
+              ':(exclude).claude' ':(exclude)*.md'; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "AI/docs-only change → heavy jobs skip (CI-thrift v2)"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "code paths changed → full build"
+          fi
+
+  lint:
+    name: Lint
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: __NODE_VERSION__
+      - run: npm install
+      - run: npm run lint
+
+  type-check:
+    name: Type-check
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: __NODE_VERSION__
+      - run: npm install
+      - run: npm run type-check || npx tsc --noEmit
+
+  test:
+    name: Test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        env:
+          MONGO_INITDB_ROOT_USERNAME: admin
+          MONGO_INITDB_ROOT_PASSWORD: password
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand({ping:1})' --quiet"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 20s
+    env:
+      NODE_ENV: test
+      MONGODB_URI: mongodb://admin:password@localhost:27017/test?authSource=admin
+      JWT_SECRET: ci-test-secret-key-that-is-at-least-32-characters-long
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: __NODE_VERSION__
+      - run: npm install
+      - run: npm test
+
+  deploy-check:
+    name: Deploy Check
+    runs-on: ubuntu-latest
+    needs: [changes, lint, type-check, test]
+    if: needs.changes.outputs.code == 'true' && github.event_name == 'pull_request' && github.base_ref == 'main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: __NODE_VERSION__
+      - run: npm install
+      - run: npm run build
+        env:
+          NODE_ENV: production
+          MONGODB_URI: mongodb://localhost:27017/unused
+          JWT_SECRET: ci-build-check-secret-key-placeholder

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "test": false,
+      "codeclot": false
+    }
+  },
+  "ignoreCommand": "bash -c 'if [ \"$VERCEL_GIT_COMMIT_REF\" != \"main\" ]; then exit 0; fi; git rev-parse HEAD^ >/dev/null 2>&1 || exit 1; if git diff --quiet HEAD^ HEAD -- \":(exclude)AI\" \":(exclude)docs\" \":(exclude)state\" \":(exclude)logs\" \":(exclude).claude\" \":(exclude).github\" \":(exclude)*.md\"; then echo skip-build:ai-docs-only; exit 0; else exit 1; fi'"
+}

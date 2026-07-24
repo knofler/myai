@@ -1,0 +1,19 @@
+# Managed Repos — one absolute path per line.
+#
+# Tilde (~) and inline trailing comments are supported.
+# Blank lines and `# …` comments ignored.
+#
+# Example layout:
+#
+#   ~/code/my-frontend
+#   ~/code/my-api
+#   ~/code/my-mobile-app              # PWA experiment
+#   /Users/me/projects/legacy-system  # absolute path also OK
+#
+# After editing this file:
+#   1. Run ./scripts/init_ai.sh on each new repo to install the AI/ folder
+#   2. Run ./scripts/update_all.sh to propagate framework updates
+#   3. Run ./scripts/health_check.sh to verify compliance
+#
+# This .example file is the fork-ready template.
+# Copy to `managed_repos.txt` and add your own paths.
