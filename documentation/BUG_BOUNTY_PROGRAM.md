@@ -72,9 +72,9 @@ This is a good-faith, self-issued safe harbor (in the spirit of [disclose.io](ht
 
 ## 4. Submission — shared intake, program selector
 
-Submissions go through the **same intake channel** as passive disclosure (`SECURITY.md` §7): GitHub Security Advisories on `knofler/ai_management` (preferred) or email to the maintainer. What changes for the bounty track:
+Submissions go through the **same intake channel** as passive disclosure (`SECURITY.md` §7): GitHub Security Advisories on [`knofler/myai`](https://github.com/knofler/myai/security/advisories/new) — the public repo external reporters can reach (the private `knofler/ai_management` is **not** a valid external intake). What changes for the bounty track:
 
-- **Subject / advisory title prefix:** `[BUG-BOUNTY]` (vs. plain `[SECURITY]` for the passive track) — this is the routing signal until the intake form (tracked separately, not this task) exists with a native program selector.
+- **Advisory title prefix:** `[BUG-BOUNTY]` (vs. plain `[SECURITY]` for the passive track) — this is the routing signal until the intake form (tracked separately, not this task) exists with a native program selector.
 - **Required fields:** affected component (from the §1 in-scope table), reproduction steps, impact, a self-assessed severity tier (§2) with justification, and preferred payout method (see §5).
 - Once the standalone security.txt / intake-form task lands, it should surface a `program: responsible-disclosure | bug-bounty` field and pass it through unchanged into the same triage flow below — this doc is the schema those fields should satisfy.
 
@@ -83,7 +83,7 @@ Submissions go through the **same intake channel** as passive disclosure (`SECUR
 ## 5. Triage → payout workflow
 
 ```
-Submit (GitHub Advisory / email, [BUG-BOUNTY] tag)
+Submit (GitHub Security Advisory, [BUG-BOUNTY] title prefix)
    │
    ▼
 New ── security-specialist creates a tracked task (tag: security-bounty,

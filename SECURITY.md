@@ -192,9 +192,12 @@ These run as Claude Code PreToolUse hooks, independent of permission mode
 ## 7. Vulnerability disclosure policy
 
 - **Report privately** via GitHub Security Advisories on
-  [`knofler/myai`](https://github.com/knofler/myai/security/advisories/new)
-  (preferred), or email the maintainer listed in the repo profile with subject
-  `[SECURITY] myAI`.
+  [`knofler/myai`](https://github.com/knofler/myai/security/advisories/new) —
+  click **"Report a vulnerability"** (private vulnerability reporting is
+  enabled on this public repo). Title the advisory `[SECURITY] myAI`, or
+  `[BUG-BOUNTY]` for the paid track (see below). This is the supported private
+  channel — there is no email intake, and the private `knofler/ai_management`
+  repo is not an external intake.
 - Please include: affected component (gateway / dashboard / hooks / scripts),
   reproduction steps, and impact. A proof-of-concept helps; exploitation of
   other users' data does not — don't.

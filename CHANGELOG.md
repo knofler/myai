@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-08-04
+
+### Security
+- **Fixed the private vulnerability-disclosure intake** (reported privately). Enabled GitHub Private Vulnerability Reporting on the public repo so the "Report a vulnerability" button is available to external reporters — the preferred channel `SECURITY.md` §7 already promised.
+- `SECURITY.md` §7: GitHub Security Advisories on `knofler/myai` is now the sole documented private channel; removed the non-functional "email the maintainer" fallback (no such address was ever published).
+- `BUG_BOUNTY_PROGRAM.md` §4: corrected the intake target from the private `knofler/ai_management` (invisible to external reporters) to the public `knofler/myai`, so the disclosure policy and the bounty program no longer name different repos.
+
 ## [0.7.0] — 2026-08-04
 
 ### Added
