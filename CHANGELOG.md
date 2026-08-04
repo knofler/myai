@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-08-04
+
+### Removed
+- **Removed the paid bug-bounty program.** myAI's vulnerability disclosure is now **responsible-disclosure only** — no monetary rewards. Deleted `documentation/BUG_BOUNTY_PROGRAM.md`, removed the paid-track references and $25–$1,500 payout tiers from `SECURITY.md` §7 and the dashboard security page, and stated credit-on-request only.
+
+### Fixed
+- Dashboard security page: replaced the residual "email the maintainer" line with the PVR-only intake (consistent with the v0.7.1 `SECURITY.md` §7 fix).
+
 ## [0.7.1] — 2026-08-04
 
 ### Security

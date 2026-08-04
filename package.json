@@ -1,6 +1,6 @@
 {
   "name": "ai-management",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "mcpName": "io.github.knofler/myai",
   "description": "myai — a self-owned, git-versioned AI memory + multi-agent framework. Plug any agent (Claude, Cursor, Gemini, Codex, opencode) into your own portable brain so it boots already knowing your projects, decisions, and context. Local-first (Docker), MCP-native, with an autonomous runner, RAG search, a live dashboard, and one-command full-stack app blueprints.",
   "bin": {

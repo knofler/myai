@@ -189,30 +189,12 @@ export default function SecurityPage() {
           >
             GitHub Security Advisories
           </a>{' '}
-          (preferred), or email the maintainer with subject <code className="text-teal-300">[SECURITY] myAI</code>.
-          Response targets: acknowledgement within 72 hours, triage within 7 days, fix or documented mitigation for
-          confirmed issues within 30 days. Good-faith research against your own installation is welcome. Please do not
-          open public issues for unpatched vulnerabilities.
-        </p>
-      </Section>
-
-      <Section heading="8. Bug bounty program">
-        <p>
-          Beyond the passive channel above, myAI runs a standing, paid bounty program for in-scope findings —
-          gateway/dashboard auth, tenant isolation, webhook verification, export redaction, the always-on safety
-          hooks, default Docker Compose exposure, and the elevated-trust CLI/setup scripts. Payouts range{' '}
-          <strong className="text-zinc-200">$25–$1,500</strong> by severity (Low → Critical), under a good-faith
-          safe-harbor policy. Use the same intake as §7, tagged <code className="text-teal-300">[BUG-BOUNTY]</code>.
-          Full scope, payout tiers, safe-harbor terms, and the submission → triage → payout workflow are in{' '}
-          <a
-            href="https://github.com/knofler/myai/blob/main/documentation/BUG_BOUNTY_PROGRAM.md"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-teal-300 hover:underline"
-          >
-            BUG_BOUNTY_PROGRAM.md
-          </a>
-          .
+          and click <strong className="text-zinc-200">&quot;Report a vulnerability&quot;</strong> — title it{' '}
+          <code className="text-teal-300">[SECURITY] myAI</code>. This is the supported private channel; there is no
+          email intake. Response targets: acknowledgement within 72 hours, triage within 7 days, fix or documented
+          mitigation for confirmed issues within 30 days. Good-faith research against your own installation is welcome
+          and credited in the release notes on request. This is a responsible-disclosure program only — there is no
+          paid bounty. Please do not open public issues for unpatched vulnerabilities.
         </p>
       </Section>
     </LegalShell>

@@ -194,10 +194,9 @@ These run as Claude Code PreToolUse hooks, independent of permission mode
 - **Report privately** via GitHub Security Advisories on
   [`knofler/myai`](https://github.com/knofler/myai/security/advisories/new) —
   click **"Report a vulnerability"** (private vulnerability reporting is
-  enabled on this public repo). Title the advisory `[SECURITY] myAI`, or
-  `[BUG-BOUNTY]` for the paid track (see below). This is the supported private
-  channel — there is no email intake, and the private `knofler/ai_management`
-  repo is not an external intake.
+  enabled on this public repo). Title the advisory `[SECURITY] myAI`. This is
+  the supported private channel — there is no email intake, and the private
+  `knofler/ai_management` repo is not an external intake.
 - Please include: affected component (gateway / dashboard / hooks / scripts),
   reproduction steps, and impact. A proof-of-concept helps; exploitation of
   other users' data does not — don't.
@@ -208,12 +207,9 @@ These run as Claude Code PreToolUse hooks, independent of permission mode
 - **Safe harbor:** good-faith research against your own installation is
   welcome; credit given in release notes on request.
 - Please do not open public issues for unpatched vulnerabilities.
-
-**Paid bug bounty program:** beyond this passive channel, myAI runs a standing
-incentivized bounty program — scope boundaries, severity-based payout tiers
-($25–$1,500), safe-harbor legal terms, and the full submission → triage →
-payout workflow are in `documentation/BUG_BOUNTY_PROGRAM.md`. Same intake as
-above; tag the submission `[BUG-BOUNTY]` to route it into the paid track.
+- **Responsible disclosure only — no paid bounty.** myAI does not offer a
+  monetary reward for vulnerability reports. Confirmed reporters are credited
+  in the release notes on request.
 
 ---
 
@@ -221,4 +217,4 @@ above; tag the submission `[BUG-BOUNTY]` to route it into the paid track.
 ports, or token model MUST update this file in the same PR — the guarantee is
 only as good as its documentation.*
 
-*Last updated: 2026-07-18*
+*Last updated: 2026-08-04*
