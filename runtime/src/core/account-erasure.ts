@@ -26,6 +26,7 @@ import {
   RunnerLeaseModel,
   ScheduleModel,
   BudgetUsageModel,
+  BudgetUsageRollupModel,
   UsageEventModel,
   NotificationModel,
   PushSubscriptionModel,
@@ -65,37 +66,46 @@ const ERASURE_GRACE_DAYS = Number(process.env.ERASURE_GRACE_DAYS) || 14;
  * (Agent/Skill/Hook/Rule/AIPattern carry no real per-tenant data — see
  * shared/scoped-query.ts header) and excludes `Tenant`/`ErasureRequest`
  * themselves, which the purge handles separately (scrub + tombstone).
+ *
+ * Built lazily inside a function rather than as a module-level constant so
+ * merely importing this module (e.g. transitively via mcp/tools.ts) never
+ * dereferences all thirty-odd model exports up front — a test harness that
+ * mocks shared/db.js with only the handful of models its own suite touches
+ * would otherwise fail to import the module at all.
  */
-const PURGE_TARGETS = [
-  ['tenantApiKeys', TenantApiKeyModel],
-  ['gatewaySessions', GatewaySessionModel],
-  ['vectors', VectorModel],
-  ['tasks', TaskModel],
-  ['runnerLeases', RunnerLeaseModel],
-  ['schedules', ScheduleModel],
-  ['budgetUsage', BudgetUsageModel],
-  ['usageEvents', UsageEventModel],
-  ['notifications', NotificationModel],
-  ['pushSubscriptions', PushSubscriptionModel],
-  ['notificationPrefs', NotificationPrefsModel],
-  ['repoCards', RepoCardModel],
-  ['planDays', PlanDayModel],
-  ['fleetRuns', FleetRunModel],
-  ['users', UserModel],
-  ['invites', InviteModel],
-  ['passwordResets', PasswordResetModel],
-  ['magicLinks', MagicLinkModel],
-  ['connectors', ConnectorModel],
-  ['handoffs', HandoffModel],
-  ['continuityMetrics', ContinuityMetricModel],
-  ['activationEvents', ActivationEventModel],
-  ['tenantRequestQuota', TenantRequestQuotaModel],
-  ['webhookEndpoints', WebhookEndpointModel],
-  ['webhookDeliveries', WebhookDeliveryModel],
-  ['inboundWebhookDeliveries', InboundWebhookDeliveryModel],
-  ['artifacts', ArtifactModel],
-  ['giftRedemptions', GiftRedemptionModel],
-] as const;
+function purgeTargets() {
+  return [
+    ['tenantApiKeys', TenantApiKeyModel],
+    ['gatewaySessions', GatewaySessionModel],
+    ['vectors', VectorModel],
+    ['tasks', TaskModel],
+    ['runnerLeases', RunnerLeaseModel],
+    ['schedules', ScheduleModel],
+    ['budgetUsage', BudgetUsageModel],
+    ['budgetUsageRollups', BudgetUsageRollupModel],
+    ['usageEvents', UsageEventModel],
+    ['notifications', NotificationModel],
+    ['pushSubscriptions', PushSubscriptionModel],
+    ['notificationPrefs', NotificationPrefsModel],
+    ['repoCards', RepoCardModel],
+    ['planDays', PlanDayModel],
+    ['fleetRuns', FleetRunModel],
+    ['users', UserModel],
+    ['invites', InviteModel],
+    ['passwordResets', PasswordResetModel],
+    ['magicLinks', MagicLinkModel],
+    ['connectors', ConnectorModel],
+    ['handoffs', HandoffModel],
+    ['continuityMetrics', ContinuityMetricModel],
+    ['activationEvents', ActivationEventModel],
+    ['tenantRequestQuota', TenantRequestQuotaModel],
+    ['webhookEndpoints', WebhookEndpointModel],
+    ['webhookDeliveries', WebhookDeliveryModel],
+    ['inboundWebhookDeliveries', InboundWebhookDeliveryModel],
+    ['artifacts', ArtifactModel],
+    ['giftRedemptions', GiftRedemptionModel],
+  ] as const;
+}
 
 export interface ErasureRequestView {
   requestId: string;
@@ -226,7 +236,7 @@ export async function cancelErasure(input: CancelErasureInput): Promise<ErasureR
  */
 async function purgeTenantData(tenantId: string): Promise<Record<string, number>> {
   const summary: Record<string, number> = {};
-  for (const [label, model] of PURGE_TARGETS) {
+  for (const [label, model] of purgeTargets()) {
     const res = await scopedDeleteMany(model, tenantId);
     summary[label] = res.deletedCount ?? 0;
   }
@@ -254,10 +264,12 @@ async function purgeTenantData(tenantId: string): Promise<Record<string, number>
 /**
  * Operator-run sweep: find every request past its grace window and purge it.
  * Each request is handled independently — a failure on one tenant is logged
- * and never blocks the rest of the sweep. Not wired to an automatic in-process
- * cron (the gateway's sweeps are externally triggered — see
- * scheduler/evening-sweep.ts header); an operator/cron invokes this on a daily
- * cadence, same as the morning/evening sweeps.
+ * and never blocks the rest of the sweep. Wired the same way as the
+ * morning/evening sweeps: exposed as the `erasure_sweep` MCP tool
+ * (mcp/tools.ts) and seeded as a daily `kind=tool` schedule
+ * (`erasure_sweep_daily`, scheduler/seed-schedules.ts) that the in-process
+ * scheduler (scheduler/scheduler.ts tick()) dispatches — no separate cron
+ * process required. Also callable on demand via the same tool.
  */
 export async function runErasureSweep(now: Date = new Date()): Promise<{ purged: string[]; failed: string[] }> {
   const due = await ErasureRequestModel.find({ status: 'pending', scheduledPurgeAt: { $lte: now } }).lean<IErasureRequest[]>();
@@ -285,6 +297,8 @@ export async function runErasureSweep(now: Date = new Date()): Promise<{ purged:
       failed.push(request.tenantId);
     }
   }
+
+  log.info({ ranAt: now, dueCount: due.length, purgedCount: purged.length, failedCount: failed.length }, 'erasure sweep complete');
 
   return { purged, failed };
 }

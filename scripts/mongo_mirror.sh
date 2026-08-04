@@ -29,6 +29,15 @@
 #   ./scripts/mongo_mirror.sh --src "mongodb+srv://…" --dst "mongodb://…"
 #   ./scripts/mongo_mirror.sh --reverse --yes       # local → Atlas (guarded)
 #
+# Scheduling (forwards to setup_mongo_mirror_schedule.sh — launchd/cron):
+#   ./scripts/mongo_mirror.sh --install-schedule [--every-minutes N]  # hourly default
+#   ./scripts/mongo_mirror.sh --schedule-status
+#   ./scripts/mongo_mirror.sh --uninstall-schedule
+#
+# Every non-dry run records its outcome (epoch/rc/direction/db/collections) in
+# $MYAI_HOME/mongo-mirror.last — `myai doctor` surfaces this as the
+# "mongo mirror schedule" check.
+#
 # Source resolution (first hit wins): --src → $MONGODB_URI → the running
 # myai-gateway container's env → root .env → AI/.env.
 # Dest default: the local myai-mongo container, reachable inside its docker net
@@ -113,6 +122,24 @@ build_ns_includes() {
   printf '%s' "${out# }"
 }
 
+# ── write_last_run RC DIRECTION DB COLLECTIONS → record the run's outcome ─────
+# $MYAI_HOME/mongo-mirror.last (default ~/.myai) as key=value lines. Read by
+# `myai doctor` (mongo mirror schedule check) and --schedule-status. Best-effort
+# — a record failure never fails the mirror itself.
+write_last_run() {
+  local rc="${1:-1}" direction="${2:-}" db="${3:-}" collections="${4:-}"
+  local home="${MYAI_HOME:-$HOME/.myai}"
+  mkdir -p "$home" 2>/dev/null || return 0
+  {
+    printf 'epoch=%s\n' "$(date +%s)"
+    printf 'rc=%s\n' "$rc"
+    printf 'direction=%s\n' "$direction"
+    printf 'db=%s\n' "$db"
+    printf 'collections=%s\n' "${collections:-all}"
+  } > "$home/mongo-mirror.last" 2>/dev/null || true
+  return 0
+}
+
 # Sourced by the test suite — stop before the executable body.
 [ "${MONGO_MIRROR_LIB_ONLY:-0}" = 1 ] && return 0 2>/dev/null
 
@@ -145,6 +172,15 @@ resolve_network() {
   [ -n "$net" ] && { printf '%s' "$net"; return 0; }
   printf '%s' "$LOCAL_MONGO_NETWORK_DEFAULT"
 }
+
+# ── Schedule passthrough (must be the FIRST argument) ─────────────────────────
+# `myai mirror --install-schedule …` et al. forward to the launchd/cron
+# installer so scheduling needs no separate CLI command.
+case "${1:-}" in
+  --install-schedule)   shift; exec bash "$SCRIPT_DIR/setup_mongo_mirror_schedule.sh" "$@" ;;
+  --uninstall-schedule) exec bash "$SCRIPT_DIR/setup_mongo_mirror_schedule.sh" --uninstall ;;
+  --schedule-status)    exec bash "$SCRIPT_DIR/setup_mongo_mirror_schedule.sh" --status ;;
+esac
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 DRY_RUN=0
@@ -247,9 +283,11 @@ c_info "mirroring… (a throwaway $MONGO_TOOLS_IMAGE container streams dump→re
 if docker run --rm --network "$NETWORK" \
     -e FROM="$FROM_URI" -e TO="$TO_URI" -e DB="$DB" \
     "$MONGO_TOOLS_IMAGE" sh -c "$PIPE"; then
+  write_last_run 0 "$DIRECTION" "$DB" "$COLLECTIONS"
   c_ok "mirror complete — local copy of '$DB' refreshed (${COLLECTIONS:-all collections})"
 else
   rc=$?
+  write_last_run "$rc" "$DIRECTION" "$DB" "$COLLECTIONS"
   c_err "mirror FAILED (rc=$rc) — local copy may be partial; re-run when the source is reachable"
   exit "$rc"
 fi

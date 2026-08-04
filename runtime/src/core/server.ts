@@ -13,7 +13,8 @@ import { listRules, getRule, getRuleCount } from '../rules/loader.js';
 import { createSession, closeSession, getSession, listSessions, getSessionCount, getActiveSessionCount, exportSession, importSession, recallSessionContext } from './session-manager.js';
 import type { SessionExport } from './session-manager.js';
 import { routeMessage } from './message-router.js';
-import { listHooks, getHookCount } from '../hooks/event-bus.js';
+import { listHooks, getHookCount, enableHook } from '../hooks/event-bus.js';
+import { applyHookToggle, parseBashHookName, readDisabledScripts } from '../hooks/settings-patch.js';
 import { hybridSearch } from '../memory/search.js';
 import { buildContext } from '../memory/context-builder.js';
 import { searchVectors, getVectorCount } from '../memory/vector-store.js';
@@ -23,12 +24,14 @@ import { indexMasterRepo, indexAllRepos } from '../memory/indexer.js';
 import { listAdapters, getChannelSessionCount } from '../channels/registry.js';
 import { isConfigured as isLlmConfigured } from '../llm/provider.js';
 import { getBudgetStatus, getBudgetBreakdown, getBudgetUsage } from '../llm/budget-stats.js';
+import { getBudgetCapSuggestions } from '../llm/budget-advisor.js';
 import { getSpendAlertStatus } from '../llm/spend-alert.js';
 import { summarizeUsage, getUsageBreakdown } from '../shared/usage-store.js';
 import { createSchedule, updateSchedule, getSchedule, listSchedules, deleteSchedule } from '../scheduler/schedule-store.js';
 import type { ListSchedulesFilter } from '../scheduler/schedule-store.js';
 import { createTask, updateTask, listTasks, nextTask, countTasks, getTask } from '../tasks/task-store.js';
 import type { ListTasksFilter } from '../tasks/task-store.js';
+import { BulkBlockGuardError } from '../tasks/bulk-block-guard.js';
 import { taskLogRelay, wrapBackpressureSafe } from '../tasks/task-log-relay.js';
 import type { TaskLogChunk } from '../tasks/task-log-relay.js';
 import { listRepoCards, upsertRepoCard } from '../repos/app-card-store.js';
@@ -38,6 +41,7 @@ import { writeHandoff, readHandoff, listLatestHandoffs } from '../repos/handoff-
 import { computeNextRun, isValidCronExpr } from '../scheduler/scheduler.js';
 import { executeTool } from '../mcp/tools.js';
 import { ctxFromReq } from './auth.js';
+import { hostedBrainTransportRouter } from './hosted-brain-transport.js';
 import type { ScheduleKind, ScheduleStatus, TaskPriority, TaskStatus, UserRole } from '../shared/db.js';
 import { deepHealthCheck } from './health.js';
 import { getMigrationStatus } from '../shared/migration-runner.js';
@@ -87,6 +91,7 @@ import {
   resourcePermissionGrid,
   type Capability,
 } from './rbac.js';
+import { getShadowDenials, summarizeShadowDenials } from '../monitoring/rbac-shadow-store.js';
 import {
   queryAuditEvents,
   exportAuditEvents,
@@ -99,6 +104,7 @@ import {
 import { buildAccessReview, accessReviewToCsv } from './access-review.js';
 import { buildEvidenceReport, evidenceReportToDownload } from './evidence.js';
 import { bulkImportTenants } from './tenant-bulk-import.js';
+import { getTenantMcpTools, setTenantMcpTools } from './tenant-mcp-tools.js';
 import { sseManager } from '../notifications/sse-manager.js';
 import { startNotificationService } from '../notifications/service.js';
 import { startReviewApprovalService } from '../notifications/review-approval.js';
@@ -1102,6 +1108,34 @@ export function createHttpServer() {
     }
   });
 
+  // RBAC shadow-mode denials (ADR-013 §6 soak visibility). Answers "if
+  // RBAC_ENFORCE flips on today, which callers/tools would 403?" from the
+  // ring buffer `assertCapability` writes to in shadow mode (rbac-shadow-store.ts)
+  // — never the durable audit trail, which only gets `rbac.denied` once
+  // enforcement is actually on. Members-capability gated + tenant-scoped, same
+  // posture as the audit trail above.
+  app.get('/api/auth/rbac/shadow-denials', (req: Request, res: Response) => {
+    try {
+      const payload = jwtFromReq(req);
+      requireMembersHard(payload); // RBAC: shadow-denial visibility requires member-mgmt (ADR-013 §6)
+      const q = req.query;
+      const since = typeof q.since === 'string' ? Number(q.since) : undefined;
+      const events = getShadowDenials({
+        tenantId: payload.tid,
+        role: typeof q.role === 'string' ? (q.role as CtxRole) : undefined,
+        capability: typeof q.capability === 'string' ? (q.capability as Capability) : undefined,
+        action: typeof q.action === 'string' ? q.action : undefined,
+        since: Number.isFinite(since) ? since : undefined,
+        limit: typeof q.limit === 'string' ? Number(q.limit) : undefined,
+      });
+      const summary = summarizeShadowDenials(payload.tid, Number.isFinite(since) ? since : undefined);
+      res.json({ count: events.length, events, summary });
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('failed to read rbac shadow denials', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
   // ── Quarterly access review (ADR-013 §5 — SOC2 CC6.1–CC6.3) ────────────────
   // Who has access, at what role, last-active + stale flags. Members-capability
   // gated (owner/admin) and tenant-scoped via listMembers. ?staleAfterDays
@@ -1190,6 +1224,50 @@ export function createHttpServer() {
       }
     });
   });
+
+  // ── Per-org MCP tool visibility override (Wave-2 #15 follow-up) ─────────────
+  // Admin surface for `ITenant.mcpToolAllowlist` / `.mcpToolDenylist`
+  // (core/rbac.ts `OPERATOR_ONLY_TOOLS` / `isToolVisibleForTenant`, d67f3f9).
+  // Operator-only (requireAdmin / x-admin-token — same cross-tenant posture as
+  // bulk-import above): a tenant can never grant itself an operator-tool
+  // exception, so there is deliberately no self-serve equivalent.
+  app.get('/api/tenants/:id/mcp-tools', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const view = await getTenantMcpTools(String(req.params.id));
+        res.json(view);
+      } catch (err) {
+        const e = err instanceof AuthError ? err : new AuthError('mcp-tools read failed', 500, 'INTERNAL');
+        res.status(e.status).json({ error: e.message, code: e.code });
+      }
+    });
+  });
+
+  app.patch('/api/tenants/:id/mcp-tools', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const view = await setTenantMcpTools(String(req.params.id), {
+          mcpToolAllowlist: b.mcpToolAllowlist,
+          mcpToolDenylist: b.mcpToolDenylist,
+        });
+        log.info({ route: '/api/tenants/:id/mcp-tools', tenantId: String(req.params.id) }, 'admin updated tenant mcp-tools override');
+        res.json(view);
+      } catch (err) {
+        const e = err instanceof AuthError ? err : new AuthError('mcp-tools update failed', 500, 'INTERNAL');
+        res.status(e.status).json({ error: e.message, code: e.code });
+      }
+    });
+  });
+
+  // ── Hosted brain git transport (ADR-017, transport-route slice) ───────
+  // `git http-backend` behind gateway auth: mounted at /brain so it matches
+  // the `hostedRemoteUrl()` shape exactly (`.../brain/<tenantId>.git`).
+  // Authenticates itself per-request (hosted-brain token, HTTP Basic) inside
+  // the router — see hosted-brain-transport.ts header — and is exempted from
+  // the tenant-API-key `authenticate()` middleware above via
+  // isHostedBrainTransportPath (core/auth.ts).
+  app.use('/brain', hostedBrainTransportRouter());
 
   // ── Health ───────────────────────────────────────────
 
@@ -1452,8 +1530,108 @@ export function createHttpServer() {
         enabled: h.enabled,
         source: h.source,
         timeout: h.timeout,
+        lastToggle: h.lastToggle,
       })),
     });
+  });
+
+  // Enable/disable a hook (MYAI_DASHBOARD.md §3.2). Bash hooks are the
+  // settings.json-backed kind — the toggle patches .claude/settings.json
+  // (moving the entry to/from the disabledHooks mirror key, preserving every
+  // unrelated key) so the change survives restarts AND applies to Claude Code
+  // sessions, then flips the in-memory registration and the Mongo mirror.
+  // Body instead of a path param because hook names contain slashes.
+  //
+  // Governance (task-bd18a5ec): this toggle can flip a safety/guardrail hook
+  // (no-push-to-main, secret-scan, …) off with one click, so every call is
+  // recorded to the RBAC v1 audit trail (`hook.toggle`, ADR-013 §5) with
+  // actor + before/after state, and the same record is mirrored onto the
+  // hook (Mongo doc + in-memory registration) as `lastToggle` for the
+  // dashboard tooltip.
+  app.patch('/api/hooks', async (req: Request, res: Response) => {
+    const { name, enabled } = (req.body ?? {}) as { name?: unknown; enabled?: unknown };
+    if (typeof name !== 'string' || typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'Body must be { name: string, enabled: boolean }' });
+    }
+
+    const ctx = ctxFromReq(req);
+    const settingsPath = resolve(getConfig().aiRoot, '.claude', 'settings.json');
+    const bashParsed = parseBashHookName(name);
+
+    // Best-effort snapshot of the state BEFORE mutating anything — bash hooks
+    // are authoritative via settings.json's disabledHooks mirror, others via
+    // the in-memory registry, falling back to the Mongo mirror. undefined
+    // means genuinely unknown (e.g. first-ever toggle of an unseen hook).
+    let previousState: boolean | undefined;
+    if (bashParsed && existsSync(settingsPath)) {
+      try {
+        const disabledScripts = readDisabledScripts(settingsPath);
+        previousState = !disabledScripts.has(`${bashParsed.subdir}/${bashParsed.script}`);
+      } catch {
+        // fall through to the other sources below
+      }
+    }
+    if (previousState === undefined) {
+      previousState = listHooks().find(h => h.name === name)?.enabled;
+    }
+    if (previousState === undefined && isConnected()) {
+      try {
+        const doc = await HookModel.findOne({ name }).select('enabled').lean();
+        if (doc) previousState = doc.enabled;
+      } catch (err) {
+        log.warn({ err, hook: name }, 'MongoDB hook lookup (pre-toggle) failed');
+      }
+    }
+
+    let settingsPatched = false;
+    if (bashParsed) {
+      try {
+        settingsPatched = applyHookToggle(settingsPath, name, enabled).changed;
+      } catch (err) {
+        log.error({ err, hook: name }, 'settings.json hook toggle failed');
+        return res.status(500).json({ error: `settings.json patch failed: ${err instanceof Error ? err.message : 'unknown error'}` });
+      }
+    }
+
+    const inMemory = enableHook(name, enabled);
+
+    const actor = auditActorFromCtx(ctx);
+    const lastToggle = {
+      actorUserId: actor.userId,
+      role: actor.role,
+      via: actor.via,
+      previousState: previousState ?? enabled,
+      newState: enabled,
+      at: new Date().toISOString(),
+    };
+
+    let inDb = false;
+    if (isConnected()) {
+      try {
+        const result = await HookModel.updateOne({ name }, { $set: { enabled, lastToggle } });
+        inDb = result.matchedCount > 0;
+      } catch (err) {
+        log.warn({ err, hook: name }, 'MongoDB hook toggle update failed');
+      }
+    }
+
+    if (!inMemory && !inDb && !settingsPatched) {
+      return res.status(404).json({ error: `Hook "${name}" not found` });
+    }
+
+    // Mirror onto the in-memory registration so the tooltip works without Mongo.
+    const registration = listHooks().find(h => h.name === name);
+    if (registration) registration.lastToggle = lastToggle;
+
+    recordAuditEvent({
+      tenantId: ctx.tenantId,
+      actor,
+      action: 'hook.toggle',
+      target: name,
+      detail: { previousState: previousState ?? null, newState: enabled },
+    });
+
+    res.json({ ok: true, name, enabled, settingsPatched, lastToggle });
   });
 
   // ── Rules (MongoDB first, fallback to memory) ───────
@@ -1761,6 +1939,7 @@ export function createHttpServer() {
 
   app.post('/api/memory/import', async (req: Request, res: Response) => {
     try {
+      if (enforceRbac(req, res, 'work')) return; // RBAC: memory import is `work` (ADR-013 §3)
       const b = (req.body ?? {}) as { manifest?: Partial<MemoryBundleManifest>; files?: MemoryBundleFile[] };
       if (!Array.isArray(b.files) || b.files.length === 0) {
         return res.status(400).json({ error: 'files required — array of { path, content }' });
@@ -1807,6 +1986,7 @@ export function createHttpServer() {
 
   app.post('/api/vectors/import', async (req: Request, res: Response) => {
     try {
+      if (enforceRbac(req, res, 'work')) return; // RBAC: vector import is `work` (ADR-013 §3)
       const b = (req.body ?? {}) as {
         kind?: string; formatVersion?: number;
         embedding?: { dimensions?: number }; entries?: Partial<VectorCorpusEntry>[];
@@ -2085,6 +2265,31 @@ export function createHttpServer() {
     });
   });
 
+  // Phase 5b §8 follow-up — adaptive cap suggestions. Read-only: like the
+  // routes above, there is no corresponding PUT — caps stay env-driven and
+  // restart-gated (plan/PHASE_5B_BUDGET_GUARDS.md §3.5). This endpoint only
+  // ever *suggests*; nothing here mutates config.
+  app.get('/api/budgets/suggestions', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      log.info({ route: '/api/budgets/suggestions', ip: req.ip }, 'budget admin endpoint accessed');
+      try {
+        const lookbackRaw = typeof req.query.lookbackDays === 'string' ? req.query.lookbackDays : undefined;
+        let lookbackDays: number | undefined;
+        if (lookbackRaw !== undefined) {
+          const n = Number(lookbackRaw);
+          if (!Number.isFinite(n) || n <= 0) return res.status(400).json({ error: 'invalid lookbackDays', code: 'BAD_REQUEST' });
+          lookbackDays = n;
+        }
+
+        const suggestions = await getBudgetCapSuggestions(ctxFromReq(req).tenantId, { lookbackDays });
+        res.json(suggestions);
+      } catch (err) {
+        log.error({ err }, 'budgets/suggestions failed');
+        res.status(500).json({ error: 'internal_error', code: 'INTERNAL_ERROR' });
+      }
+    });
+  });
+
   // ── Usage meter (product events — ADR-014 S2 slice 2) ─
   //
   // The read side of the PRODUCT meter (UsageEvent), sibling to the budget
@@ -2355,7 +2560,7 @@ export function createHttpServer() {
   app.patch('/api/tasks/:id', async (req: Request, res: Response) => {
     try {
       if (enforceRbac(req, res, 'work')) return; // RBAC: task update is `work` (ADR-013 §3)
-      const { repo, status, priority, assignedAgent, recommendedModel, prUrl, notes, telegramMessageId } = req.body ?? {};
+      const { repo, status, priority, assignedAgent, recommendedModel, prUrl, notes, telegramMessageId, supersededBy, operatorAuthorized } = req.body ?? {};
       const task = await updateTask(ctxFromReq(req).tenantId, {
         taskId: String(req.params.id),
         repo,
@@ -2366,10 +2571,16 @@ export function createHttpServer() {
         prUrl,
         notes,
         telegramMessageId,
+        supersededBy,
+        operatorAuthorized,
       });
       if (!task) return res.status(404).json({ error: `Task "${String(req.params.id)}" not found` });
       res.json(task);
     } catch (err) {
+      if (err instanceof BulkBlockGuardError) {
+        res.status(409).json({ error: err.message, code: 'BULK_BLOCK_GUARD' });
+        return;
+      }
       log.error({ err }, 'Failed to update task');
       res.status(500).json({ error: (err as Error).message });
     }
@@ -2844,6 +3055,7 @@ export function createHttpServer() {
 
   app.post('/api/webhooks', async (req: Request, res: Response) => {
     try {
+      if (enforceRbac(req, res, 'configure')) return; // RBAC: webhook create is `configure` (ADR-013 §3)
       const { url, events, description } = req.body ?? {};
       if (!url || typeof url !== 'string') {
         return res.status(400).json({ error: 'url required', code: 'BAD_REQUEST' });
@@ -2860,6 +3072,7 @@ export function createHttpServer() {
 
   app.put('/api/webhooks/:id', async (req: Request, res: Response) => {
     try {
+      if (enforceRbac(req, res, 'configure')) return; // RBAC: webhook update is `configure` (ADR-013 §3)
       const { url, events, active, description } = req.body ?? {};
       const endpoint = await updateWebhookEndpoint(ctxFromReq(req).tenantId, String(req.params.id), { url, events, active, description });
       if (!endpoint) return res.status(404).json({ error: 'endpoint not found', code: 'NOT_FOUND' });
@@ -2873,6 +3086,7 @@ export function createHttpServer() {
 
   app.delete('/api/webhooks/:id', async (req: Request, res: Response) => {
     try {
+      if (enforceRbac(req, res, 'configure')) return; // RBAC: webhook delete is `configure` (ADR-013 §3)
       const removed = await deleteWebhookEndpoint(ctxFromReq(req).tenantId, String(req.params.id));
       if (!removed) return res.status(404).json({ error: 'endpoint not found', code: 'NOT_FOUND' });
       res.json({ ok: true });
@@ -2895,6 +3109,7 @@ export function createHttpServer() {
 
   app.post('/api/webhooks/deliveries/:id/replay', async (req: Request, res: Response) => {
     try {
+      if (enforceRbac(req, res, 'configure')) return; // RBAC: webhook replay is `configure` (ADR-013 §3)
       const ok = await replayWebhookDelivery(ctxFromReq(req).tenantId, String(req.params.id));
       if (!ok) return res.status(404).json({ error: 'delivery not found', code: 'NOT_FOUND' });
       res.json({ ok: true });

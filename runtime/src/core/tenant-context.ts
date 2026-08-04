@@ -9,7 +9,7 @@
  */
 // Type-only import — erased at compile, so this module has NO runtime dependency
 // on db.js (keeps it safe to import from test files that mock db.js).
-import type { TenantPlan, TenantRegion } from '../shared/db.js';
+import type { TenantIsolationTier, TenantPlan, TenantRegion } from '../shared/db.js';
 
 // Mirror db.ts's DEFAULT_TENANT_ID: both read the same env var so they cannot
 // diverge, without coupling this lightweight module to the heavy db module.
@@ -33,6 +33,14 @@ export interface ToolContext {
    * local/loopback context (region-guard never gates local callers).
    */
   region?: TenantRegion;
+  /**
+   * Physical DB isolation tier (ADR-030). Absent/`'shared'` (the default for
+   * every tenant until the Phase-3 tier is sold) routes through
+   * `getConnectionForTenant` to today's single global connection — zero
+   * behavior change. Only `'dedicated-db'`/`'dedicated-cluster'` diverge, and
+   * only once a `TenantDbBinding` actually exists for that tenant.
+   */
+  isolationTier?: TenantIsolationTier;
   /** True when resolved via the loopback / GATEWAY_LOCAL_TOKEN local-trust path. */
   local?: boolean;
   /**
@@ -50,6 +58,13 @@ export interface ToolContext {
   scopes?: string[];
   /** The scoped API key's id (TenantApiKey.keyId) when auth resolved via one. */
   keyId?: string;
+  /**
+   * Per-org MCP tool visibility override (ITenant.mcpToolAllowlist /
+   * .mcpToolDenylist — server-derived from the tenant record, never from
+   * caller args). Consumed by core/rbac.ts `isToolVisibleForTenant`.
+   */
+  mcpToolAllowlist?: string[];
+  mcpToolDenylist?: string[];
 }
 
 /**

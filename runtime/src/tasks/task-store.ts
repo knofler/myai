@@ -1,17 +1,62 @@
 import { randomUUID } from 'node:crypto';
 import { TaskModel, isConnected } from '../shared/db.js';
-import type { ITask, TaskPriority, TaskSource, TaskStatus } from '../shared/db.js';
+import type { ITask, TaskPriority, TaskSource, TaskStatus, FleetRepoActionStatus } from '../shared/db.js';
 import { createChildLogger } from '../shared/logger.js';
 import { scopedFind, scopedFindOne, scopedFindOneAndUpdate, scopedAggregate, tenantScope } from '../shared/scoped-query.js';
 import { emitNotifyEvent } from '../notifications/event-bus.js';
 import { notifyLifecycleMilestone } from '../notifications/lifecycle-emails.js';
 import type { NotificationLevel } from '../notifications/notifier.js';
 import { recordUsage, usageEventId } from '../shared/usage-store.js';
+import { recordTaskDefer, clearTaskDeferCount } from '../monitoring/task-defer-alerter.js';
 import { preemptForUrgentTask, resumeTasksPreemptedBy } from './preemption.js';
 import { recordSpan } from '../tracing/tracer.js';
 import { isFleetPaused } from './fleet-maintenance-store.js';
+import { checkBulkBlock, BulkBlockGuardError } from './bulk-block-guard.js';
+import { getFleetRun, updateFleetRepo } from '../repos/fleet-run-store.js';
 
 const log = createChildLogger({ module: 'task-store' });
+
+// ── Fan-out batch status sync (ADR-015 §3) ───────────────────────────────
+// /api/projects's handleFanout stamps each fanned-out task's sourceId with
+// the batch's FleetRun.runId (format `batch-<uuid8>`, type:'task-fanout') and
+// creates one repos[] entry per targeted repo. Keep that run's per-repo
+// actionStatus live at every status transition this module makes, so a
+// tenant checking their batch never has to poll N task docs by hand. Cheap
+// prefix check first — the vast majority of tasks aren't fan-out members and
+// must not pay for a FleetRun lookup on every status change.
+const FANOUT_BATCH_ID_PREFIX = 'batch-';
+
+function taskStatusToFleetActionStatus(status: TaskStatus): FleetRepoActionStatus {
+  switch (status) {
+    case 'working':
+    case 'review':
+      return 'in-progress';
+    case 'done':
+      return 'done';
+    case 'blocked':
+    case 'dead_letter':
+      return 'failed';
+    default:
+      return 'pending';
+  }
+}
+
+async function syncFanoutFleetRun(
+  tenantId: string,
+  task: { sourceId?: string; repo: string; status: TaskStatus },
+): Promise<void> {
+  if (!task.sourceId || !task.sourceId.startsWith(FANOUT_BATCH_ID_PREFIX)) return;
+  try {
+    const run = await getFleetRun(tenantId, task.sourceId);
+    if (!run || run.type !== 'task-fanout') return;
+    await updateFleetRepo(tenantId, task.sourceId, task.repo, {
+      actionStatus: taskStatusToFleetActionStatus(task.status),
+      ...(task.status === 'blocked' || task.status === 'dead_letter' ? { recommendation: 'attention' } : {}),
+    });
+  } catch (err) {
+    log.warn({ err, sourceId: task.sourceId, repo: task.repo, status: task.status }, 'Fan-out FleetRun sync failed');
+  }
+}
 
 // Priority ordering: P0 = urgent, P3 = low.
 const PRIORITY_ORDER: Record<TaskPriority, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
@@ -76,6 +121,37 @@ export interface UpdateTaskInput {
   prUrl?: string;
   notes?: string;
   telegramMessageId?: number;
+  /** Router audit trail (task-d9300dac) — stamped by the runner at claim time. */
+  routedProfile?: string;
+  routedModel?: string;
+  routedComplexity?: string;
+  /** Execution-lane stamp (task-b1776200) — stamped by the runner at review
+   *  close-off, once it's settled whether the normal Claude chain or the
+   *  non-Claude agentic FALLBACK lane (DeepSeek/Kimi) actually landed the fix. */
+  executionLane?: 'claude' | 'agentic-fallback';
+  executionProvider?: string;
+  /** Work-type routing stamp (task-de8b40ff) — the WORK_TYPE_TIER_MAP decision
+   *  (plan/MULTI_PROVIDER_ORCHESTRATION.md §3) resolved for this task: the
+   *  declared work-type hint, the tier it primarily routed to, and the
+   *  documented first-hop failover (a model when it's a same-provider hop, a
+   *  provider when it crosses providers — mirrors router.ts's escalateTo/chain
+   *  split). Stamped by the runner at claim time. */
+  workType?: string;
+  workTypeTier?: string;
+  workTypeFailoverHop?: string;
+  /** Bulk-block guard (bulk-block-guard.ts): explicit supersession record — the
+   *  taskId of the task that replaces this one. Authorizes a pending→blocked
+   *  transition even past the guard's per-repo burst threshold. */
+  supersededBy?: string;
+  /** Bulk-block guard: explicit operator authorization for a bulk block, in
+   *  lieu of a supersession record. Set by a human-consented operation only —
+   *  never default this true from an automated caller. */
+  operatorAuthorized?: boolean;
+  /** route_task_model's exhaustion guard (task-1a74f8c3): set true by the
+   *  runner's defer branch (status: 'pending') so task-store can track
+   *  CONSECUTIVE defers for this task via monitoring/task-defer-alerter.ts —
+   *  distinct from a genuine failure/retry, which goes through failTask. */
+  routeExhausted?: boolean;
 }
 
 export interface ListTasksFilter {
@@ -113,16 +189,26 @@ export interface TaskView {
   prUrl?: string;
   notes?: string;
   telegramMessageId?: number;
+  routedProfile?: string;
+  routedModel?: string;
+  routedComplexity?: string;
+  executionLane?: 'claude' | 'agentic-fallback';
+  executionProvider?: string;
+  workType?: string;
+  workTypeTier?: string;
+  workTypeFailoverHop?: string;
   claimedBy?: string;
   claimedAt?: Date;
   leaseUntil?: Date;
   startedAt?: Date;
   completedAt?: Date;
+  supersededBy?: string;
   retryCount: number;
   maxRetries: number;
   nextRetryAt?: Date;
   deadLetteredAt?: Date;
   lastError?: string;
+  deferCount?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -142,16 +228,26 @@ function toView(doc: ITask): TaskView {
     prUrl: doc.prUrl,
     notes: doc.notes,
     telegramMessageId: doc.telegramMessageId,
+    routedProfile: doc.routedProfile,
+    routedModel: doc.routedModel,
+    routedComplexity: doc.routedComplexity,
+    executionLane: doc.executionLane,
+    executionProvider: doc.executionProvider,
+    workType: doc.workType,
+    workTypeTier: doc.workTypeTier,
+    workTypeFailoverHop: doc.workTypeFailoverHop,
     claimedBy: doc.claimedBy,
     claimedAt: doc.claimedAt,
     leaseUntil: doc.leaseUntil,
     startedAt: doc.startedAt,
     completedAt: doc.completedAt,
+    supersededBy: doc.supersededBy,
     retryCount: doc.retryCount,
     maxRetries: doc.maxRetries,
     nextRetryAt: doc.nextRetryAt,
     deadLetteredAt: doc.deadLetteredAt,
     lastError: doc.lastError,
+    deferCount: doc.deferCount,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
@@ -253,6 +349,29 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput): Promise
   const prevPriority = existing.priority;
   const statusChanged = !!input.status && input.status !== existing.status;
 
+  // Bulk-block guard (bulk-block-guard.ts): a pending→blocked transition
+  // without an explicit supersession record or operator authorization is only
+  // allowed up to a per-repo burst threshold — past that, every caller
+  // (runner, MCP tool, REST API, webhook) hits this same check and a
+  // silent mass-block is rejected instead of displacing curated pending work.
+  if (input.status === 'blocked' && existing.status === 'pending') {
+    const authorized = !!(input.supersededBy || input.operatorAuthorized);
+    const decision = await checkBulkBlock({
+      tenantId,
+      repo: existing.repo,
+      taskId: existing.taskId,
+      title: existing.title,
+      authorized,
+    });
+    if (!decision.allowed) {
+      throw new BulkBlockGuardError(
+        `Bulk-block guard: rejected pending→blocked for ${existing.taskId} (${existing.repo}) — ` +
+        `${decision.countInWindow} unauthorized transitions in the last ${decision.windowMinutes}m ` +
+        `(threshold ${decision.threshold}). Pass supersededBy:<taskId> or operatorAuthorized:true to proceed.`,
+      );
+    }
+  }
+
   if (input.status && input.status !== existing.status) {
     if (input.status === 'working' && !existing.startedAt) {
       existing.startedAt = new Date();
@@ -270,15 +389,49 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput): Promise
     }
     existing.status = input.status;
   }
+
+  // Consecutive router-exhaustion-defer tracking (task-1a74f8c3): the runner's
+  // defer branch (route_task_model's ROUTE_EXHAUSTED) reverts the task to
+  // `pending` with routeExhausted:true on every occurrence — count it so a
+  // task stuck deferring over and over (never making it past routing) raises
+  // its own starvation alert instead of looking like routine per-pool pacing.
+  // A re-stamped `working` status (the runner's successful-routing session-
+  // start update, which always carries a fresh routedModel) means the task
+  // cleared routing this time — the consecutive streak resets.
+  if (input.routeExhausted === true && input.status === 'pending') {
+    const deferResult = await recordTaskDefer({
+      taskId: existing.taskId,
+      tenantId,
+      repo: existing.repo,
+      reason: input.notes ?? 'router exhaustion',
+    });
+    // Mirror the in-process counter onto the doc — the dashboard runs in a
+    // separate process and has no visibility into task-defer-alerter.ts's
+    // in-memory deferCounts map otherwise.
+    existing.deferCount = deferResult.count;
+  } else if (input.status === 'working') {
+    clearTaskDeferCount({ taskId: existing.taskId, tenantId });
+    existing.deferCount = 0;
+  }
+
   // Re-point a misfiled task to a different repo. Guard against empty/whitespace so a
   // blank value can never blank out a required field (TaskModel.repo is required).
   if (typeof input.repo === 'string' && input.repo.trim()) existing.repo = input.repo.trim();
+  if (input.supersededBy !== undefined) existing.supersededBy = input.supersededBy;
   if (input.priority) existing.priority = input.priority;
   if (input.assignedAgent !== undefined) existing.assignedAgent = input.assignedAgent;
   if (input.recommendedModel !== undefined) existing.recommendedModel = input.recommendedModel;
   if (input.prUrl !== undefined) existing.prUrl = input.prUrl;
   if (input.notes !== undefined) existing.notes = input.notes;
   if (input.telegramMessageId !== undefined) existing.telegramMessageId = input.telegramMessageId;
+  if (input.routedProfile !== undefined) existing.routedProfile = input.routedProfile;
+  if (input.routedModel !== undefined) existing.routedModel = input.routedModel;
+  if (input.routedComplexity !== undefined) existing.routedComplexity = input.routedComplexity;
+  if (input.executionLane !== undefined) existing.executionLane = input.executionLane;
+  if (input.executionProvider !== undefined) existing.executionProvider = input.executionProvider;
+  if (input.workType !== undefined) existing.workType = input.workType;
+  if (input.workTypeTier !== undefined) existing.workTypeTier = input.workTypeTier;
+  if (input.workTypeFailoverHop !== undefined) existing.workTypeFailoverHop = input.workTypeFailoverHop;
 
   await existing.save();
   log.info({ taskId: existing.taskId, status: existing.status }, 'Task updated');
@@ -311,6 +464,8 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput): Promise
     if (existing.status === 'done') {
       void notifyLifecycleMilestone(tenantId, 'first_ship', { repo: existing.repo, taskTitle: existing.title });
     }
+
+    await syncFanoutFleetRun(tenantId, { sourceId: existing.sourceId, repo: existing.repo, status: existing.status });
   }
 
   // Product meter (ADR-014). Emit once on the transition edge OUT of `working`
@@ -323,13 +478,25 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput): Promise
     const durationSec = existing.startedAt
       ? Math.max(0, Math.round((Date.now() - existing.startedAt.getTime()) / 1000))
       : undefined;
+    // `premium` is the overage-billing flag the dashboard's meter read keys on
+    // (dashboard/src/lib/overage.ts counts task.executed + metadata.premium).
+    // Lane-based, not model-based: a runner-claimed task consumed a full
+    // autonomous agentic session — the premium unit the pricing page sells —
+    // while the gateway-inline cheap lane (inline-executor.ts) never stamps it.
+    // The task doc doesn't record the model actually used, so lane is the
+    // billing signal until the runner stamps one.
+    const premium = !!existing.claimedAt;
     await recordUsage(tenantId, {
       eventId: usageEventId('task.executed', existing.taskId),
       type: 'task.executed',
       source: 'gateway',
       repo: existing.repo,
       taskId: existing.taskId,
-      metadata: { finalStatus: existing.status, ...(durationSec !== undefined ? { durationSec } : {}) },
+      metadata: {
+        finalStatus: existing.status,
+        ...(premium ? { premium: true } : {}),
+        ...(durationSec !== undefined ? { durationSec } : {}),
+      },
     });
     // Off-hours minutes: only runner-claimed tasks consume metered wall-clock.
     if (existing.claimedAt && existing.startedAt) {
@@ -490,6 +657,7 @@ async function claimTaskImpl(tenantId: string, input: ClaimTaskInput): Promise<T
     source: 'task-store',
     data: { taskId: claimed.taskId, repo: claimed.repo, status: claimed.status, prevStatus: 'pending', claimedBy: input.claimedBy },
   });
+  await syncFanoutFleetRun(tenantId, { sourceId: claimed.sourceId, repo: claimed.repo, status: claimed.status });
   return toView(claimed);
 }
 
@@ -582,7 +750,57 @@ async function failTaskImpl(tenantId: string, input: FailTaskInput, now: Date = 
     data: { taskId: existing.taskId, repo: existing.repo, status: existing.status, prevStatus: 'working', retryCount: retryCountAfter, maxRetries: existing.maxRetries },
   });
 
+  await syncFanoutFleetRun(tenantId, { sourceId: existing.sourceId, repo: existing.repo, status: existing.status });
+
   return toView(existing);
+}
+
+export interface ReapStaleLeasesResult {
+  requeued: string[];
+  deadLettered: string[];
+}
+
+/**
+ * Operator/cron sweep (task-eebc6aae): a `working` task whose runner died or
+ * was killed mid-task is never requeued today. `runner-lease-store`'s TTL
+ * index reaps the SLOT lease (a new runner can start), but the TASK document
+ * itself stays frozen in `working` forever — nothing but a manual
+ * `tasks_fail` call ever notices `leaseUntil` has passed. This walks
+ * `status:'working' AND leaseUntil<now` across EVERY tenant (a cross-tenant
+ * sweep, same posture as account-erasure's `runErasureSweep` /
+ * `data_retention_purge` — it has to see every tenant's stuck work, so it
+ * can't be tenant-scoped) and releases each one through the existing
+ * `failTask` path, so retryCount/backoff/maxRetries→dead_letter semantics are
+ * identical to a genuine runner-reported failure. One task's release failure
+ * is logged and never blocks the rest of the sweep.
+ */
+export async function reapStaleLeases(now: Date = new Date()): Promise<ReapStaleLeasesResult> {
+  requireDb();
+  const stale = await TaskModel.find({ status: 'working', leaseUntil: { $lte: now } }).exec();
+  const requeued: string[] = [];
+  const deadLettered: string[] = [];
+
+  for (const doc of stale as unknown as ITask[]) {
+    try {
+      const released = await failTask(doc.tenantId, {
+        taskId: doc.taskId,
+        error: `Lease expired at ${doc.leaseUntil?.toISOString() ?? 'unknown'} — runner ` +
+          `"${doc.claimedBy ?? 'unknown'}" never completed or died mid-task. Reaper released the stale claim.`,
+      }, now);
+      if (!released) continue;
+      if (released.status === 'dead_letter') deadLettered.push(released.taskId);
+      else requeued.push(released.taskId);
+    } catch (err) {
+      log.error({ err, taskId: doc.taskId, tenantId: doc.tenantId }, 'Lease reaper failed to release stale task');
+    }
+  }
+
+  log.info(
+    { ranAt: now, staleCount: stale.length, requeuedCount: requeued.length, deadLetteredCount: deadLettered.length },
+    'Stale lease reaper complete',
+  );
+
+  return { requeued, deadLettered };
 }
 
 export async function countTasks(tenantId: string, filter: ListTasksFilter = {}): Promise<Record<TaskStatus, number>> {
@@ -602,6 +820,47 @@ export async function countTasks(tenantId: string, filter: ListTasksFilter = {})
   };
   for (const row of agg) result[row._id] = row.count;
   return result;
+}
+
+export interface LaneRatioStats {
+  windowDays: number;
+  claude: number;
+  agenticFallback: number;
+  total: number;
+  fallbackPct: number;
+}
+
+/**
+ * Execution-lane usage ratio over a trailing window (ADR_AGENTIC_FALLBACK_LANE.md,
+ * task-b1776200's stamp) — what share of stamped runs landed via the non-Claude
+ * agentic FALLBACK lane vs the normal Claude chain. Feeds the /analytics
+ * fallback-lane-usage stat. Only tasks the runner actually stamped a lane on
+ * count (`executionLane` set, keyed off `updatedAt` so the window tracks when
+ * the stamp landed) — pre-stamp / gateway-inline tasks carry no lane signal
+ * and are excluded rather than silently counted as "claude".
+ */
+export async function getLaneRatioStats(tenantId: string, windowDays: number): Promise<LaneRatioStats> {
+  requireDb();
+  const since = new Date(Date.now() - windowDays * 24 * 3_600_000);
+  const docs = await scopedFind(TaskModel, tenantId, {
+    executionLane: { $exists: true },
+    updatedAt: { $gte: since },
+  }).exec();
+
+  let claude = 0;
+  let agenticFallback = 0;
+  for (const d of docs as unknown as ITask[]) {
+    if (d.executionLane === 'claude') claude++;
+    else if (d.executionLane === 'agentic-fallback') agenticFallback++;
+  }
+  const total = claude + agenticFallback;
+  return {
+    windowDays,
+    claude,
+    agenticFallback,
+    total,
+    fallbackPct: total > 0 ? Math.round((agenticFallback / total) * 100) : 0,
+  };
 }
 
 export { PRIORITY_ORDER };

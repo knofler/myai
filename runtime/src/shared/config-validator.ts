@@ -17,6 +17,9 @@ const GatewayConfigSchema = z.object({
   database: z.object({
     uri: z.string().min(1),
     name: z.string().min(1),
+    // Defaulted (not required) so hand-built configs predating the field stay valid.
+    failover: z.enum(['none', 'local']).default('none'),
+    failoverUri: z.string().min(1).optional(),
   }),
   aiRoot: z.string().min(1),
   sessions: z.object({

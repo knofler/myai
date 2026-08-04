@@ -114,3 +114,9 @@ The gateway changes (Sentry init, uptime tracking, `/api/status/uptime`) take
 effect only after the gateway image is rebuilt — a MASTER-checkout / selfheal
 op, never run from a workspace clone. No dashboard dependency was added, so the
 dashboard build stays green without any lockfile change.
+
+If the health/status data you're looking at is stale or `degraded` for one of
+the recurring reasons (disk-full mongo crash-loop, a gateway image that
+predates a merged `runtime/` change, Atlas unreachable, or a task-queue
+pileup), see [`RUNBOOK.md`](./RUNBOOK.md) for the copy-pasteable
+verify/fix/confirm/rollback procedure.

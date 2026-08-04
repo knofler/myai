@@ -57,6 +57,63 @@ export async function callGateway<T>(toolName: string, args: Record<string, unkn
   }
 }
 
+export interface GatewayToolResult<T> {
+  ok: boolean;
+  data?: T;
+  error?: string;
+}
+
+/**
+ * Call a gateway MCP tool AS a specific tenant — forwards the caller's own
+ * `Authorization: Bearer <tenant api key>` header instead of the shared
+ * system/local context `callGateway` uses, so tenant-scoped tools (e.g.
+ * `brain_host_provision`) resolve the paying tenant, not the dashboard's
+ * default/local one (`resolveTenant` in runtime/src/core/auth.ts accepts the
+ * same Bearer key on the MCP transport as it does on REST).
+ *
+ * Unlike `callGateway`, this surfaces tool-level errors (the executor's
+ * `isError` text, e.g. "plan has no hosted brain") instead of collapsing them
+ * to `null`, so callers can show the caller *why* the action failed.
+ */
+export async function callGatewayAsTenant<T>(
+  toolName: string,
+  authHeader: string | null,
+  args: Record<string, unknown> = {},
+): Promise<GatewayToolResult<T>> {
+  try {
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: { ...gatewayHeaders(), ...(authHeader ? { Authorization: authHeader } : {}) },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'tools/call',
+        params: { name: toolName, arguments: args },
+        id: 1,
+      }),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return { ok: false, error: `gateway HTTP ${res.status}` };
+    const json = await res.json();
+    if (json?.error) return { ok: false, error: json.error.message || 'gateway error' };
+    const content = json?.result?.content;
+    const textEntry = Array.isArray(content)
+      ? content.find((c: { type: string }) => c.type === 'text')
+      : undefined;
+    if (!textEntry) return { ok: false, error: 'empty gateway response' };
+    if (json.result.isError) {
+      return { ok: false, error: String(textEntry.text ?? '').replace(/^Error:\s*/, '') };
+    }
+    try {
+      return { ok: true, data: JSON.parse(textEntry.text) as T };
+    } catch {
+      return { ok: false, error: 'malformed gateway response' };
+    }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'gateway unreachable' };
+  }
+}
+
 export interface RoutingConfig {
   tiers: Record<string, { provider: string; model: string; chain?: string[]; cacheable?: boolean; batchable?: boolean }>;
   agentMap: Record<string, string>;

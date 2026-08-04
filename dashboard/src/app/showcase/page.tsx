@@ -149,6 +149,39 @@ export default async function ShowcasePage() {
     { label: 'Support', desc: 'Health alerts + bug/feature triage' },
   ];
 
+  const agentFlowStages: { label: string; desc: string }[] = [
+    { label: 'Idea', desc: 'Describe the app in plain English' },
+    { label: 'Plan', desc: 'Solution-architect drafts the approach' },
+    { label: 'Gap', desc: 'Gap analysis against the stated goal' },
+    { label: 'BRD', desc: 'Business requirements captured' },
+    { label: 'TRD', desc: 'Technical requirements + contracts' },
+    { label: 'Design', desc: 'UI/UX + architecture design pass' },
+    { label: 'Build', desc: 'Real codegen — files land in the repo' },
+    { label: 'Ship', desc: 'Reviewed, tested, deployable' },
+  ];
+
+  const agentFlowCapabilities = [
+    { icon: '◈', title: 'AI PM vs Human PM mode', body: 'Run the pipeline fully autonomous with an AI project manager driving each stage, or take the wheel yourself and approve every stage transition.' },
+    { icon: '⌁', title: 'Real codegen', body: 'Not scaffolding-only — the Build stage writes actual, working code into the generated project, not just planning documents.' },
+    { icon: '⏳', title: 'Background generation', body: 'Long-running stages execute as background jobs, so a generation run survives a closed tab and picks up where it left off.' },
+    { icon: '⊡', title: 'Artifact viewer', body: 'A browsable, tree-view artifact viewer across every stage — inspect and download generated files without leaving the workspace.' },
+  ];
+
+  const connectStages: { label: string; desc: string }[] = [
+    { label: 'Report', desc: 'A bug or feature request lands via the widget or portal' },
+    { label: 'Triage', desc: 'AI classifies severity, dedupes, and routes it' },
+    { label: 'Fix', desc: 'Fix-engine drafts a patch against the target repo' },
+    { label: 'PR', desc: 'Change opens as a reviewable pull request' },
+    { label: 'Deploy', desc: 'Merged fix ships to the reporting app' },
+  ];
+
+  const connectCapabilities = [
+    { icon: '◈', title: 'Auto-triage', body: 'Incoming reports are classified, deduplicated, and prioritized by AI before a human ever looks at the queue.' },
+    { icon: '⌁', title: 'Fix-engine', body: 'Drafts a real patch against the target repo for qualifying bugs — not just a ticket, a candidate fix.' },
+    { icon: '◉', title: 'Admin cockpit', body: 'A single dashboard for operators to review reports, approve fixes, and track the loop from intake to deploy.' },
+    { icon: '⊡', title: 'Test coverage', body: '180+ tests back the support→triage→fix→PR→deploy loop, so the automation is verified, not vibes-based.' },
+  ];
+
   const capabilities = [
     { icon: '◈', title: 'Multi-agent specialists', body: 'Domain-owning agents auto-discovered by Claude Code — architecture, frontend, API, DB, security, ops, swarm coordination and more. Parallel lanes prevent collisions.', badge: `${counts.agents} agents` },
     { icon: '⚡', title: 'Skill playbooks', body: 'Repeatable, named procedures with trigger keywords — code review, OWASP audit, blueprint scaffold, productionise. Loaded on demand, zero idle token cost.', badge: `${counts.skills} skills` },
@@ -235,16 +268,86 @@ export default async function ShowcasePage() {
             <p className="text-[11px] text-zinc-400 mt-1">The AI management framework — this page.</p>
             <span className="inline-block mt-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/25">live</span>
           </div>
-          <div className="bg-zinc-900/40 border border-dashed border-zinc-700 rounded-xl p-4">
-            <p className="text-sm font-semibold text-zinc-400">agentflow</p>
-            <p className="text-[11px] text-zinc-500 mt-1">Visual agent workflow builder. Showcase coming soon.</p>
-            <span className="inline-block mt-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500 border border-zinc-700">planned</span>
-          </div>
-          <div className="bg-zinc-900/40 border border-dashed border-zinc-700 rounded-xl p-4">
-            <p className="text-sm font-semibold text-zinc-400">connect</p>
-            <p className="text-[11px] text-zinc-500 mt-1">Bug &amp; feature intake hub for shipped apps. Showcase coming soon.</p>
-            <span className="inline-block mt-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500 border border-zinc-700">planned</span>
-          </div>
+          <a href="#agentflow" className="gel-surface bg-zinc-900/70 border border-teal-500/30 rounded-xl p-4 hover:border-teal-400 transition-colors">
+            <p className="text-sm font-semibold text-teal-300">agentFlow</p>
+            <p className="text-[11px] text-zinc-400 mt-1">Idea→app 8-stage generation pipeline. See the full section below ↓</p>
+            <span className="inline-block mt-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/25">live</span>
+          </a>
+          <a href="#connect" className="gel-surface bg-zinc-900/70 border border-teal-500/30 rounded-xl p-4 hover:border-teal-400 transition-colors">
+            <p className="text-sm font-semibold text-teal-300">connect</p>
+            <p className="text-[11px] text-zinc-400 mt-1">Bug &amp; feature intake hub for shipped apps. See the full section below ↓</p>
+            <span className="inline-block mt-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/25">live</span>
+          </a>
+        </div>
+      </section>
+
+      {/* ── (c2) agentFlow showcase — idea to shipped app ─────────── */}
+      <section id="agentflow" className="scroll-mt-6">
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-bold text-zinc-100">agentFlow</h2>
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/25">live</span>
+        </div>
+        <p className="text-sm text-zinc-500 mt-1 mb-4 max-w-2xl">
+          The idea→app generation pipeline built on this framework. An 8-stage agent pipeline turns a
+          plain-English idea into a working, tested application — real codegen, not scaffolding.
+        </p>
+
+        <div className="flex flex-wrap items-stretch gap-2 mb-4">
+          {agentFlowStages.map((s, i) => (
+            <FlowStep key={s.label} n={i + 1} label={s.label} desc={s.desc} />
+          ))}
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          {agentFlowCapabilities.map((c) => (
+            <Capability key={c.title} {...c} />
+          ))}
+        </div>
+
+        <div className="mt-4">
+          <a
+            href="https://github.com/knofler/agentFlow"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-block px-3 py-1.5 rounded-lg gel-brand border border-teal-500/40 text-teal-200 hover:border-teal-400 transition-colors text-xs"
+          >
+            View the agentFlow repo ↗
+          </a>
+        </div>
+      </section>
+
+      {/* ── (c3) connect showcase — support→triage→fix→PR→deploy loop ─ */}
+      <section id="connect" className="scroll-mt-6">
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-bold text-zinc-100">connect</h2>
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/25">live</span>
+        </div>
+        <p className="text-sm text-zinc-500 mt-1 mb-4 max-w-2xl">
+          The bug &amp; feature intake hub for shipped apps. A closed loop turns a user
+          report into a deployed fix — AI-triaged, AI-drafted, human-reviewed.
+        </p>
+
+        <div className="flex flex-wrap items-stretch gap-2 mb-4">
+          {connectStages.map((s, i) => (
+            <FlowStep key={s.label} n={i + 1} label={s.label} desc={s.desc} />
+          ))}
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          {connectCapabilities.map((c) => (
+            <Capability key={c.title} {...c} />
+          ))}
+        </div>
+
+        <div className="mt-4">
+          <a
+            href="https://github.com/knofler/connect"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-block px-3 py-1.5 rounded-lg gel-brand border border-teal-500/40 text-teal-200 hover:border-teal-400 transition-colors text-xs"
+          >
+            View the connect repo ↗
+          </a>
         </div>
       </section>
 

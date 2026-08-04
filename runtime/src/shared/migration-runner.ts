@@ -13,6 +13,7 @@ import { createChildLogger } from './logger.js';
 import { migrate as migrateTenantScoping } from './migrations/001-tenant-scoping.js';
 import { migrate as migrateRbacUserRole } from './migrations/002-rbac-user-role.js';
 import { migrate as migrateTenantRegion } from './migrations/003-tenant-region.js';
+import { migrate as migrateTenantDbBinding } from './migrations/004-tenant-db-binding.js';
 
 const log = createChildLogger({ module: 'migration-runner' });
 
@@ -27,6 +28,7 @@ const MIGRATIONS: MigrationDef[] = [
   { id: '001-tenant-scoping', run: migrateTenantScoping },
   { id: '002-rbac-user-role', run: migrateRbacUserRole },
   { id: '003-tenant-region', run: migrateTenantRegion },
+  { id: '004-tenant-db-binding', run: migrateTenantDbBinding },
 ];
 
 export interface MigrationStatus {

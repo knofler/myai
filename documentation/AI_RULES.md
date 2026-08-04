@@ -219,6 +219,34 @@ routines, others ad-hoc `SCHEDULE.md` files) fragments the view and/or bills tok
   fails loudly instead of defaulting to local mongo); (d) `machine_selfheal.sh` §7 detects a
   rogue container (workspace `working_dir` label, or Mongo-URI drift vs the owning `.env`)
   and recreates gateway+dashboard from the master checkout.
+* **PLANNER task hard-boundary — append + commit `config/runner_backlog.jsonl` ONLY,
+  never `tasks_create`/`tasks_update` (root cause of the 2026-07-06/07 connect overnight
+  incident, fixed 2026-07-20 in `scripts/queue_topup.sh` commit `fee5f65`, MANDATORY).**
+  The PLANNER task that `queue_topup.sh` enqueues to regenerate `config/runner_backlog.jsonl`
+  when the backlog well runs low executes as a fully-autonomous LLM session — `cli_task_runner.sh`
+  spawns it with `claude -p --permission-mode bypassPermissions`, i.e. unrestricted Bash + MCP
+  tool access, identical to any other queued task. Its charter was only ever "read the roadmap
+  docs and append fresh lines to the backlog file," but nothing structural stopped the session
+  from instead calling `tasks_create`/`tasks_update` straight against the live gateway queue —
+  which is exactly what happened, twice: it wrote a 14-task speculative roadmap directly into
+  `connect`'s queue and mass-flipped `connect`'s 20 curated pending tasks to `blocked`,
+  displacing them and idling the runner overnight both times. It was never a cron schedule
+  (`schedules_list` showed 0 jobs) — it was this auto-enqueued task overreaching its own
+  instructions. **The contract: the ONLY write actions a PLANNER task may take are (1) appending
+  JSONL lines to `config/runner_backlog.jsonl` and (2) committing that file.** It MUST NOT call
+  the `tasks_create` or `tasks_update` MCP tools, MUST NOT run `schedule_task.sh` or curl the
+  gateway to create/modify tasks, and MUST NOT change the status of any existing task — pending,
+  blocked, or otherwise — in this or any other repo. New backlog items reach the live queue
+  later, ONLY via `queue_topup.sh`'s own pop path; a stale/superseded pending task should be
+  flagged in the PLANNER's commit message for a human to review, never touched directly. Two
+  independent enforcement layers, neither of which is this doc: (1) auto-generation is opt-in
+  (`RUNNER_PLANNER_AUTOGEN=1`) — by default the runner only *logs* that the backlog is low and
+  leaves regeneration to a human, granting no unattended write access overnight; (2) when
+  explicitly enabled, the inline prompt string `queue_topup.sh` passes to `schedule_task.sh`
+  carries this boundary verbatim. **This section is the durable, human-readable record of the
+  contract — if that inline prompt string is ever reworded or trimmed, the boundary itself (not
+  just today's phrasing of it) must survive the rewrite.** Full incident detail lives in the
+  `queue_topup.sh` comments above the PLANNER enqueue block and in commit `fee5f65`'s message.
 
 ## 8. Management-Issue → Distributed-Rule Protocol (master repo, MANDATORY)
 

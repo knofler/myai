@@ -3,8 +3,10 @@ import { resolve, join } from 'node:path';
 import { getConfig } from '../shared/config.js';
 import { createChildLogger } from '../shared/logger.js';
 import { HookModel, isConnected } from '../shared/db.js';
+import { getDbFailoverState } from '../shared/db-failover.js';
 import { addBashHook, addHook } from './registry.js';
 import { getHookCount, listHooks } from './event-bus.js';
+import { readDisabledScripts } from './settings-patch.js';
 import type { HookEvent } from './types.js';
 
 // Built-in hooks
@@ -43,6 +45,11 @@ export function loadAllHooks(): void {
 export async function syncHooksToDatabase(): Promise<number> {
   if (!isConnected()) {
     log.warn('MongoDB not connected — skipping hook sync');
+    return 0;
+  }
+  if (getDbFailoverState().active) {
+    // bulkWrite bypasses the read-only guard plugin — skip explicitly.
+    log.warn('READ-ONLY DB failover active — skipping hook sync (mirror must not diverge)');
     return 0;
   }
 
@@ -99,6 +106,11 @@ function loadBashHooks(bashHooksDir: string): void {
 
   let bashCount = 0;
 
+  // Hooks parked in settings.json's disabledHooks key (dashboard toggle) are
+  // still registered — visible + re-enableable — but never executed.
+  const settingsPath = resolve(config.aiRoot, '.claude', 'settings.json');
+  const disabledScripts = readDisabledScripts(settingsPath);
+
   for (const [subdir, events] of Object.entries(BASH_EVENT_MAP)) {
     const hookDir = join(absDir, subdir);
     if (!existsSync(hookDir)) continue;
@@ -114,7 +126,6 @@ function loadBashHooks(bashHooksDir: string): void {
       // Read the settings.json to find the timeout for this hook
       let timeout = config.hooks.defaultTimeout;
       try {
-        const settingsPath = resolve(config.aiRoot, '.claude', 'settings.json');
         if (existsSync(settingsPath)) {
           const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
           const hookGroups = settings.hooks?.[eventTypeKey(subdir)] ?? [];
@@ -130,7 +141,7 @@ function loadBashHooks(bashHooksDir: string): void {
         // Ignore settings parse errors — use default timeout
       }
 
-      addBashHook(name, events, scriptPath, { timeout });
+      addBashHook(name, events, scriptPath, { timeout, enabled: !disabledScripts.has(`${subdir}/${script}`) });
       bashCount++;
     }
   }

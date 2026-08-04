@@ -27,6 +27,8 @@ const SCRIPTS_DIR = path.join(REPO_ROOT, 'scripts');
 //   docker  → `docker <args...>` invoked with the user's extra args appended
 //   handler → in-process JS (used by `doctor`)
 const COMMANDS = [
+  { name: 'setup', args: '[args...]', script: 'myai_setup.sh',
+    desc: 'Global first-run wizard (once per machine, BEFORE any repo work): the ONE question — connect an existing brain (--brain <url> / $MYAI_BRAIN_REMOTE) or provision a new one (local by default, states the ownership/data-locality deal + consent, optional private remote). --yes for non-interactive consent. Auto-triggered by any other stateful command when ~/.myai/config is missing (see needsAutoSetup below) — never re-triggers once set up; --force redoes it' },
   { name: 'init', args: '[path]', script: 'myai_init.sh',
     desc: 'Greenfield by default: drop a ~30-line kernel CLAUDE.md + gitignored .myai-local (no AI/ folder) — framework resolves from the installed module. --managed forces the legacy AI/-scaffold (portable docker-compose + .env + guided wizard); --force replaces a non-kernel CLAUDE.md; --zero-prompt (or env MYAI_ZERO_PROMPT=1) guarantees a scripted/headless run never blocks on stdin, regardless of TTY state' },
   { name: 'up', args: '[args...]', script: 'myai_up.sh',
@@ -45,8 +47,8 @@ const COMMANDS = [
     desc: 'Spider git repos under a dir → register each in the gateway directory + seed RAG awareness (--register also lists in managed_repos.txt; --dry-run previews)' },
   { name: 'demo', args: '[args...]', script: 'myai_demo.sh',
     desc: 'Seed the dashboard with realistic sample data — tasks, schedules, plan, repo cards, memory, budget rows (idempotent; --clean removes, --force re-seeds)' },
-  { name: 'new-app', args: '[path]', script: 'init_blueprint.sh',
-    desc: 'Scaffold a new full-stack app from the powerhouse blueprint' },
+  { name: 'new-app', args: '[args...]', script: 'myai_new_app.sh',
+    desc: 'Two modes, one verb: `new-app <path>` scaffolds a full-stack app offline from the powerhouse blueprint (init_blueprint.sh flags all still work — --gh-create, --vercel, --mode, etc.); `new-app "<idea>"` (or `--idea "<idea>"`) drives agentFlow\'s headless idea→app pipeline (POST /api/headless/new-app, x-gateway-local-token) and self-registers the produced repo via repos_upsert (ADR-021). Dispatches on argument shape: any whitespace in the first arg means idea mode' },
   { name: 'connect', args: '[path]', script: 'init_connect.sh',
     desc: 'Install the Connect Hub module into a project' },
   { name: 'plug', args: '[agent...]', script: 'myai_plug.sh',
@@ -64,7 +66,7 @@ const COMMANDS = [
   { name: 'mcp', args: '[args...]', script: 'myai_mcp.sh',
     desc: 'Propagate the MCP server config through the installed module (not update_all): `mcp repo [path]` writes/refreshes a repo .mcp.json from the bundled template (deep-merge — framework servers canonical, custom preserved); `mcp sync [museum|tech|personal|all]` refreshes the per-org Claude config dirs from the template; `mcp print` shows the base config. --dry-run supported' },
   { name: 'mirror', args: '[args...]', script: 'mongo_mirror.sh',
-    desc: 'Keep a LOCAL copy of the gateway memory + registry so localhost is not single-point-of-failure on Atlas. Streams mongodump→mongorestore (Atlas → local by default) in a throwaway mongo:7 container — no host mongo tools. --dry-run previews; --collections a,b scopes; --reverse (local → Atlas) is guarded behind --yes' },
+    desc: 'Keep a LOCAL copy of the gateway memory + registry so localhost is not single-point-of-failure on Atlas. Streams mongodump→mongorestore (Atlas → local by default) in a throwaway mongo:7 container — no host mongo tools. --dry-run previews; --collections a,b scopes; --reverse (local → Atlas) is guarded behind --yes; --install-schedule [--every-minutes N] / --schedule-status / --uninstall-schedule manage the periodic (hourly default) launchd/cron refresh' },
   { name: 'rotate-keys', args: '<local|tenant> [args...]', script: 'myai_rotate_keys.sh',
     desc: 'Self-rotate a gateway credential with a dual-valid grace window (zero-downtime): `rotate-keys local [--grace-minutes N]` rewrites GATEWAY_LOCAL_TOKEN in .env, keeping the old value valid for the grace window; `rotate-keys tenant <tenantId> [--grace-minutes N] [--env live|test]` mints a new tenant bootstrap API key via the gateway (local-trust only), old key stays valid server-side until grace elapses — new key is shown ONCE' },
   { name: 'runner', args: '[args...]', script: 'myai_runner.sh',
@@ -84,7 +86,7 @@ const COMMANDS = [
   { name: 'upgrade', args: '[args...]', script: 'myai_upgrade.sh',
     desc: 'Self-update the global CLI (`npm update -g`) then run pending config + brain schema migrations idempotently (--check reports without applying, exit 20 if pending; --dry-run previews; --no-self-update skips the npm step; --json for scripts)' },
   { name: 'doctor', args: '[args...]', handler: doctor,
-    desc: 'Run preflight checks: docker (+engine), node, claude CLI, ANTHROPIC_API_KEY, cloud reachability, ollama availability, brain freshness, ports free. --dry-run previews the safe auto-fixes; --fix applies them idempotently (backfill non-secret .env keys from .env.example, redeploy statusline, correct runner cadence, pull latest gateway image) — never touches secrets or restarts the shared stack (--json for CI/scripts; exit 0 = passed)' },
+    desc: 'Run preflight checks: docker (+engine), node, claude CLI, ANTHROPIC_API_KEY, cloud reachability, ollama availability, brain freshness, mongo mirror schedule (+last run), ports free. --dry-run previews the safe auto-fixes; --fix applies them idempotently (backfill non-secret .env keys from .env.example, redeploy statusline, correct runner cadence, pull latest gateway image) — never touches secrets or restarts the shared stack (--json for CI/scripts; exit 0 = passed)' },
   { name: 'root', args: '[args...]', handler: root,
     desc: 'Print the installed ai-management module path — the framework-as-module resolver a kernel-only repo (no per-repo AI/ copy) uses to find agents/skills/hooks/rule bodies. Fails loud (exit 1) if the resolved dir is not a valid install, so safety hooks never silently go missing (--json for scripts)' },
   { name: 'release', args: '[args...]', script: 'myai_release.sh',
@@ -192,6 +194,26 @@ function findAnthropicKey() {
   return null;
 }
 
+// The GATEWAY_LOCAL_TOKEN fallback docker-compose.yml/.mcp.json/templates used
+// to ship (`${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}`) — public knowledge,
+// since it's in the npm package. Kept here in sync with
+// runtime/src/shared/config.ts's KNOWN_DEFAULT_LOCAL_TOKEN (SECURITY task-7f8b20a3).
+const KNOWN_DEFAULT_LOCAL_TOKEN = 'myai-local-bridge-dev';
+
+// Look for GATEWAY_LOCAL_TOKEN in the environment, then in a local .env (cwd or
+// package root) — same resolution order as findAnthropicKey.
+function findGatewayLocalToken() {
+  const envVal = process.env.GATEWAY_LOCAL_TOKEN;
+  if (envVal && envVal.trim()) return { value: envVal.trim(), src: 'environment' };
+  for (const dir of [process.cwd(), REPO_ROOT]) {
+    const f = path.join(dir, '.env');
+    if (!fs.existsSync(f)) continue;
+    const m = fs.readFileSync(f, 'utf8').match(/^\s*GATEWAY_LOCAL_TOKEN\s*=\s*(.+?)\s*$/m);
+    if (m && m[1] && m[1].trim()) return { value: m[1].trim(), src: path.relative(process.cwd(), f) || '.env' };
+  }
+  return null;
+}
+
 // TCP reachability probe to an arbitrary host:port — same dependency-free
 // node-child pattern as portInUse. Exit 0 → reachable, exit 1 → not.
 function hostReachable(host, port, timeoutMs) {
@@ -255,6 +277,73 @@ function brainFreshness() {
   return { exists: true, dir, ageDays };
 }
 
+// Mongo-mirror schedule status (OPS follow-up 2026-07-24): is the periodic
+// Atlas→local mirror scheduled on this machine, and how did its last run go?
+// scripts/setup_mongo_mirror_schedule.sh installs the job (launchd on macOS,
+// tagged crontab line on Linux); every scripts/mongo_mirror.sh run records its
+// outcome in $MYAI_HOME/mongo-mirror.last. MYAI_MIRROR_PLIST overrides the
+// plist path (tests pin it so a host's real install can't leak in).
+function mirrorScheduleStatus() {
+  const os = require('node:os');
+  const home = process.env.MYAI_HOME || path.join(os.homedir(), '.myai');
+  let installed = false;
+  let intervalSec = null;
+  const plist = process.env.MYAI_MIRROR_PLIST
+    || path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.myai.mongo-mirror.plist');
+  if (process.env.MYAI_MIRROR_PLIST || process.platform === 'darwin') {
+    if (fs.existsSync(plist)) {
+      installed = true;
+      const m = fs.readFileSync(plist, 'utf8').match(/<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/);
+      if (m) intervalSec = parseInt(m[1], 10);
+    }
+  } else {
+    const r = spawnSync('crontab', ['-l'], { encoding: 'utf8' });
+    installed = r.status === 0 && /mongo_mirror\.sh/.test(r.stdout || '');
+  }
+  let last = null;
+  const lastFile = path.join(home, 'mongo-mirror.last');
+  if (fs.existsSync(lastFile)) {
+    try {
+      const kv = {};
+      for (const line of fs.readFileSync(lastFile, 'utf8').split('\n')) {
+        const i = line.indexOf('=');
+        if (i > 0) kv[line.slice(0, i)] = line.slice(i + 1);
+      }
+      const epoch = parseInt(kv.epoch, 10);
+      if (Number.isFinite(epoch)) last = { epoch, rc: parseInt(kv.rc, 10) || 0, db: kv.db || '' };
+    } catch { /* unreadable record — treated as no run */ }
+  }
+  return { installed, intervalSec, last };
+}
+
+// Runner-backlog WELL health (task-618ccbe7): queue_topup.sh already
+// auto-enqueues a PLANNER task when the backlog well runs low, but that only
+// fires from inside a queue_topup.sh cycle — there was no operator-facing way
+// to see well health otherwise. This mirrors queue_topup.sh's own counting
+// exactly (TOTAL = non-blank/non-comment lines in the backlog file, CONSUMED
+// = the cursor file's digits, REMAINING = TOTAL - CONSUMED) so the two can
+// never drift apart. MYAI_RUNNER_BACKLOG / MYAI_RUNNER_BACKLOG_CURSOR override
+// the paths — tests pin them so a host's real backlog file can't leak in
+// (same discipline as MYAI_MIRROR_PLIST for the mirror check). The cursor
+// defaults to a SIBLING of the resolved backlog (not a fixed repo path) so a
+// test that overrides only the backlog can't accidentally read the host's real
+// cursor — the two always resolve together. With the default backlog this is
+// still config/.runner_backlog.cursor, so production behaviour is unchanged.
+function runnerBacklogWellStatus(repoRoot) {
+  const backlogPath = process.env.MYAI_RUNNER_BACKLOG || path.join(repoRoot, 'config', 'runner_backlog.jsonl');
+  const cursorPath = process.env.MYAI_RUNNER_BACKLOG_CURSOR || path.join(path.dirname(backlogPath), '.runner_backlog.cursor');
+  if (!fs.existsSync(backlogPath)) return { exists: false, backlogPath };
+  const lines = fs.readFileSync(backlogPath, 'utf8').split('\n');
+  const total = lines.filter((l) => l.trim() && !l.trim().startsWith('#')).length;
+  let consumed = 0;
+  if (fs.existsSync(cursorPath)) {
+    const digits = fs.readFileSync(cursorPath, 'utf8').replace(/[^0-9]/g, '');
+    consumed = digits ? parseInt(digits, 10) : 0;
+  }
+  const remaining = Math.max(total - consumed, 0);
+  return { exists: true, total, consumed, remaining, backlogPath };
+}
+
 // Host ports the self-contained stack binds (docker-compose.yml).
 const STACK_PORTS = [
   [3100, 'gateway HTTP/MCP'],
@@ -304,6 +393,21 @@ function runDoctorChecks() {
       : credOk ? 'not set — Claude CLI login will be used instead'
         : 'not set and no Claude CLI — set one for api/runner access');
 
+  // ── GATEWAY_LOCAL_TOKEN: never the published default (SECURITY task-7f8b20a3) ──
+  // The gateway itself now refuses this value under TENANT_ENFORCE=true
+  // (config.ts loadConfig), so this isn't a hard blocker — but it's a fixable
+  // finding worth surfacing since it's a publicly-known credential.
+  const localToken = findGatewayLocalToken();
+  if (localToken && localToken.value === KNOWN_DEFAULT_LOCAL_TOKEN) {
+    check('GATEWAY_LOCAL_TOKEN', 'warn',
+      `set to the published default ("${KNOWN_DEFAULT_LOCAL_TOKEN}", public in the npm package) via ${localToken.src} — run \`myai rotate-keys local\` to generate a private one`);
+  } else if (!localToken) {
+    check('GATEWAY_LOCAL_TOKEN', 'warn',
+      'not set — fine for loopback-only use; `myai up` generates a random one into .env on first boot');
+  } else {
+    check('GATEWAY_LOCAL_TOKEN', true, `set (${localToken.src})`);
+  }
+
   // ── offline / degraded mode (BRAIN B6) — all warn-only: offline is a
   //    SUPPORTED mode (Ollama auto-connect + brain degraded-read), so none of
   //    these gate the preflight. See documentation/BRAIN_OFFLINE.md.
@@ -328,6 +432,48 @@ function runDoctorChecks() {
       : brain.ageDays === null ? `${brain.dir} — last-commit age unknown`
         : brain.ageDays > 7 ? `${brain.dir} — last commit ${Math.round(brain.ageDays)}d ago (stale; run \`wrap up\` / \`myai brain session merge\`)`
           : `${brain.dir} — last commit ${brain.ageDays < 1 ? 'today' : Math.round(brain.ageDays) + 'd ago'}`);
+
+  // ── mongo mirror schedule — warn-only: the periodic Atlas→local mirror is
+  //    optional by design (never auto-installed, MONGO_MIRROR.md), but once
+  //    installed it should be firing and succeeding.
+  const mirror = mirrorScheduleStatus();
+  const mirrorAgeMin = mirror.last ? Math.round((Date.now() / 1000 - mirror.last.epoch) / 60) : null;
+  const mirrorAgo = mirrorAgeMin === null ? null
+    : mirrorAgeMin < 120 ? `${mirrorAgeMin}m ago` : `${Math.round(mirrorAgeMin / 60)}h ago`;
+  const mirrorCadence = mirror.intervalSec ? `every ${Math.round(mirror.intervalSec / 60)}m` : 'scheduled';
+  // Stale = two missed fires (floor 2h); unknown interval (cron) → 26h.
+  const mirrorStaleMin = mirror.intervalSec ? Math.max((mirror.intervalSec / 60) * 2, 120) : 26 * 60;
+  if (!mirror.installed) {
+    check('mongo mirror schedule', 'warn', mirror.last
+      ? `not scheduled — last manual run ${mirror.last.rc === 0 ? 'ok' : `FAILED (rc=${mirror.last.rc})`} ${mirrorAgo} (install: myai mirror --install-schedule)`
+      : 'not scheduled (optional) — install: myai mirror --install-schedule');
+  } else if (!mirror.last) {
+    check('mongo mirror schedule', 'warn', `${mirrorCadence} — installed but no run recorded yet`);
+  } else if (mirror.last.rc !== 0) {
+    check('mongo mirror schedule', 'warn',
+      `${mirrorCadence} — last run FAILED (rc=${mirror.last.rc}, ${mirrorAgo}); see ~/.myai/logs/mongo-mirror.err`);
+  } else if (mirrorAgeMin > mirrorStaleMin) {
+    check('mongo mirror schedule', 'warn',
+      `${mirrorCadence} — last success ${mirrorAgo} (STALE — the job may not be firing)`);
+  } else {
+    check('mongo mirror schedule', true, `${mirrorCadence} — last run ok ${mirrorAgo}`);
+  }
+
+  // ── runner-backlog WELL health — warn-only: queue_topup.sh already
+  //    auto-enqueues a PLANNER task when this drops low, but only from inside
+  //    its own cycle. Surface the same well health here so a human running
+  //    `myai doctor` doesn't have to wait for the next topup fire to see it.
+  const backlogMinEnv = parseInt(process.env.RUNNER_BACKLOG_MIN, 10);
+  const backlogMin = Number.isFinite(backlogMinEnv) ? backlogMinEnv : 6; // matches queue_topup.sh default
+  const well = runnerBacklogWellStatus(REPO_ROOT);
+  if (!well.exists) {
+    check('runner backlog well', 'warn', 'no config/runner_backlog.jsonl in this install (optional)');
+  } else {
+    const low = well.remaining < backlogMin;
+    check('runner backlog well', low ? 'warn' : true,
+      `${well.remaining} remaining / ${well.total} total (consumed ${well.consumed})`
+      + (low ? ` — below RUNNER_BACKLOG_MIN (${backlogMin}); queue_topup.sh will enqueue a PLANNER task on its next cycle` : ''));
+  }
 
   // ── packaged framework files ─────────────────────────────────────────────
   const scriptsOk = fs.existsSync(SCRIPTS_DIR) && fs.statSync(SCRIPTS_DIR).isDirectory();
@@ -730,6 +876,37 @@ function runFallback(argv) {
   process.exit(dispatch(cmd, args.slice(1)));
 }
 
+// ── first-run setup auto-trigger (PRODUCT_UX_NORTHSTAR.md §"Workflow 1") ──────
+// Any STATEFUL command auto-triggers `myai setup` when ~/.myai/config is
+// missing. Exempt: `setup` itself (avoid recursion), `doctor`/`root` (pure
+// diagnostics, no brain access), any unknown command (let it fail normally),
+// and -v/--help at any level (checked separately, before this ever runs) —
+// those must never block. Lives in main() only (never dispatch()/runFallback()
+// directly) so the existing dispatch-level unit tests, which assert exact
+// spawnSync call counts/args, are untouched.
+const SETUP_EXEMPT_COMMANDS = new Set(['setup', 'doctor', 'root']);
+
+function needsAutoSetup(argv) {
+  const args = argv.slice(2);
+  if (args.length === 0) return false; // bare invocation → prints help, not stateful
+  const first = args[0];
+  if (first === '-h' || first === '--help' || first === 'help') return false;
+  if (first === '-v' || first === '--version') return false;
+  if (SETUP_EXEMPT_COMMANDS.has(first)) return false;
+  if (!COMMANDS.some((c) => c.name === first)) return false;
+  if (process.env.MYAI_SKIP_SETUP === '1') return false;
+  const os = require('node:os');
+  const home = process.env.MYAI_HOME || path.join(os.homedir(), '.myai');
+  return !fs.existsSync(path.join(home, 'config'));
+}
+
+function autoRunSetup() {
+  const setupScript = path.join(SCRIPTS_DIR, 'myai_setup.sh');
+  if (!fs.existsSync(setupScript)) return;
+  console.log('myai: no ~/.myai/config found — running first-run setup (myai setup)…');
+  spawnSync('bash', [setupScript], { stdio: 'inherit', cwd: process.cwd() });
+}
+
 // ── entrypoint ────────────────────────────────────────────────────────────────
 function main() {
   // Intercept a subcommand's -h/--help BEFORE either parser — otherwise it
@@ -739,6 +916,7 @@ function main() {
     printCommandHelp(helpCmd);
     process.exit(0);
   }
+  if (needsAutoSetup(process.argv)) autoRunSetup();
   let Command = null;
   try {
     ({ Command } = require('commander'));
@@ -779,8 +957,12 @@ module.exports = {
   hostReachable,
   probeOllamaDaemon,
   brainFreshness,
+  mirrorScheduleStatus,
+  runnerBacklogWellStatus,
   printHelp,
   runFallback,
+  needsAutoSetup,
+  autoRunSetup,
   main,
 };
 

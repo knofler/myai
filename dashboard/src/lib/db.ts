@@ -67,6 +67,17 @@ const hookSchema = new mongoose.Schema({
   enabled: Boolean,
   source: String,
   loadedAt: Date,
+  // Governance record of the most recent PATCH /api/hooks toggle
+  // (task-bd18a5ec) — who flipped it and the before/after state, rendered
+  // as a tooltip on the hooks tab row.
+  lastToggle: {
+    actorUserId: String,
+    role: String,
+    via: String,
+    previousState: Boolean,
+    newState: Boolean,
+    at: Date,
+  },
 }, { collection: 'hooks' });
 
 const ruleSchema = new mongoose.Schema({
@@ -210,6 +221,10 @@ const taskSchema = new mongoose.Schema({
   nextRetryAt: Date,
   deadLetteredAt: Date,
   lastError: String,
+  // Consecutive route_task_model exhaustion-defer streak — read-only mirror
+  // of runtime/src/shared/db.ts ITask.deferCount (task-store.updateTaskImpl
+  // is the only writer).
+  deferCount: Number,
   createdAt: Date,
   updatedAt: Date,
 }, { collection: 'tasks' });
@@ -228,6 +243,44 @@ const runnerHeartbeatSchema = new mongoose.Schema({
   createdAt: Date,
   updatedAt: Date,
 }, { collection: 'runner_heartbeats' });
+
+// Live fleet-wide concurrency slots (ADR-011 slice 3) — read-only mirror of
+// the gateway's runnerLeaseSchema (runtime/src/shared/db.ts). One doc per
+// held slot; deleted on release, so this only ever shows currently-running
+// sessions, not history (see runnerLeaseHistorySchema below for that).
+const runnerLeaseSchema = new mongoose.Schema({
+  tenantId: String,
+  slot: Number,
+  holder: String,
+  machine: String,
+  account: String,
+  taskId: String,
+  acquiredAt: Date,
+  heartbeatAt: Date,
+  leaseUntil: Date,
+  createdAt: Date,
+  updatedAt: Date,
+}, { collection: 'runner_leases' });
+
+// Runs log (ADR-011 slice 7) — read-only mirror of the gateway's
+// runnerLeaseHistorySchema (runtime/src/shared/db.ts). Append-only row
+// written when a slot stops being held (release, or a forced release on
+// account mismatch) — "which account/slot ran which task and when" without
+// grepping raw Mongo.
+const runnerLeaseHistorySchema = new mongoose.Schema({
+  tenantId: String,
+  slot: Number,
+  holder: String,
+  machine: String,
+  account: String,
+  taskId: String,
+  acquiredAt: Date,
+  releasedAt: Date,
+  durationMs: Number,
+  reason: { type: String, enum: ['released', 'reclaimed', 'account_mismatch'] },
+  createdAt: Date,
+  updatedAt: Date,
+}, { collection: 'runner_lease_history' });
 
 // Fleet-wide task-claim kill switch — read-only mirror of the gateway's
 // fleetMaintenanceSchema (runtime/src/shared/db.ts). One doc per tenant,
@@ -380,8 +433,53 @@ const tenantSchema = new mongoose.Schema({
   // GROWTH — gift/redeemable-code credit grants (gateway's core/gift-codes.ts
   // is the writer); mirrored here read-only so the billing UI can show it.
   creditBalance: { type: Number, default: 0 },
+  // ADR-019 follow-up #4 — Stripe Connect Express account for a CREATOR tenant
+  // (marketplace revenue-share payouts). Distinct from stripeCustomerId (that
+  // tenant's own subscription, as a BUYER); a tenant can be a creator, an
+  // installer, or both. The connect onboard/status routes + account.updated
+  // webhook (api/marketplace/connect/*) are the only writers.
+  stripeConnectAccountId: String,
+  stripeConnectStatus: {
+    type: String,
+    enum: ['not_connected', 'onboarding', 'restricted', 'enabled', 'disconnected'],
+    default: 'not_connected',
+  },
   metadata: mongoose.Schema.Types.Mixed,
 }, { collection: 'tenants', timestamps: true });
+
+// Nightly MRR history — read-only mirror of the gateway's mrrSnapshotSchema
+// (runtime/src/shared/db.ts), written by the mrr_snapshot_sweep cron job.
+// /revenue and /revenue/nrr read this for real historical MRR points instead
+// of their single "now" proxy, once a tenant has at least 2 persisted days
+// (see src/lib/mrr-snapshots.ts). The gateway sweep is the only writer.
+const mrrSnapshotSchema = new mongoose.Schema({
+  tenantId: String,
+  mrr: Number,
+  plan: { type: String, enum: ['free', 'solo', 'team', 'scale'] },
+  capturedAt: Date,
+  snapshotDate: String,
+  createdAt: Date,
+  updatedAt: Date,
+}, { collection: 'mrrsnapshots' });
+
+// Stripe webhook idempotency ledger (billing webhook dedup + out-of-order
+// guard — src/lib/webhook-idempotency.ts). One row per Stripe event id; the
+// UNIQUE index on `eventId` is the atomic dedup primitive (a duplicate insert
+// throws E11000, which the store treats as "already processed"). `objectId`
+// groups events for the same subscription/customer across event TYPES so a
+// late-arriving but chronologically OLDER event can't regress state a newer
+// one already applied. TTL-expires 30 days after insert — Stripe's own retry
+// window is far shorter; this is just ledger housekeeping.
+const stripeEventSchema = new mongoose.Schema({
+  eventId: { type: String, required: true, unique: true, index: true },
+  type: String,
+  objectId: { type: String, index: true },
+  eventCreatedAt: Number, // unix seconds, Stripe event.created
+  appliedAt: Date,
+  replayCount: { type: Number, default: 0 },
+  lastReplayAt: Date,
+  createdAt: { type: Date, default: Date.now, expires: 60 * 60 * 24 * 30 },
+}, { collection: 'stripeevents' });
 
 const planDaySchema = new mongoose.Schema({
   tenantId: String,   // ADR-010 — tenant discriminator (absent on pre-backfill rows)
@@ -471,11 +569,40 @@ const routingPolicySchema = new mongoose.Schema({
   updatedAt: Date,
 }, { collection: 'routingpolicies' });
 
+// Per-tenant operator overrides of the BUDGET_* env-var caps (Phase 5b §8
+// follow-up — "Apply suggestion" on the adaptive budget-cap suggestions
+// panel, src/components/budget-suggestions-panel.tsx). One document per
+// tenant; a field left unset falls back to the corresponding env var (see
+// views/budgets.tsx). `history` is the audit trail distinguishing an
+// adaptive-suggested apply from a manually typed value.
+//
+// NOTE: this collection is the dashboard's read/write side only. The
+// gateway's runtime budget guard (runtime/src/llm/budget-advisor.ts) still
+// reads BUDGET_* env vars directly and does not yet consult this override —
+// wiring runtime enforcement to it is a separate follow-up.
+const budgetCapOverrideSchema = new mongoose.Schema({
+  tenantId: { type: String, required: true, unique: true, index: true },
+  monthlyHardCapUsd: Number,
+  dailyCapUsd: Number,
+  perChannelCapUsd: Number,
+  updatedAt: Date,
+  history: [{
+    field: String,
+    valueUsd: Number,
+    previousValueUsd: Number,
+    source: { type: String, enum: ['adaptive-suggested', 'manual'] },
+    appliedAt: Date,
+  }],
+}, { collection: 'budgetcapoverrides' });
+
+export const StripeEvent = mongoose.models.StripeEvent || mongoose.model('StripeEvent', stripeEventSchema);
 export const RoutingPolicy = mongoose.models.RoutingPolicy || mongoose.model('RoutingPolicy', routingPolicySchema);
+export const BudgetCapOverride = mongoose.models.BudgetCapOverride || mongoose.model('BudgetCapOverride', budgetCapOverrideSchema);
 export const ContinuityMetric = mongoose.models.ContinuityMetric || mongoose.model('ContinuityMetric', continuityMetricSchema);
 export const ActivationEvent = mongoose.models.ActivationEvent || mongoose.model('ActivationEvent', activationEventSchema);
 export const Connector = mongoose.models.Connector || mongoose.model('Connector', connectorSchema);
 export const Tenant = mongoose.models.Tenant || mongoose.model('Tenant', tenantSchema);
+export const MrrSnapshot = mongoose.models.MrrSnapshot || mongoose.model('MrrSnapshot', mrrSnapshotSchema);
 export const FleetRun = mongoose.models.FleetRun || mongoose.model('FleetRun', fleetRunSchema);
 export const PlanDay = mongoose.models.PlanDay || mongoose.model('PlanDay', planDaySchema);
 export const RepoCard = mongoose.models.RepoCard || mongoose.model('RepoCard', repoCardSchema);
@@ -491,6 +618,8 @@ export const User = mongoose.models.User || mongoose.model('User', userSchema);
 export const Vector = mongoose.models.Vector || mongoose.model('Vector', vectorSchema);
 export const Task = mongoose.models.Task || mongoose.model('Task', taskSchema);
 export const RunnerHeartbeat = mongoose.models.RunnerHeartbeat || mongoose.model('RunnerHeartbeat', runnerHeartbeatSchema);
+export const RunnerLease = mongoose.models.RunnerLease || mongoose.model('RunnerLease', runnerLeaseSchema);
+export const RunnerLeaseHistory = mongoose.models.RunnerLeaseHistory || mongoose.model('RunnerLeaseHistory', runnerLeaseHistorySchema);
 export const FleetMaintenance = mongoose.models.FleetMaintenance || mongoose.model('FleetMaintenance', fleetMaintenanceSchema);
 export const Schedule = mongoose.models.Schedule || mongoose.model('Schedule', scheduleSchema);
 export const Artifact = mongoose.models.Artifact || mongoose.model('Artifact', artifactSchema);

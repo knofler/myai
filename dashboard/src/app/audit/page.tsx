@@ -12,7 +12,7 @@ export default function AuditPage() {
     <div className="max-w-6xl mx-auto">
       <PageHeader
         title="Audit & Permissions"
-        subtitle="Every privileged action and access denial on your tenant — role changes, invites, connector/schedule/billing changes — plus the role permission matrix. Export the trail for SOC2 evidence."
+        subtitle="Every privileged action and access denial on your tenant — role changes, invites, connector/schedule/billing changes — plus the role permission matrix and RBAC shadow-mode denials. Export the trail for SOC2 evidence."
       />
       <div className="mt-6">
         <AuditViewer />

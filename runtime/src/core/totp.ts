@@ -116,6 +116,18 @@ export function verifyTotpCode(secretBase32: string, code: string, windowSteps =
   return false;
 }
 
+/**
+ * Test-only helper: compute the current code directly (single HMAC, no
+ * brute-force search) so unit tests deriving "the right code" don't burn
+ * wall-clock time that can drift them across a 30s step boundary under CPU
+ * contention — a brute-force search over all 10^6 candidates was the prior
+ * approach and flaked intermittently on a loaded machine.
+ */
+export function _currentTotpCodeForTest(secretBase32: string, now = Date.now()): string {
+  const counter = Math.floor(now / 1000 / PERIOD_SECONDS);
+  return hotp(secretBase32, counter);
+}
+
 // ── Recovery codes — one-time-use fallback when the authenticator device is
 // unavailable. Only sha256 hashes are ever persisted (same posture as API
 // keys); raw codes are returned to the caller exactly once, at generation. ──

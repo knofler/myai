@@ -23,7 +23,19 @@
 #   ./scripts/local-ci.sh --sha <full-sha>     # override commit (default: HEAD of --branch)
 #   ./scripts/local-ci.sh --branch test        # override head branch (default: current)
 #   ./scripts/local-ci.sh --trust-build        # skip running `build`, attest manual verification
+#   ./scripts/local-ci.sh --history [sha]      # print recent ledger postings (optionally
+#                                               # filtered to a sha prefix); reads nothing
+#                                               # else, needs no gh/git/docker
 #   ./scripts/local-ci.sh -h | --help
+#
+# AUDIT LEDGER: every status this script actually posts (never --dry-run's
+# simulated ones) is appended as one JSONL row to
+# ~/.ai-cli-runner/local-ci-ledger.jsonl (override: LOCAL_CI_LEDGER or
+# RUNNER_STATE_DIR) — sha, repo, context, result, host, timestamp, whether
+# --trust-build was in play, and a path to this run's full log. That's the
+# provable record behind the fleet-wide rule "never post over a check that
+# didn't genuinely pass." `--history` reads it back. Best-effort, non-fatal
+# mirror to the gateway's audit trail when localhost:3100 is reachable.
 #
 # Exit codes: 0 all required checks passed (and posted unless --dry-run);
 #             1 one or more checks failed; 2 usage/precondition error.
@@ -40,9 +52,11 @@ SHA=""
 BRANCH=""
 DRY_RUN=0
 TRUST_BUILD=0
+HISTORY_MODE=0
+HISTORY_SHA=""
 NODE_IMAGE="${LOCAL_CI_NODE_IMAGE:-node:22-alpine}"
 
-usage() { sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -51,10 +65,121 @@ while [ $# -gt 0 ]; do
     --branch)      BRANCH="$2"; shift 2 ;;
     --dry-run)     DRY_RUN=1; shift ;;
     --trust-build) TRUST_BUILD=1; shift ;;
+    --history)
+      HISTORY_MODE=1
+      if [ $# -ge 2 ] && [[ "$2" != -* ]]; then HISTORY_SHA="$2"; shift 2; else shift 1; fi
+      ;;
     -h|--help)     usage 0 ;;
     *) echo "Unknown arg: $1" >&2; usage 2 ;;
   esac
 done
+
+# ── Ledger (auditable posting record) ───────────────────────────────────────
+# Every status this script actually posts gets one JSONL row here — the audit
+# trail behind "never post over a check that didn't genuinely pass" (the
+# fleet-wide admin-merge policy had zero record of what was posted, from which
+# machine, or whether --trust-build was used). --dry-run posts nothing to
+# GitHub, so it writes nothing here either — there's nothing yet to audit.
+LEDGER="${LOCAL_CI_LEDGER:-${RUNNER_STATE_DIR:-$HOME/.ai-cli-runner}/local-ci-ledger.jsonl}"
+HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
+RUNLOG=""
+
+# gateway_audit_post <json-row> — best-effort mirror of the ledger row to the
+# master gateway's audit trail via its MCP endpoint. Never fatal: a down or
+# missing gateway must never affect local-ci's own pass/fail decision or the
+# ledger file, which stays the source of truth.
+gateway_audit_post() {
+  command -v curl >/dev/null 2>&1 || return 0
+  local row="$1" token="${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}"
+  curl -sf -m 2 -X POST "http://localhost:3100/mcp" \
+    -H 'content-type: application/json' \
+    -H "x-gateway-local-token: $token" \
+    -d "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"id\":1,\"params\":{\"name\":\"audit_log_append\",\"arguments\":{\"source\":\"local-ci\",\"entry\":${row}}}}" \
+    >/dev/null 2>&1 || true
+}
+
+# record_posting <ctx> <state> <posted 0|1> — append one ledger row for an
+# actual (non-dry-run) posting attempt, then best-effort mirror it.
+record_posting() {
+  local ctx="$1" state="$2" posted="$3" row
+  row="$(python3 - "$SHA" "$NWO" "$ctx" "$state" "$posted" "$TRUST_BUILD" "$HOST" "$RUNLOG" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+sha, repo, ctx, state, posted, trust, host, logtail = sys.argv[1:9]
+print(json.dumps({
+    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "sha": sha,
+    "repo": repo,
+    "context": ctx,
+    "result": state,
+    "posted": posted == "1",
+    "trust_build": trust == "1",
+    "host": host,
+    "log_tail": logtail,
+}, sort_keys=True))
+PY
+)"
+  [ -n "$row" ] || return 0
+  mkdir -p "$(dirname "$LEDGER")" 2>/dev/null || true
+  printf '%s\n' "$row" >> "$LEDGER" 2>/dev/null || true
+  gateway_audit_post "$row"
+}
+
+# print_history [sha-prefix] — read the ledger back, most-recent last (tail
+# semantics), optionally filtered to a sha prefix. No gh/git/docker needed —
+# this is a plain reader, so it must work even when Actions/gh auth is the
+# very thing that's broken.
+print_history() {
+  local filter="${1:-}"
+  if [ ! -f "$LEDGER" ]; then
+    echo "No ledger at $LEDGER — no postings recorded yet."
+    return 0
+  fi
+  python3 - "$LEDGER" "$filter" <<'PY'
+import json, sys
+path = sys.argv[1]
+filt = sys.argv[2] if len(sys.argv) > 2 else ""
+rows = []
+with open(path) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            continue
+if filt:
+    rows = [r for r in rows if str(r.get("sha", "")).startswith(filt)]
+rows = rows[-50:]
+if not rows:
+    print("No matching ledger entries.")
+    sys.exit(0)
+for r in rows:
+    print("{ts}  {sha:<12} {repo:<28} {ctx:<22} {result:<8} host={host:<12} trust_build={trust!s:<5} posted={posted!s}".format(
+        ts=r.get("timestamp", "?"),
+        sha=str(r.get("sha", "?"))[:12],
+        repo=r.get("repo", "?"),
+        ctx=r.get("context", "?"),
+        result=r.get("result", "?"),
+        host=r.get("host", "?"),
+        trust=r.get("trust_build", False),
+        posted=r.get("posted", False),
+    ))
+    lt = r.get("log_tail")
+    if lt:
+        print("    log: " + lt)
+PY
+}
+
+if [ "$HISTORY_MODE" = 1 ]; then
+  echo "── local-ci history ──────────────────────────────────────"
+  echo "  ledger : $LEDGER"
+  [ -n "$HISTORY_SHA" ] && echo "  filter : sha startswith $HISTORY_SHA"
+  echo "──────────────────────────────────────────────────────────"
+  print_history "$HISTORY_SHA"
+  exit 0
+fi
 
 # ── Preconditions ───────────────────────────────────────────────────────────
 command -v gh   >/dev/null 2>&1 || { echo "ERROR: gh CLI not found." >&2; exit 2; }
@@ -73,6 +198,18 @@ NWO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" \
   || { echo "ERROR: could not resolve owner/repo (no GitHub remote?)." >&2; exit 2; }
 BRANCH="${BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
 SHA="${SHA:-$(git rev-parse "$BRANCH" 2>/dev/null || git rev-parse HEAD)}"
+
+# Capture this run's full output to a log file so ledger rows can point at it
+# ("gate log tail path") — real evidence behind a posted status, not just an
+# assertion. Skipped for --dry-run: nothing gets posted, so nothing to back up.
+if [ "$DRY_RUN" != 1 ]; then
+  LOG_DIR="${RUNNER_STATE_DIR:-$HOME/.ai-cli-runner}/local-ci-logs"
+  mkdir -p "$LOG_DIR" 2>/dev/null || true
+  if [ -d "$LOG_DIR" ]; then
+    RUNLOG="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-${SHA:0:12}.log"
+    exec > >(tee -a "$RUNLOG") 2>&1 || RUNLOG=""
+  fi
+fi
 
 echo "── local-ci ──────────────────────────────────────────────"
 echo "  repo   : $NWO"
@@ -310,6 +447,35 @@ check_tenant_scoping() {
   return "$rc"
 }
 
+# ── runtime/ coverage gate (task-fa7872ba) ──────────────────────────────────
+# vitest.config.ts's coverage.thresholds (global + per-src-directory + tighter
+# floors on rbac.ts/task-store.ts/router.ts) is the regression backstop for the
+# gateway's real line/branch coverage — previously configured (provider: v8)
+# but never enforced anywhere. Runs `npm run test:coverage` (vitest run
+# --coverage) in an ephemeral node image; several tests shell out to `git`
+# (brain_* tools) so it's installed into the image first, not just npm deps.
+check_runtime_coverage() {
+  local rt="$REPO_ROOT/runtime"
+  echo "  [runtime coverage] npm run test:coverage (vitest --coverage + thresholds)"
+  [ -f "$rt/package.json" ] || { echo "    SKIP — no runtime/package.json"; return 2; }
+  python3 -c "import json,sys; sys.exit(0 if 'test:coverage' in json.load(open('$rt/package.json')).get('scripts',{}) else 1)" 2>/dev/null \
+    || { echo "    SKIP — no test:coverage script in runtime/package.json"; return 2; }
+  command -v docker >/dev/null 2>&1 || { echo "    docker unavailable"; return 3; }
+  # Mount the WHOLE repo (not just runtime/) at /app, cwd'd into runtime/ —
+  # several tests reach up past runtime/ to repo-root fixtures (e.g.
+  # tests/unit/standing-agents.test.ts reads the top-level agents/ dir); a
+  # runtime/-only mount 404s those and misreports them as coverage failures.
+  # Deliberately ignores $NODE_IMAGE (default node:22-alpine) — several tests
+  # spawn the CLI through tsx/esbuild, whose musl (alpine) binary segfaults
+  # silently to a bare non-zero exit with no stderr, misreported as a coverage
+  # regression; a glibc image matches actual CI (ubuntu-latest) and is stable.
+  if docker run --rm -v "$REPO_ROOT":/app -w /app/runtime node:22 sh -lc \
+      "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq git >/dev/null 2>&1; npm ci && npm run test:coverage"; then
+    echo "    PASS — coverage thresholds met"; return 0
+  fi
+  echo "    FAIL — coverage below threshold, or a non-excluded test failed"; return 1
+}
+
 # ── ADR-010 §3.4 tenant-scoping gate (invoked here, after its definition) ────
 # CRITICAL distributed-rule block (documentation/AI_RULES.md): a violation must
 # prevent a green run regardless of branch-protection contexts. A failure flips
@@ -322,6 +488,30 @@ check_tenant_scoping() {
 # (and ALL downstream checks) silently never run in every non-gateway repo.
 ts_rc=0; check_tenant_scoping || ts_rc=$?
 if [ "$ts_rc" -eq 1 ]; then overall=1; fi
+echo
+
+# ── Tracked-file hygiene gate (commit 4ece268 regression backstop) ──────────
+# CRITICAL block, same contract as the tenant gate above: machine-local
+# ledgers/state (state/ dotfiles, pool-capacity.json, runner ledgers, .env*)
+# in the git index fail the run regardless of branch-protection contexts.
+# .gitignore only guards while it exists — 4ece268 gutted it and six ledgers
+# were pushed to test unnoticed; this checks what is ACTUALLY tracked. Logic
+# lives in scripts/check_tracked_hygiene.sh (shared with the pre-push hook and
+# script-unit-tests.yml's ungated `hygiene` job). set -e-safe rc capture.
+check_tracked_hygiene() {
+  local rc=0 out=""
+  out="$("$SCRIPT_DIR/check_tracked_hygiene.sh" --repo "$REPO_ROOT" 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/  /'
+  return "$rc"
+}
+th_rc=0; check_tracked_hygiene || th_rc=$?
+if [ "$th_rc" -eq 1 ]; then overall=1; fi
+echo
+
+# Same set -e-safe pattern as the tenant-scoping gate above: rc 2 is SKIP (no
+# runtime/ in this repo), rc 1 is a genuine FAIL that must flip `overall`.
+cov_rc=0; check_runtime_coverage || cov_rc=$?
+if [ "$cov_rc" -eq 1 ]; then overall=1; fi
 echo
 
 # ── Run required checks (Ready to Merge is an aggregator — evaluate last) ────
@@ -393,12 +583,15 @@ post_status() {
   if [ "$DRY_RUN" = 1 ]; then
     printf '  would post: %-22s %-7s "%s"\n' "$ctx" "$state" "$desc"; return 0
   fi
+  local posted=0
   if gh api -X POST "repos/${NWO}/statuses/${SHA}" \
        -f state="$state" -f context="$ctx" -f description="$desc" >/dev/null 2>&1; then
     printf '  posted: %-22s %s\n' "$ctx" "$state"
+    posted=1
   else
     printf '  POST FAILED: %-22s %s\n' "$ctx" "$state"; overall=1
   fi
+  record_posting "$ctx" "$state" "$posted"
 }
 
 echo "── posting statuses ──────────────────────────────────────"

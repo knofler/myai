@@ -36,6 +36,12 @@ import {
   renderDunningEmail,
   sendDunningEmail,
 } from '@/lib/dunning';
+import {
+  checkWebhookIdempotency,
+  createMongoProcessedEventStore,
+  resolveWebhookObjectId,
+  type ProcessedEventStore,
+} from '@/lib/webhook-idempotency';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -57,7 +63,10 @@ interface StripeObj {
   discount?: { coupon?: { id?: string; name?: string; percent_off?: number; amount_off?: number } } | null;
 }
 interface StripeEvent {
+  id?: string;
   type: string;
+  /** Unix seconds — when Stripe created this Event (not the object it wraps). */
+  created?: number;
   data: { object: StripeObj };
 }
 
@@ -108,6 +117,33 @@ export async function POST(req: Request) {
   try {
     await connectDB();
     const obj = event.data?.object ?? {};
+
+    // Idempotency (event.id) + out-of-order (event.created vs the subscription's
+    // last APPLIED event) guard — Stripe retries deliveries and doesn't guarantee
+    // order, so a redelivered/late event must never re-apply a plan change,
+    // re-stamp overage, or double-issue an SLA credit. Malformed events without
+    // an id (shouldn't happen from real Stripe) skip the guard rather than block.
+    const store: ProcessedEventStore = createMongoProcessedEventStore();
+    let markApplied: () => Promise<void> = async () => {};
+    if (event.id) {
+      const eventId = event.id;
+      markApplied = () => store.markApplied(eventId);
+      const idem = await checkWebhookIdempotency(store, {
+        id: eventId,
+        type: event.type,
+        objectId: resolveWebhookObjectId(obj),
+        createdAt: event.created ?? Math.floor(Date.now() / 1000),
+      });
+      if (idem.action === 'duplicate') {
+        console.warn('[billing/webhook] duplicate delivery, skipping', event.type, eventId);
+        return NextResponse.json({ received: true, duplicate: true });
+      }
+      if (idem.action === 'stale') {
+        console.warn('[billing/webhook] out-of-order event, skipping apply', event.type, eventId);
+        return NextResponse.json({ received: true, stale: true });
+      }
+    }
+
     const tenant = await findTenant(obj);
     if (!tenant) {
       // Ack so Stripe stops retrying; nothing to do for an unmapped event.
@@ -177,6 +213,7 @@ export async function POST(req: Request) {
             if (email) await sendDunningEmail(email); // best-effort; never throws
           }
           await tenant.save();
+          await markApplied();
           return NextResponse.json({
             received: true,
             tenantId: tenant.tenantId,
@@ -188,6 +225,7 @@ export async function POST(req: Request) {
         // Switch off → still record past_due so the gate/banner are accurate.
         tenant.subscriptionStatus = 'past_due';
         await tenant.save();
+        await markApplied();
         return NextResponse.json({
           received: true,
           tenantId: tenant.tenantId,
@@ -201,6 +239,7 @@ export async function POST(req: Request) {
         tenant.paymentFailureCount = 0;
         tenant.lastPaymentFailedAt = undefined;
         await tenant.save();
+        await markApplied();
         return NextResponse.json({ received: true, tenantId: tenant.tenantId, recovered: true });
       }
       default:
@@ -208,6 +247,7 @@ export async function POST(req: Request) {
     }
 
     await tenant.save();
+    await markApplied();
     return NextResponse.json({ received: true, tenantId: tenant.tenantId, plan: tenant.plan });
   } catch (err) {
     console.error('[billing/webhook] failed:', err);

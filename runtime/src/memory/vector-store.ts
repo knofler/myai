@@ -233,17 +233,25 @@ export async function searchVectors(tenantId: string, opts: {
       // $vectorSearch is an Atlas-only stage absent from mongoose's PipelineStage
       // union, so cast through unknown.
       const docs = await VectorModel.aggregate(pipeline as unknown as Parameters<typeof VectorModel.aggregate>[0]);
-      return docs.map((d: Record<string, unknown>) => deobfuscateResult(tenantId, {
-        repo: d.repo as string,
-        source: d.source as IVector['source'],
-        content: d.content as string,
-        tags: (d.tags as string[]) || [],
-        score: d.score as number,
-        sessionId: (d.sessionId as string) || '',
-        metadata: (d.metadata as Record<string, unknown>) || {},
-        createdAt: d.createdAt as Date,
-        contentHash: d.contentHash as string,
-      }));
+      // An EMPTY Atlas result is treated as a miss, not a truth: a misconfigured
+      // index (e.g. tenantId not declared as a `filter` field, or a dims mismatch
+      // vs the 384-dim local embeddings) returns [] WITHOUT throwing, which would
+      // otherwise silently swallow every recall. Fall through to the local ANN
+      // so retrieval self-heals; only SHORT-CIRCUIT on a non-empty Atlas hit.
+      if (docs.length > 0) {
+        return docs.map((d: Record<string, unknown>) => deobfuscateResult(tenantId, {
+          repo: d.repo as string,
+          source: d.source as IVector['source'],
+          content: d.content as string,
+          tags: (d.tags as string[]) || [],
+          score: d.score as number,
+          sessionId: (d.sessionId as string) || '',
+          metadata: (d.metadata as Record<string, unknown>) || {},
+          createdAt: d.createdAt as Date,
+          contentHash: d.contentHash as string,
+        }));
+      }
+      log.warn('Atlas $vectorSearch returned 0 results — falling back to embedded ANN (check the index: tenantId must be a filter field, dims must match embeddings)');
     } catch (err) {
       // Index missing / not yet provisioned → degrade to the local path rather
       // than fail the query. Logged once so the Atlas index gets created.
@@ -283,10 +291,15 @@ async function getLocalIndex(tenantId: string, opts: {
   if (opts.tags && opts.tags.length > 0) filter.tags = { $in: opts.tags };
   if (opts.since) filter.createdAt = { $gte: opts.since };
 
-  const candidates = await scopedFind(VectorModel, tenantId, filter)
+  // `embedding` is `select: false` on the schema — it MUST be explicitly
+  // re-selected or every candidate comes back without a vector and the ANN
+  // index builds empty (silent zero-result recall). Mirrors search.ts:43.
+  const candidates = (await scopedFind(VectorModel, tenantId, filter)
+    .select('+embedding')
     .sort({ updatedAt: -1 })
     .limit(VECTOR_LOCAL_MAX_CANDIDATES)
-    .lean<IVector[]>();
+    .lean<IVector[]>())
+    .filter(doc => Array.isArray(doc.embedding) && doc.embedding.length > 0);
 
   const dims = candidates[0]?.embedding.length || 0;
   const index = AnnIndex.build<VectorBase>(
@@ -308,9 +321,35 @@ export interface RecallResult {
 
 /**
  * Session sources that make up the recall corpus: current state blocks,
- * handoff notes, and archived (rotated) session history.
+ * handoff notes, archived (rotated) session history, and brain session atoms
+ * (recent sessions that haven't rotated into state/archive/ yet — task-48b73bd1).
  */
-export const SESSION_SOURCES: IVector['source'][] = ['state', 'handoff', 'archive'];
+export const SESSION_SOURCES: IVector['source'][] = ['state', 'handoff', 'archive', 'brain'];
+
+/**
+ * Cross-source session dedup (task-48b73bd1): a brain session atom and its
+ * eventual STATE.md archive block describe the same session but never share a
+ * content hash (different text), so the normal content-hash dedup in
+ * storeVector can't catch the overlap. Both indexBrainAtoms and
+ * indexArchiveFiles tag their chunks with `metadata.sessionDate` and call this
+ * before storing — whichever side embeds a session's day FIRST wins; the
+ * other side skips, so a session is never double-counted in the corpus
+ * regardless of which runs first.
+ */
+export async function sessionDateExists(
+  tenantId: string,
+  repo: string,
+  sessionDate: string,
+  sources: IVector['source'][],
+): Promise<boolean> {
+  if (!isConnected()) return false;
+  const count = await scopedCountDocuments(VectorModel, tenantId, {
+    repo,
+    source: { $in: sources },
+    'metadata.sessionDate': sessionDate,
+  });
+  return count > 0;
+}
 
 /**
  * Recall past work sessions by semantic similarity. Searches the session

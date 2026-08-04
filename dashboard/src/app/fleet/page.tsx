@@ -1,8 +1,10 @@
 // /fleet — Fleet Morning Console.
 // Renders the latest FleetRun (the morning "resume all" sweep) with live
 // progress: an overall status pill, a summary strip, and a per-repo grid
-// whose action dots tick over as the run advances. Read-only mirror of the
-// gateway's FleetRun collection — the dashboard never writes it.
+// whose action dots tick over as the run advances. This page only reads
+// type:'morning-resume-all' runs — /api/projects also writes type:'task-fanout'
+// runs to the same collection (ADR-015 §3), explicitly excluded below so a
+// batch dispatch never hijacks this console's "latest run".
 
 import { connectDB, FleetRun, Tenant } from '@/lib/db';
 import { getActiveTenant, tenantFilter, DEFAULT_TENANT_ID } from '@/lib/tenant';
@@ -232,8 +234,11 @@ async function TeamActivity({ tenantId }: { tenantId: string }) {
   let runs: FleetRunSummary[] = [];
   try {
     const tf = tenantFilter(tenantId);
+    // Exclude fan-out batch runs (ADR-015 §3) — they're a per-batch tracker
+    // for /projects, not a machine's morning sweep, and must never crowd out
+    // real per-machine activity rows here.
     runs = JSON.parse(JSON.stringify(
-      await FleetRun.find({ ...tf }, { runId: 1, machine: 1, agent: 1, status: 1, startedAt: 1, finishedAt: 1, summary: 1 })
+      await FleetRun.find({ ...tf, type: { $ne: 'task-fanout' } }, { runId: 1, machine: 1, agent: 1, status: 1, startedAt: 1, finishedAt: 1, summary: 1 })
         .sort({ startedAt: -1 })
         .limit(20)
         .lean(),
@@ -266,8 +271,11 @@ export default async function FleetPage() {
   try {
     await connectDB();
     const tf = tenantFilter(tenantId);
+    // type:'task-fanout' runs (ADR-015 §3, /api/projects handleFanout) are a
+    // per-batch tracker for /projects — they must never become "the latest
+    // run" here and silently replace the morning-resume-all sweep.
     run = JSON.parse(JSON.stringify(
-      await FleetRun.findOne({ ...tf }).sort({ startedAt: -1 }).limit(1).lean(),
+      await FleetRun.findOne({ ...tf, type: { $ne: 'task-fanout' } }).sort({ startedAt: -1 }).limit(1).lean(),
     )) as FleetRunDoc | null;
   } catch {
     dbError = true;

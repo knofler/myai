@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { getConfig } from '../shared/config.js';
 import { createChildLogger } from '../shared/logger.js';
 import { RuleModel, isConnected } from '../shared/db.js';
+import { getDbFailoverState } from '../shared/db-failover.js';
 
 const log = createChildLogger({ module: 'rule-loader' });
 
@@ -63,6 +64,11 @@ export function loadRules(): Map<string, RuleDefinition> {
 export async function syncRulesToDatabase(): Promise<{ upserted: number; unchanged: number }> {
   if (!isConnected()) {
     log.warn('MongoDB not connected — skipping rule sync');
+    return { upserted: 0, unchanged: 0 };
+  }
+  if (getDbFailoverState().active) {
+    // bulkWrite bypasses the read-only guard plugin — skip explicitly.
+    log.warn('READ-ONLY DB failover active — skipping rule sync (mirror must not diverge)');
     return { upserted: 0, unchanged: 0 };
   }
 

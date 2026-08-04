@@ -3,7 +3,8 @@ import { createChildLogger } from '../shared/logger.js';
 import { getConfig } from '../shared/config.js';
 import { callAnthropic, initClient, getClient } from './anthropic.js';
 import { callDeepSeek, callDeepSeekStream, initDeepSeek, isDeepSeekConfigured } from './deepseek.js';
-import { callMoonshot, callMoonshotStream, callOllama, callOllamaStream, initMoonshot, initOllama, isMoonshotConfigured } from './moonshot.js';
+import { callMoonshot, callMoonshotStream, callOllama, callOllamaStream, initMoonshot, initOpenRouter, initOllama, isMoonshotConfigured } from './moonshot.js';
+import { callGemini, callGeminiStream, initGemini } from './gemini.js';
 import { estimateCost } from './cost-estimator.js';
 import { withResilience, CircuitOpenError, RateLimitExhaustedError, ProviderMaintenanceError } from './resilience.js';
 import { probeOllamaCached, pickOllamaModel, offlineNotice } from './offline.js';
@@ -16,7 +17,7 @@ import type { ToolUseBlock } from '../tools/chat-tools.js';
 
 const log = createChildLogger({ module: 'llm-provider' });
 
-export type LlmProviderId = 'claude-api' | 'deepseek-api' | 'moonshot-api' | 'ollama' | 'claude-cli' | 'claude-bridge';
+export type LlmProviderId = 'claude-api' | 'deepseek-api' | 'moonshot-api' | 'gemini-api' | 'ollama' | 'claude-cli' | 'claude-bridge';
 
 export interface LlmRequest {
   systemPrompt: string;
@@ -145,8 +146,21 @@ export function initProvider(): void {
     log.info({ model: config.llm.deepseekModel }, 'DeepSeek API client ready');
   }
   if (config.llm.moonshotApiKey) {
-    initMoonshot(config.llm.moonshotApiKey);
-    log.info({ model: config.llm.moonshotModel }, 'Moonshot API client ready');
+    initMoonshot(config.llm.moonshotApiKey, config.llm.moonshotBaseUrl);
+    log.info({ model: config.llm.moonshotModel, baseUrl: config.llm.moonshotBaseUrl }, 'Moonshot API client ready');
+  }
+  if (config.llm.openrouterApiKey) {
+    initOpenRouter(config.llm.openrouterApiKey, config.llm.openrouterModel, config.llm.openrouterBaseUrl);
+    // Direct Moonshot wins when both keys are set — OpenRouter is the free
+    // K2 lane only while it is the sole Kimi-lane key.
+    log.info(
+      { model: config.llm.openrouterModel, active: !config.llm.moonshotApiKey },
+      'OpenRouter (Kimi lane) client ready',
+    );
+  }
+  if (config.llm.geminiApiKey) {
+    initGemini(config.llm.geminiApiKey);
+    log.info({ model: config.llm.geminiModel }, 'Gemini API client ready');
   }
   // Ollama is always available (no API key), just configure URL
   initOllama(config.llm.ollamaBaseUrl);
@@ -195,6 +209,24 @@ async function callMoonshotApi(req: LlmRequest, modelOverride?: string): Promise
     }),
   );
   return withCost('moonshot-api', result);
+}
+
+/**
+ * Call Gemini via the AI Studio / Generative Language REST API.
+ * Class-B free-tier gateway provider (research/bulk lane).
+ * Wrapped with resilience: rate-limit → circuit breaker → retry → API call.
+ */
+async function callGeminiApi(req: LlmRequest, modelOverride?: string): Promise<LlmResponse> {
+  const config = getConfig();
+  const result = await withResilience('gemini', () =>
+    callGemini({
+      systemPrompt: fullSystemPrompt(req),
+      messages: req.messages,
+      model: modelOverride ?? config.llm.geminiModel,
+      maxTokens: req.maxTokens,
+    }),
+  );
+  return withCost('gemini-api', result);
 }
 
 /**
@@ -399,8 +431,13 @@ async function dispatchByMode(mode: string, req: LlmRequest, modelOverride?: str
       if (!config.llm.deepseekApiKey) throw new Error('deepseek mode requires DEEPSEEK_API_KEY');
       return await callDeepSeekApi(req, modelOverride);
     case 'moonshot':
-      if (!config.llm.moonshotApiKey) throw new Error('moonshot mode requires MOONSHOT_API_KEY');
+      if (!config.llm.moonshotApiKey && !config.llm.openrouterApiKey) {
+        throw new Error('moonshot mode requires MOONSHOT_API_KEY (or OPENROUTER_API_KEY for the free K2 lane)');
+      }
       return await callMoonshotApi(req, modelOverride);
+    case 'gemini':
+      if (!config.llm.geminiApiKey) throw new Error('gemini mode requires GEMINI_API_KEY');
+      return await callGeminiApi(req, modelOverride);
     case 'ollama':
       return await callOllamaApi(req, modelOverride);
     case 'bridge': {
@@ -451,7 +488,13 @@ function defaultModelForMode(
     case 'deepseek':
       return config.llm.deepseekModel;
     case 'moonshot':
-      return config.llm.moonshotModel;
+      // OpenRouter-backed Kimi lane dispatches the OpenRouter slug (free =
+      // priced at 0 by the estimator); direct Moonshot uses its own model.
+      return config.llm.moonshotApiKey
+        ? config.llm.moonshotModel
+        : (config.llm.openrouterApiKey ? config.llm.openrouterModel : config.llm.moonshotModel);
+    case 'gemini':
+      return config.llm.geminiModel;
     case 'ollama':
       return config.llm.ollamaModel;
     default:
@@ -707,6 +750,17 @@ function pickStreamProvider(
       }),
     };
   }
+  if (primaryMode === 'gemini') {
+    return {
+      providerId: 'gemini-api',
+      gen: callGeminiStream({
+        systemPrompt: fullSystemPrompt(req),
+        messages: req.messages,
+        model: modelOverride ?? config.llm.geminiModel,
+        maxTokens: req.maxTokens,
+      }),
+    };
+  }
   if (primaryMode === 'ollama') {
     return {
       providerId: 'ollama',
@@ -757,7 +811,8 @@ export function isConfigured(): boolean {
   if (!config.llm.enabled) return false;
   if (config.llm.mode === 'api') return !!(config.llm.apiKey || config.llm.deepseekApiKey);
   if (config.llm.mode === 'deepseek') return !!config.llm.deepseekApiKey;
-  if (config.llm.mode === 'moonshot') return !!config.llm.moonshotApiKey;
+  if (config.llm.mode === 'moonshot') return !!(config.llm.moonshotApiKey || config.llm.openrouterApiKey);
+  if (config.llm.mode === 'gemini') return !!config.llm.geminiApiKey;
   if (config.llm.mode === 'ollama') return true; // Ollama is local, always available
   return true;
 }

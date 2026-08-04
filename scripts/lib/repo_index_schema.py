@@ -21,6 +21,13 @@ Tables
   bandit_arms   contextual-bandit arm statistics (pulls, reward_sum) per
                 (context, retrieval-config arm) — written by
                 retrieval_bandit.py (BRAIN B-7 retrieval-config tuning)
+  route_eval    one row per live dispatch-query through brain_route.py's
+                route() — query/context/plane/effective retrieval config +
+                candidates + chosen ref. The persisted live trace log the B-7
+                note flagged as missing before the bandit's recommended config
+                could be wired into the live loop; test_pass/correction stay
+                NULL (schema-only) — same posture as the B-7.1 spike, no
+                reachable local CI-outcome signal yet at dispatch time.
   edges         typed, resolved code-edge graph (import/calls/tests_of) built
                 by code_graph.py (BRAIN B-1.5) over symbols/refs/chunks/tests —
                 what get_neighbors()/shortest_path() traverse
@@ -135,6 +142,25 @@ CREATE TABLE IF NOT EXISTS bandit_arms (
   reward_sum REAL NOT NULL DEFAULT 0,
   PRIMARY KEY (context, arm)
 );
+
+CREATE TABLE IF NOT EXISTS route_eval (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  written_at  TEXT NOT NULL,
+  query_hash  TEXT NOT NULL,
+  query       TEXT NOT NULL,
+  plane       TEXT NOT NULL,
+  context     TEXT NOT NULL,
+  k           INTEGER NOT NULL,
+  rerank_on   INTEGER NOT NULL DEFAULT 0,
+  bandit_used INTEGER NOT NULL DEFAULT 0,
+  backend     TEXT,
+  candidates  TEXT NOT NULL,
+  chosen      TEXT,
+  used        INTEGER,
+  test_pass   INTEGER,
+  correction  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_route_eval_context ON route_eval(context);
 
 CREATE TABLE IF NOT EXISTS edges (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,

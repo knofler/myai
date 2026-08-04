@@ -346,14 +346,39 @@ export function stripeForm(obj: Record<string, unknown>, prefix = ''): URLSearch
   return params;
 }
 
-async function stripePost<T>(path: string, body: Record<string, unknown>): Promise<T> {
+/** POST to the Stripe API (form-encoded). Exported so other SDK-free Stripe
+ *  wrappers (marketplace-connect.ts — Connect accounts/links/transfers) reuse
+ *  the same auth + error-shape handling instead of duplicating a fetch client. */
+export async function stripePost<T>(
+  path: string,
+  body: Record<string, unknown>,
+  opts: { stripeAccount?: string } = {},
+): Promise<T> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+  // On-behalf-of / acting-as a connected account (used for Connect reads that
+  // must be scoped to the creator's own account rather than the platform's).
+  if (opts.stripeAccount) headers['Stripe-Account'] = opts.stripeAccount;
   const res = await fetch(`${STRIPE_API}${path}`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
+    headers,
     body: stripeForm(body).toString(),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (json as { error?: { message?: string } })?.error?.message || `stripe ${res.status}`;
+    throw new Error(msg);
+  }
+  return json as T;
+}
+
+/** GET from the Stripe API. Exported for marketplace-connect.ts's account
+ *  status fetch (mirrors the POST helper's auth + error handling). */
+export async function stripeGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${STRIPE_API}${path}`, {
+    headers: { Authorization: `Bearer ${STRIPE_SECRET_KEY}` },
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {

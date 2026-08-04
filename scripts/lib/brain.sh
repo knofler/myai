@@ -70,6 +70,58 @@ _brain_sha8() {
 
 _brain_utc() { date -u +%Y%m%dT%H%M%SZ; }
 
+# ── ADR-020 topic tag ────────────────────────────────────────────────────────
+#
+# Mirror of `BRAIN_TOPICS` in runtime/src/core/brain.ts — KEEP IN SYNC (the
+# drift guard in scripts/tests/test_brain.sh parses both sides and fails on a
+# mismatch). The controlled set keeps atoms clustering into stable SILVER
+# branches; it is deliberately extensible — an unknown slug is accepted (warned)
+# so natural clusters surface before the taxonomy is tightened.
+BRAIN_TOPICS="general runner-ops cost-policy gateway-infra go-live continuity distribution billing brain security docs"
+
+# _brain_normalize_topic [topic] — mirror of normalizeTopic() in brain.ts.
+# Missing → 'general' + a stderr nudge; unknown-but-valid slug → accepted + a
+# stderr nudge; controlled-set topic → clean. Never fails (warned-default
+# rollout: un-migrated callers keep working while they migrate). Prints the
+# normalized topic.
+_brain_normalize_topic() {
+  local t; t="$(_brain_slugify "${1:-}")"
+  if [ -z "$t" ]; then
+    echo "brain: no topic supplied — defaulted to 'general'; set BRAIN_TOPIC to one of: $BRAIN_TOPICS (ADR-020)" >&2
+    printf 'general\n'
+    return 0
+  fi
+  local known
+  for known in $BRAIN_TOPICS; do
+    if [ "$known" = "$t" ]; then printf '%s\n' "$t"; return 0; fi
+  done
+  echo "brain: topic '$t' is not in the controlled set ($BRAIN_TOPICS) — accepted, but reuse an existing topic where it fits so SILVER branches stay consolidated (ADR-020)" >&2
+  printf '%s\n' "$t"
+}
+
+# brain_topic_classify <text> [default] — cheap deterministic keyword
+# classification of free text against the controlled set, for callers that
+# close sessions about arbitrary subject matter (the runner's task-close atom).
+# First matching bucket wins (specific themes before broad ones); nothing
+# matches → [default] (or 'general'). Prints one BRAIN_TOPICS slug.
+brain_topic_classify() {
+  local text; text="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  local fallback="${2:-general}"
+  case "$text" in
+    *billing*|*invoice*|*stripe*|*subscription*)                       printf 'billing\n' ;;
+    *security*|*vuln*|*owasp*|*rbac*|*secret*|*auth*)                  printf 'security\n' ;;
+    *brain*|*atom*|*distill*|*handoff*|*continuity*)                   printf 'brain\n' ;;
+    *cost*|*budget*|*credit*|*token*|*pricing*)                        printf 'cost-policy\n' ;;
+    *runner*|*schedule*|*queue*|*task\ board*)                         printf 'runner-ops\n' ;;
+    *gateway*|*docker*|*compose*|*mongo*|*infra*|*deploy*)             printf 'gateway-infra\n' ;;
+    *distribution*|*npm\ publish*|*mirror*|*release*|*installer*)      printf 'distribution\n' ;;
+    *go-live*|*golive*|*launch*|*cutover*|*onboarding*)                printf 'go-live\n' ;;
+    *readme*|*docs*|*documentation*|*changelog*)                       printf 'docs\n' ;;
+    *state.md*|*wrap\ up*|*session\ close*)                            printf 'continuity\n' ;;
+    *)                                                                 printf '%s\n' "$fallback" ;;
+  esac
+}
+
 # ── remote auto-sync (push-on-merge / pull-on-boot) ──────────────────────────
 #
 # When the brain has an `origin` remote (e.g. a private github.com repo), sync
@@ -313,11 +365,17 @@ brain_atom_write() {
   local p_repo="${BRAIN_CODE_REPO:-}" p_branch="${BRAIN_CODE_BRANCH:-}" p_sha="${BRAIN_CODE_SHA:-}" p_commits="${BRAIN_CODE_COMMITS:-}"
   local p_any="$p_repo$p_branch$p_sha$p_commits"
   if [ -n "$p_any" ] && [ -z "$p_repo" ]; then p_repo="$repo"; fi
+  # ADR-020: topic tag, passed via $BRAIN_TOPIC (same env pattern as the
+  # BRAIN_CODE_* provenance — existing callers unaffected). Missing → warned
+  # 'general' default so the atom still writes; without this line every
+  # script-written atom distilled into one giant 'general' bucket.
+  local topic; topic="$(_brain_normalize_topic "${BRAIN_TOPIC:-}")"
   {
     printf -- '---\n'
     printf 'kind: %s\n' "$kind"
     printf 'repo: %s\n' "${repo:-—}"
     printf 'slug: %s\n' "$slug"
+    printf 'topic: %s\n' "$topic"
     printf 'host: %s\n' "$host"
     printf 'written: %s\n' "$ts"
     if [ -n "$p_any" ]; then

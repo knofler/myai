@@ -18,6 +18,11 @@
  * Web push (Phase 6) and email both fire only when the tenant has no live SSE
  * connection — an open dashboard already showed the toast.
  *
+ * Storm control (see {@link ./dedup.js}): identical (tenantId, type, subject)
+ * events within a window collapse into one history row with an "xN" counter,
+ * and each channel is separately throttled to a per-tenant min-interval — a
+ * retry loop or flapping runner can't flood SSE/push/email with duplicates.
+ *
  * REALTIME_NOTIFICATIONS plan, Phases 3+4 wired to Phases 6+7.
  */
 import { createChildLogger } from '../shared/logger.js';
@@ -28,6 +33,7 @@ import { recordNotification } from './notifier.js';
 import { getPreferences, eventEnabled, isQuietHours } from './preferences.js';
 import { sendPushIfInactive } from './web-push.js';
 import { sendEmailIfInactive } from './email-notify.js';
+import { registerEvent, shouldDeliverToChannel } from './dedup.js';
 
 const log = createChildLogger({ module: 'notify-service' });
 
@@ -60,8 +66,15 @@ async function handleEvent(event: NotifyEvent): Promise<void> {
   const prefs = await getPreferences(event.tenantId);
   const allowed = eventEnabled(prefs, event.type);
 
+  // Storm control: identical (tenantId, type, subject) events collapse into one
+  // burst — repeats within the dedup window still get evaluated for delivery,
+  // but each channel is throttled to its own min-interval, and the history
+  // write below upserts onto the same row with an "xN" counter.
+  const subject = (typeof event.data?.subject === 'string' ? (event.data.subject as string) : undefined) ?? event.title;
+  const dedup = registerEvent(event.tenantId, event.type, subject);
+
   // 1. Real-time push to any open SSE connections for this tenant.
-  if (allowed && prefs.inApp) {
+  if (allowed && prefs.inApp && shouldDeliverToChannel(event.tenantId, event.type, subject, 'sse')) {
     sseManager.send(event.tenantId, event);
   }
 
@@ -69,21 +82,30 @@ async function handleEvent(event: NotifyEvent): Promise<void> {
   //    nobody has the app open. Each is a no-op unless configured (VAPID keys
   //    for push, SMTP for email).
   if (allowed && !isQuietHours(prefs)) {
-    if (prefs.push) await sendPushIfInactive(event.tenantId, event);
-    if (prefs.email) await sendEmailIfInactive(event.tenantId, event);
+    if (prefs.push && shouldDeliverToChannel(event.tenantId, event.type, subject, 'push')) {
+      await sendPushIfInactive(event.tenantId, event);
+    }
+    if (prefs.email && shouldDeliverToChannel(event.tenantId, event.type, subject, 'email')) {
+      await sendEmailIfInactive(event.tenantId, event);
+    }
   }
 
   // 3. Durable history — even for muted events (mute silences delivery, not
   //    the record). Failures are swallowed inside recordNotification —
-  //    persistence must never break the emitter or the SSE push above.
+  //    persistence must never break the emitter or the SSE push above. Repeats
+  //    in the same burst collapse onto one row via dedupKey, message suffixed
+  //    with the running count.
+  const baseMessage = event.message ?? event.title;
   await recordNotification(event.tenantId, {
     channel: SSE_CHANNEL,
     chatId: event.tenantId,
-    message: event.message ?? event.title,
+    message: dedup.count > 1 ? `${baseMessage} (x${dedup.count})` : baseMessage,
     level: event.level,
     title: event.title,
     source: event.source ?? event.type,
     sentAt: event.timestamp,
     success: true,
+    dedupKey: dedup.burstId,
+    count: dedup.count,
   });
 }

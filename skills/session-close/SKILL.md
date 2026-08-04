@@ -28,6 +28,14 @@ Wrap up the current work session and persist all context.
 > **The brain atom (`wrap up` step 1e) is the PRIMARY continuity record** — the full session
 > narrative lives there and every next session boots it via `brain_delta`. This handoff file is
 > now only the offline / any-device **fallback**. So write it thin: a delta, not a fresh essay.
+>
+> **When you write that brain atom, ALWAYS pass an explicit `topic`** (ADR-020) — the session's
+> dominant theme from the controlled BRAIN_TOPICS set (`runner-ops`, `cost-policy`,
+> `gateway-infra`, `go-live`, `continuity`, `distribution`, `billing`, `brain`, `security`,
+> `docs` — canonical list: `BRAIN_TOPICS` in `runtime/src/core/brain.ts`). MCP: the `topic`
+> argument on `brain_commit`; bash fallback: `BRAIN_TOPIC=<topic> myai brain write …`. Omitting
+> it writes a warned `general` atom, which degrades the GOLD topic-index TOC and SILVER
+> per-topic sections into one giant bucket.
 
 - Open `AI/state/AI_AGENT_HANDOFF.md`.
 - Update the `Last machine:` field with the current hostname (`hostname -s`).
@@ -70,6 +78,18 @@ Append an entry to `logs/claude_log.md`:
 ### Decisions
 - ...
 ```
+
+- **Agentic-fallback spend (if the lane ran this session):** the non-Claude
+  DeepSeek/Kimi fallback lane (`scripts/lib/agentic_fallback.sh`) keeps its
+  own real-$ day-ledger, separate from the Claude pacing ledger and otherwise
+  only visible by reading `~/.ai-cli-runner/agentic/` on the machine that ran
+  it. If `AGENTIC_FALLBACK` or `AGENTIC_OVERFLOW` was on this session, append
+  its summary under the entry above:
+  `source scripts/lib/agentic_fallback.sh && agentic_session_close_line`
+  — one ledger line (today's spend of the daily cap) plus the per-provider
+  pass-rate rollup. Same spend also shows as the "Agentic fallback" row on
+  the `/schedule` capacity panel (`state/pool-capacity.json`, refreshed by
+  `scripts/pool_capacity_snapshot.sh`).
 
 ### 5. SONA Pattern Training
 

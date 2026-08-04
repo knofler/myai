@@ -103,6 +103,12 @@ const PROVIDER_DEFAULTS: Record<string, ProviderResilienceConfig> = {
     rl: { maxTokens: 8, refillRate: 2 },
     retry: { maxAttempts: 3, baseDelayMs: 1_000, maxDelayMs: 15_000 },
   },
+  gemini: {
+    // Free-tier AI Studio quota is rate-limited per-minute; trip/recover fast.
+    cb: { failureThreshold: 3, resetTimeoutMs: 30_000, halfOpenMaxAttempts: 2 },
+    rl: { maxTokens: 8, refillRate: 2 },
+    retry: { maxAttempts: 3, baseDelayMs: 1_000, maxDelayMs: 15_000 },
+  },
   ollama: {
     // Local — unlikely to circuit-trip but keep a breaker for e.g. OOM.
     cb: { failureThreshold: 10, resetTimeoutMs: 10_000, halfOpenMaxAttempts: 1 },

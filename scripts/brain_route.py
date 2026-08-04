@@ -38,10 +38,27 @@ Env
   BRAIN_ROUTE_NO_HYBRID=1   force the sparse-only fallback (skip importing the
                             sibling hybrid_retrieve) — used by the test harness
                             to exercise the graceful-degradation path.
+  BRAIN_ROUTE_USE_BANDIT=1 thread scripts/retrieval_bandit.py's per-context
+                            winning retrieval config (bandit_arms table) into
+                            the memory-plane retrieval call (k + rerank_on).
+                            DEFAULT OFF — today's static --k stands unless this
+                            is set, and even when set, falls back to the
+                            static k whenever bandit_arms has no recorded pulls
+                            yet for the query's context (best_arm() -> None).
+  BRAIN_ROUTE_NO_BANDIT=1   force the bandit sibling import to fail — used by
+                            the test harness to exercise that fallback path.
+
+Every dispatch (any plane) appends one row to the `route_eval` table (query,
+context, effective k/rerank_on, candidates, chosen ref) — the persisted live
+trace log retrieval_bandit.py's offline replay needs to eventually tune
+against live traffic instead of only the harvested spike traces. Logging
+failures never break retrieval (see _log_route_eval).
 """
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
 import json
 import os
 import re
@@ -49,13 +66,16 @@ import sqlite3
 import sys
 
 # ── sibling / shared imports ──────────────────────────────────────────────────
-# scripts/ dir first so the sibling `hybrid_retrieve` resolves when present.
+# scripts/ dir first so sibling modules (hybrid_retrieve, retrieval_bandit)
+# resolve when present.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 
 try:  # shared tokenizer keeps our fallback BM25 terms identical to the indexed ones
-    from repo_index_schema import tokenize  # type: ignore
+    from repo_index_schema import connect as _schema_connect, tokenize  # type: ignore
 except Exception:  # pragma: no cover - defensive; repo_index_schema is stdlib-only
+    _schema_connect = None
+
     def tokenize(text: str) -> list[str]:
         return re.findall(r"[a-z0-9_]+", (text or "").lower())
 
@@ -68,6 +88,16 @@ if not os.environ.get("BRAIN_ROUTE_NO_HYBRID"):
     except Exception:
         _HAVE_HYBRID = False
         _hybrid_retrieve = None
+
+_HAVE_BANDIT = False
+_retrieval_bandit = None
+if not os.environ.get("BRAIN_ROUTE_NO_BANDIT"):
+    try:
+        import retrieval_bandit as _retrieval_bandit  # type: ignore
+        _HAVE_BANDIT = True
+    except Exception:
+        _HAVE_BANDIT = False
+        _retrieval_bandit = None
 
 
 # ── classify ─────────────────────────────────────────────────────────────────
@@ -366,6 +396,101 @@ def _fetch_atom(conn: sqlite3.Connection, cand: dict) -> dict:
             "ref": ref, "text": text}
 
 
+# ── bandit-config wiring (BRAIN B-7 follow-up) ───────────────────────────────
+
+def _query_context_safe(query: str) -> str | None:
+    """Best-effort query_context() bucket for logging + bandit lookup.
+
+    None when the sibling retrieval_bandit module is unavailable or errors —
+    callers must treat None as "no bandit context", never crash on it.
+    """
+    if _HAVE_BANDIT and _retrieval_bandit is not None:
+        try:
+            return _retrieval_bandit.query_context(query)
+        except Exception:
+            return None
+    return None
+
+
+def _bandit_config(conn: sqlite3.Connection, context: str | None, static_k: int) -> tuple[int, bool, bool]:
+    """Resolve the effective (k, rerank_on, bandit_used) for a retrieval call.
+
+    Reads the per-context winning arm from `bandit_arms` (populated offline by
+    retrieval_bandit.replay_tune()) ONLY when BRAIN_ROUTE_USE_BANDIT is set —
+    the default is OFF, so today's static k is unchanged unless a caller opts
+    in. Even opted in, falls back to (static_k, False, False) whenever the
+    sibling module is unavailable, has no context, or bandit_arms has no
+    recorded pulls yet for this context (best_arm() -> None) — retrieval must
+    never depend on the bandit having run.
+    """
+    if not os.environ.get("BRAIN_ROUTE_USE_BANDIT"):
+        return static_k, False, False
+    if not _HAVE_BANDIT or _retrieval_bandit is None or context is None:
+        return static_k, False, False
+    try:
+        rec = _retrieval_bandit.best_arm(conn, context)
+    except Exception:
+        rec = None
+    if not rec:
+        return static_k, False, False
+    return int(rec["k"]), bool(rec["rerank_on"]), True
+
+
+def _rerank_by_overlap(query: str, atom_hits: list[dict]) -> list[dict]:
+    """Reorder atom hits by token overlap with the query (bandit rerank_on=True).
+
+    Same spirit as retrieval_bandit._simulate_retrieval's rerank step: a cheap
+    deterministic reorder of the already fetched window; ties keep the
+    incoming (baseline retrieval) order.
+    """
+    qtokens = set(tokenize(query or ""))
+    if not qtokens:
+        return atom_hits
+
+    def _overlap(hit: dict) -> int:
+        text = f"{hit.get('ref', '')} {hit.get('snippet', '')}"
+        return len(qtokens & set(tokenize(text)))
+
+    order = sorted(range(len(atom_hits)), key=lambda i: (-_overlap(atom_hits[i]), i))
+    return [atom_hits[i] for i in order]
+
+
+def _log_route_eval(
+    conn: sqlite3.Connection, *, query: str, plane: str, context: str | None,
+    k: int, rerank_on: bool, bandit_used: bool, backend: str,
+    locators: list[dict], fetch: dict | None,
+) -> None:
+    """Persist one dispatch-query event to `route_eval`.
+
+    This is the live trace log BRAIN_BUILD_PLAN.md's B-7 note flagged as
+    missing — the piece that let wiring the bandit's recommended config into
+    the live loop stay a follow-up. Fields mirror the offline trace shape
+    retrieval_bandit.py already replays (query/candidates/chosen), so a future
+    pass can point replay_tune() at rows from this table instead of only the
+    harvested spike traces. test_pass/correction stay NULL (schema-only) —
+    same posture as the B-7.1 spike: no reachable local CI-outcome signal yet
+    at dispatch time. Never raises — a logging bug must not break retrieval.
+    """
+    try:
+        candidates = [c.get("ref") for c in locators if c.get("ref")]
+        chosen = [fetch["ref"]] if fetch and fetch.get("ref") else None
+        conn.execute(
+            "INSERT INTO route_eval(written_at, query_hash, query, plane, context, "
+            "k, rerank_on, bandit_used, backend, candidates, chosen) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                hashlib.sha1((query or "").encode("utf-8")).hexdigest(),
+                query or "", plane, context or "", int(k), int(bool(rerank_on)),
+                int(bool(bandit_used)), backend, json.dumps(candidates),
+                json.dumps(chosen) if chosen else None,
+            ),
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
 # ── clear-top-1 gate ────────────────────────────────────────────────────────────
 
 def _clear_top1(cands: list[dict], key: str = "score") -> bool:
@@ -388,16 +513,23 @@ def _clear_top1(cands: list[dict], key: str = "score") -> bool:
 def route(query: str, db_path: str, k: int = 5) -> dict:
     """Dispatch a query to the right plane and return locators (+ maybe one fetch).
 
-    Return shape: {"plane","reason","locators","fetch","signals","retrieval_backend"}.
+    Return shape: {"plane","reason","locators","fetch","signals","retrieval_backend","bandit"}.
     `fetch` is non-None only when the candidate set narrows to a clear top-1.
+    `bandit` reports whether BRAIN_ROUTE_USE_BANDIT actually swapped in a
+    recommended (k, rerank_on) for the memory-plane retrieval call — see
+    _bandit_config. Every call also logs one row to `route_eval` (see
+    _log_route_eval), the persisted live trace log the B-7 note's follow-up
+    (wiring the bandit's recommended config into this loop) depended on.
     """
     cls = classify(query)
     plane = cls["plane"]
     signals = cls["signals"]
+    context = _query_context_safe(query)
 
-    conn = sqlite3.connect(db_path)
+    conn = _schema_connect(db_path) if _schema_connect else sqlite3.connect(db_path)
     backend = "n/a"
     fetch = None
+    k_eff, rerank_on, bandit_used = k, False, False
     try:
         if plane == "code":
             locators = _code_candidates(conn, query, k)
@@ -407,15 +539,23 @@ def route(query: str, db_path: str, k: int = 5) -> dict:
                 fetch = _fetch_symbol_chunk(conn, syms[0])
 
         elif plane == "memory":
-            atom_hits, backend = _retrieve_atoms(db_path, query, k)
+            k_eff, rerank_on, bandit_used = _bandit_config(conn, context, k)
+            atom_hits, backend = _retrieve_atoms(db_path, query, k_eff)
+            if rerank_on:
+                atom_hits = _rerank_by_overlap(query, atom_hits)
             locators = _memory_candidates(atom_hits)[:k]
             reason = f"memory plane: {len(locators)} atom candidate(s) via {backend}"
+            if bandit_used:
+                reason += f" (bandit config k={k_eff} rerank={rerank_on})"
             if _clear_top1(locators):
                 fetch = _fetch_atom(conn, locators[0])
 
         else:  # mixed
+            k_eff, rerank_on, bandit_used = _bandit_config(conn, context, k)
             code_cands = _code_candidates(conn, query, k)
-            atom_hits, backend = _retrieve_atoms(db_path, query, k)
+            atom_hits, backend = _retrieve_atoms(db_path, query, k_eff)
+            if rerank_on:
+                atom_hits = _rerank_by_overlap(query, atom_hits)
             mem_cands = _memory_candidates(atom_hits)
             _normalize(code_cands)
             _normalize(mem_cands)
@@ -427,6 +567,8 @@ def route(query: str, db_path: str, k: int = 5) -> dict:
                 f"mixed plane: merged {len(code_cands)} code + "
                 f"{len(mem_cands)} memory candidate(s) via {backend}, capped to {k}"
             )
+            if bandit_used:
+                reason += f" (bandit config k={k_eff} rerank={rerank_on})"
             if _clear_top1(merged, key="_n"):
                 top = merged[0]
                 if top["plane"] == "code" and top["doc_type"] == "symbol":
@@ -436,6 +578,12 @@ def route(query: str, db_path: str, k: int = 5) -> dict:
             for c in merged:
                 c.pop("_n", None)
             locators = merged
+
+        _log_route_eval(
+            conn, query=query, plane=plane, context=context, k=k_eff,
+            rerank_on=rerank_on, bandit_used=bandit_used, backend=backend,
+            locators=locators, fetch=fetch,
+        )
     finally:
         conn.close()
 
@@ -446,6 +594,7 @@ def route(query: str, db_path: str, k: int = 5) -> dict:
         "fetch": fetch,
         "signals": signals,
         "retrieval_backend": backend,
+        "bandit": {"used": bandit_used, "context": context, "k": k_eff, "rerank_on": rerank_on},
     }
 
 

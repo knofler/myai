@@ -9,6 +9,7 @@
 // — kept in lock-step the same way billing.ts mirrors the gateway's billing.ts.
 
 import { callGateway } from './gateway';
+import { hasHostedBrain } from './billing';
 import type { TenantPlan } from './billing';
 
 /** Public hosted-brain status (no secret material) — mirrors HostedBrainInfo. */
@@ -132,6 +133,40 @@ export function quotaUsage(
   return { unlimited, usedBytes, limitBytes, percent, level, approaching };
 }
 
+// ── Provisioning (ADR-023 Slice P1a) — the "connect another machine" action
+// the quota bar never had. Calls the existing brain_host_provision /
+// brain_host_rotate MCP tools (ADR-017) via /api/brain/host/{provision,rotate}
+// (dashboard-only work; no new gateway surface). ──
+
+/** One-time provisioning/rotation result — remote URL + credential, shown
+ *  once and never persisted. Mirrors hosted-brain.ts's `ProvisionResult`. */
+export interface HostedBrainProvisionResult {
+  remoteUrl: string;
+  /** Plaintext access token — returned ONCE, never persisted. */
+  token: string;
+  created: boolean;
+}
+
+/**
+ * The one-time reveal-banner copy for a provision/rotate result — pure so the
+ * UI and its test agree exactly on wording. `created` distinguishes minting a
+ * brand-new remote from adopting an existing one / rotating its token.
+ */
+export function provisionRevealNote(result: Pick<HostedBrainProvisionResult, 'created'>): string {
+  return result.created
+    ? 'Hosted brain provisioned — shown once, copy now.'
+    : 'New access token minted — shown once, copy now.';
+}
+
+/**
+ * Provisioning-card CTA label. Reads as "connect another machine" once a
+ * remote already exists (provisioning is idempotent — it adopts the same
+ * repo and mints a fresh token) rather than "start over".
+ */
+export function provisionCtaLabel(provisioned: boolean): string {
+  return provisioned ? 'Connect another machine' : 'Provision hosted brain';
+}
+
 export interface UpgradeCta {
   headline: string;
   body: string;
@@ -154,4 +189,47 @@ export function upgradeCta(usage: QuotaUsage, plan: TenantPlan | undefined): Upg
     ? `You've hit your ${planLabel(plan)} storage limit. Upgrade to ${planLabel(np)} for ${target} to resume cross-device sync.`
     : `You're approaching your ${planLabel(plan)} storage limit. Upgrade to ${planLabel(np)} for ${target}.`;
   return { headline, body, nextPlan: np };
+}
+
+// ── Onboarding upsell moment (ADR-023 Slice P2) ─────────────────────────────
+//
+// The highest-intent moment to offer cross-machine sync is when an account
+// that's clearly already invested in myAI (it has real brain activity) shows
+// up without the hosted-brain entitlement — the "this looks like a second
+// machine for an existing account" signal the ADR calls for. There's no
+// per-device signal yet, so `hasBrainActivity` (does this tenant's own brain
+// already have sessions/namespaces?) is the proxy: it distinguishes a
+// returning, engaged account from a brand-new empty one, so the nudge doesn't
+// fire on the very first run before there's anything to sync.
+
+export interface SyncUpsellInput {
+  /** The tenant's current plan — absent is treated as not entitled. */
+  plan?: TenantPlan;
+  /** Whether this tenant's own (self-hosted) brain already has real activity. */
+  hasBrainActivity: boolean;
+}
+
+/**
+ * Whether the "connect your other machine" upsell should render. Gated on the
+ * tenant lacking the hosted-brain entitlement (an already-entitled tenant who
+ * simply hasn't provisioned yet gets the plain provisioning card, not an
+ * upgrade nudge) AND already showing real brain activity.
+ */
+export function shouldShowSyncUpsell(input: SyncUpsellInput): boolean {
+  if (!input.plan) return false;
+  return !hasHostedBrain(input.plan) && input.hasBrainActivity;
+}
+
+export interface SyncUpsellCopy {
+  headline: string;
+  body: string;
+}
+
+/** The upsell copy (ADR-023 Slice P2) — framed as the natural next step for an
+ *  account that's clearly already using myAI on at least one machine. */
+export function syncUpsellCopy(): SyncUpsellCopy {
+  return {
+    headline: 'Working from another machine too?',
+    body: 'Cross-device brain sync (managed remote) keeps every machine’s context in lockstep — no more copying state files by hand.',
+  };
 }

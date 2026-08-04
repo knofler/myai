@@ -114,8 +114,89 @@ def tool_read_file(workdir, rel, max_chars=20000):
     return data
 
 
+class WriteGuardError(ValueError):
+    """Raised by tool_write_file when a write is blocked by the local-tier write
+    guard (protected path, or content that looks destructive/hallucinated)."""
+
+
+# ── WRITE GUARD (operator directive 2026-07-26, tightened after commit 4ece268) ──
+# ollama_local_tier.sh's ollama_guard_check() inspects the STAGED diff before
+# commit, but only for a curated list of protected globs (CLAUDE.md, plan/*.md,
+# AI/**, lockfiles) -- .gitignore was never on that list, which is exactly how
+# commit 4ece268 gutted 90 lines of it and let machine-local ledgers (state/*)
+# get committed. This is the earlier, complementary layer: block the write
+# itself, at the tool call, before anything ever reaches disk or a diff.
+PROTECTED_TOP_DIRS = {".github", "hooks", "plan", "state"}
+
+# Raw chat-template / tool-transcript markers. Observed failure mode: a local
+# 7B model asked to make a small edit instead emits (and the loop then writes
+# verbatim) an entire hallucinated multi-turn transcript as file content.
+TRANSCRIPT_MARKERS = (
+    "<tool_response>", "</tool_response>",
+    "<tool_call>", "</tool_call>",
+    "<|im_start|>", "<|im_end|>",
+)
+
+# A write that shrinks an existing file by more than this fraction is refused
+# outright -- the mechanical backstop for the overnight incident where a
+# "fix" clobbered GRAND_PRODUCT_ROADMAP.md down to a fraction of its size.
+SHRINK_RATIO_THRESHOLD = 0.5
+
+
+def _protected_path_reason(rel):
+    norm = rel.replace(os.sep, "/")
+    parts = [p for p in norm.split("/") if p and p != "."]
+    if not parts:
+        return None
+    if parts[-1] == ".gitignore":
+        return f"protected path: {rel!r} (.gitignore is denylisted for local-tier writes)"
+    if parts[0] in PROTECTED_TOP_DIRS:
+        return f"protected path: {rel!r} (under denylisted directory {parts[0]}/)"
+    return None
+
+
+def _transcript_marker_reason(content):
+    for marker in TRANSCRIPT_MARKERS:
+        if marker in content:
+            return f"content looks like a raw LLM transcript (found {marker!r}) -- refusing to write"
+    return None
+
+
+def _shrink_reason(existing_path, rel, content):
+    if not os.path.isfile(existing_path):
+        return None
+    try:
+        with open(existing_path, "r", errors="replace") as f:
+            old = f.read()
+    except OSError:
+        return None
+    old_len = len(old)
+    if old_len == 0:
+        return None
+    new_len = len(content)
+    if new_len < old_len * SHRINK_RATIO_THRESHOLD:
+        pct = 100 - (new_len * 100 // old_len)
+        return (
+            f"write shrinks {rel!r} by ~{pct}% ({old_len} -> {new_len} chars) "
+            "-- refusing (looks destructive)"
+        )
+    return None
+
+
+def write_guard_reason(rel, content, existing_path):
+    """None when the write is safe; else a human-readable rejection reason."""
+    return (
+        _protected_path_reason(rel)
+        or _transcript_marker_reason(content)
+        or _shrink_reason(existing_path, rel, content)
+    )
+
+
 def tool_write_file(workdir, rel, content):
     p = sandboxed_path(workdir, rel)
+    reason = write_guard_reason(rel, content, p)
+    if reason:
+        raise WriteGuardError(reason)
     parent = os.path.dirname(p)
     if parent:
         os.makedirs(parent, exist_ok=True)

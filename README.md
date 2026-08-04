@@ -279,7 +279,12 @@ myai demo            # seed realistic sample data                 → scripts/my
                      #   first-run dashboard is alive, not a wall of empty panels.
                      #   Idempotent; every row is demo-tagged and fully removable.
                      #   Flags: --clean (remove all demo rows), --force (re-seed)
-myai new-app <path>  # scaffold a full-stack blueprint app        → scripts/init_blueprint.sh
+myai new-app <path>  # scaffold a full-stack blueprint app        → scripts/myai_new_app.sh
+                     #   → scripts/init_blueprint.sh (offline, unchanged)
+myai new-app "<idea>" # headless idea→app via agentFlow, then self-registers the
+                     #   produced repo (repos_upsert) — any whitespace in the
+                     #   argument (or --idea "<text>") switches to this mode;
+                     #   flags: --name, --group, --no-trigger, --timeout, --json
 myai connect <path>  # install the Connect Hub module             → scripts/init_connect.sh
 myai plug [agent]    # plug ANY agent into your brain — ONE front door → scripts/myai_plug.sh
                      #   `myai plug` lists every agent + its one-liner; `myai plug <agent>`
@@ -365,7 +370,7 @@ myai restore <arc>   # restore a backup archive                    → scripts/m
 | Path | Page |
 |------|------|
 | `/` | Status home — gateway health, counts, recent activity |
-| `/agents` | Browse all 64 agents |
+| `/agents` | Browse all 62 agents |
 | `/skills` | Browse all 136 skills with trigger search |
 | `/hooks` | Registered hooks + event bindings |
 | `/rules` | Governance rules (AI_RULES, routing, design) |
@@ -798,7 +803,7 @@ Also available: `make preview` (set up the test→preview pipeline for a specifi
 
 > **Zero config. Zero boilerplate. Just describe what you want to build.**
 >
-> The Powerhouse Blueprint gives you the full engineering stack — 64 AI agents, 136 skills, CI/CD, database, error monitoring, design system — all pre-wired and ready. You don't pick agents, you don't configure tools, you don't set up pipelines. You just talk about your app.
+> The Powerhouse Blueprint gives you the full engineering stack — 62 AI agents, 136 skills, CI/CD, database, error monitoring, design system — all pre-wired and ready. You don't pick agents, you don't configure tools, you don't set up pipelines. You just talk about your app.
 
 ### The 4 Steps
 
@@ -831,7 +836,7 @@ You don't need to know any of this — it just works. But here's what the bluepr
 
 | Layer | What you get | You configure |
 |-------|-------------|---------------|
-| **AI Brain** | 64 specialist agents, 136 skills, MCP servers, hooks, SONA pattern memory | Nothing — auto-routed by your prompt |
+| **AI Brain** | 62 specialist agents, 136 skills, MCP servers, hooks, SONA pattern memory | Nothing — auto-routed by your prompt |
 | **App Stack** | Next.js 15 (App Router) + TypeScript strict + Tailwind v4 + shadcn/ui | Nothing — ready to build on |
 | **Database** | MongoDB in Docker (local) + Atlas-ready for prod | Just swap `MONGODB_URI` for production |
 | **AI Integration** | `@anthropic-ai/sdk` with prompt caching, sample AI feature | Nothing — imported and ready |
@@ -1045,8 +1050,8 @@ When you run `./scripts/init_ai.sh [project]`, everything gets copied automatica
 │   ├── .claude/
 │   │   ├── agents/ → ../agents/   ← Symlink, Claude Code auto-discovers
 │   │   └── skills/ → ../skills/   ← Symlink, Claude Code auto-discovers
-│   ├── agents/                     ← 64 agent definitions
-│   ├── skills/                     ← 60 skill playbooks
+│   ├── agents/                     ← 62 agent definitions
+│   ├── skills/                     ← 136 skill playbooks
 │   ├── documentation/              ← AI_RULES, routing, guides
 │   ├── state/                      ← STATE.md, AI_AGENT_HANDOFF.md
 │   └── logs/                       ← claude_log.md, gemini.md, copilot.md
@@ -1448,7 +1453,7 @@ JSON-RPC 2.0 over HTTP. This is the endpoint other LLMs (Claude Code in any repo
 - `tools/call` — invoke a tool (params: `{name, arguments}`)
 - `ping` — keepalive
 
-**124 MCP tools** (representative subset below — see [`runtime/src/mcp/tools.ts`](runtime/src/mcp/tools.ts) for the full set incl. `memory_reindex`, `schedules_*` incl. `schedules_seed`, `budgets_*`, `agents_invoke`, `skills_invoke`, `morning_sweep`, `evening_sweep`, `dispatch_cycle`, `fleet_overview`, `standing_agents_status`, `notifications_*`, `health_alerts_*`):
+**132 MCP tools** (representative subset below — see [`runtime/src/mcp/tools.ts`](runtime/src/mcp/tools.ts) for the full set incl. `memory_reindex`, `schedules_*` incl. `schedules_seed`, `budgets_*`, `agents_invoke`, `skills_invoke`, `morning_sweep`, `evening_sweep`, `dispatch_cycle`, `fleet_overview`, `standing_agents_status`, `notifications_*`, `health_alerts_*`):
 
 | Category | Tool | Purpose |
 |----------|------|---------|
@@ -1466,7 +1471,7 @@ JSON-RPC 2.0 over HTTP. This is the endpoint other LLMs (Claude Code in any repo
 | Repos | `repos_list` | Managed repos from `managed_repos.txt` with health flags |
 | Repos | `repos_status` | Git branch, uncommitted count, ahead/behind, file mtimes |
 | Repos | `repos_priority` | Ranked by open tasks + stale handoff + missing AI |
-| Inventory | `agents_list` | All 64 agents (filter by category) |
+| Inventory | `agents_list` | All 62 agents (filter by category) |
 | Inventory | `skills_list` | All 136 skills (filter by agent) |
 
 **Quick try:**
@@ -1817,9 +1822,9 @@ Every block ends with a `… N more — run "more <type>" to see all` hint.
 | Command | Action |
 |---------|--------|
 | `ai tools` | Show 5 of each category |
-| `more agents` | Dump all 64 agents grouped by category |
+| `more agents` | Dump all 62 agents grouped by category |
 | `more skills` | Dump all 136 skills |
-| `more mcp tools` or `more mcp` | Dump all 124 MCP tools with full input schemas |
+| `more mcp tools` or `more mcp` | Dump all 132 MCP tools with full input schemas |
 | `more routes` | Dump all HTTP + WS + MCP + dashboard routes (same as the Gateway Routes section above) |
 | `ai tools help` or `help ai tools` | Print this usage block |
 
@@ -1923,7 +1928,7 @@ init all           # All 8 agents at once
 
 Each generated file contains the same core instructions:
 - Session start protocol (read state files)
-- 64 specialist agents and their domains
+- 62 specialist agents and their domains
 - Quick keywords (`hello`, `agent mode`, `ship it`, etc.)
 - State management rules (autonomous updates)
 - Critical project rules (Docker, pipeline relay, timeouts)
@@ -2060,8 +2065,8 @@ See the [AgentFlow repo docs](https://github.com/knofler/agentFlow/blob/main/doc
 ├── .claude/
 │   ├── agents/ → ../agents/        # Symlink — Claude Code auto-discovers agents
 │   └── skills/ → ../skills/        # Symlink — Claude Code auto-discovers skills
-├── agents/                         # 64 agent definitions (all tools)
-├── skills/                         # 60 skill playbooks (skills/*/SKILL.md)
+├── agents/                         # 62 agent definitions (all tools)
+├── skills/                         # 136 skill playbooks (skills/*/SKILL.md)
 ├── state/
 │   ├── STATE.md                    # Current progress & blockers
 │   └── AI_AGENT_HANDOFF.md         # Instructions for the next agent

@@ -1,6 +1,10 @@
 import mongoose, { Schema, type Document, type Model } from 'mongoose';
 import { getConfig } from './config.js';
 import { getLogger } from './logger.js';
+import { readOnlyGuardPlugin, activateDbFailover } from './db-failover.js';
+
+// Re-exported so callers keep a single db entry point for failover state.
+export { getDbFailoverState, resetDbFailover, assertDbWritable, DbReadOnlyError } from './db-failover.js';
 
 // ── Multi-tenancy (ADR-010, M1) ─────────────────────────
 // The tenant every existing/single-operator record maps to. Used as the
@@ -166,6 +170,16 @@ skillSchema.index({ triggers: 1 });
 
 // ── Hook Definition ───────────────────────────────────
 
+/** Governance record of the most recent PATCH /api/hooks toggle (task-bd18a5ec). */
+export interface IHookLastToggle {
+  actorUserId?: string;
+  role: string;
+  via: string;
+  previousState: boolean;
+  newState: boolean;
+  at: Date;
+}
+
 export interface IHook extends Document {
   name: string;
   events: string[];
@@ -175,7 +189,20 @@ export interface IHook extends Document {
   source: 'builtin' | 'user' | 'bash';
   scriptPath?: string;
   loadedAt: Date;
+  lastToggle?: IHookLastToggle;
 }
+
+const hookLastToggleSchema = new Schema<IHookLastToggle>(
+  {
+    actorUserId: { type: String },
+    role: { type: String, required: true },
+    via: { type: String, required: true },
+    previousState: { type: Boolean, required: true },
+    newState: { type: Boolean, required: true },
+    at: { type: Date, required: true },
+  },
+  { _id: false },
+);
 
 const hookSchema = new Schema<IHook>({
   name: { type: String, required: true, unique: true, index: true },
@@ -186,6 +213,7 @@ const hookSchema = new Schema<IHook>({
   source: { type: String, enum: ['builtin', 'user', 'bash'], default: 'user' },
   scriptPath: { type: String },
   loadedAt: { type: Date, default: Date.now },
+  lastToggle: { type: hookLastToggleSchema },
 });
 
 hookSchema.index({ events: 1, enabled: 1 });
@@ -217,7 +245,7 @@ const ruleSchema = new Schema<IRule>({
 export interface IVector extends Document {
   tenantId: string;
   repo: string;
-  source: 'state' | 'handoff' | 'commit' | 'pr' | 'pattern' | 'bug' | 'code' | 'feature' | 'archive' | 'external';
+  source: 'state' | 'handoff' | 'commit' | 'pr' | 'pattern' | 'bug' | 'code' | 'feature' | 'archive' | 'external' | 'brain';
   content: string;
   embedding: number[];
   tags: string[];
@@ -231,7 +259,7 @@ export interface IVector extends Document {
 const vectorSchema = new Schema<IVector>({
   tenantId: tenantField,
   repo: { type: String, required: true, index: true },
-  source: { type: String, required: true, enum: ['state', 'handoff', 'commit', 'pr', 'pattern', 'bug', 'code', 'feature', 'archive', 'external'], index: true },
+  source: { type: String, required: true, enum: ['state', 'handoff', 'commit', 'pr', 'pattern', 'bug', 'code', 'feature', 'archive', 'external', 'brain'], index: true },
   content: { type: String, required: true },
   embedding: { type: [Number], required: true },
   tags: { type: [String], default: [], index: true },
@@ -266,6 +294,33 @@ export interface ITask extends Document {
   prUrl?: string;
   notes?: string;
   telegramMessageId?: number;
+  // Router audit trail (task-d9300dac) — the capability×cost×availability
+  // router's (route_task_model, cli_task_runner.sh) actual per-task decision,
+  // stamped by the runner at claim time so it's queryable after the fact
+  // instead of only ever existing in the runner's stdout log.
+  routedProfile?: string;
+  routedModel?: string;
+  routedComplexity?: string;
+  // Execution-lane stamp (task-b1776200) — which backend actually produced
+  // the shipped diff: the normal Claude CLI session, or the non-Claude
+  // agentic FALLBACK lane (scripts/lib/openai_agent.py, DeepSeek/Kimi) that
+  // engages when the Claude session window is exhausted. Stamped by the
+  // runner at review close-off, once USED_MODEL is settled — distinct from
+  // routedModel/recommendedModel, which reflect the *planned* route, not
+  // necessarily what actually executed after any fallback.
+  executionLane?: 'claude' | 'agentic-fallback';
+  executionProvider?: string;
+  // Work-type routing stamp (task-de8b40ff) — the 13-work-type routing table
+  // (WORK_TYPE_TIER_MAP, plan/MULTI_PROVIDER_ORCHESTRATION.md §3, wired in
+  // db9e937) resolves a `workType` hint to a primary tier plus a documented
+  // first-hop failover, but that decision only ever existed as an MCP
+  // routing_info response or a line in the runner's stdout log — never on the
+  // task doc itself. Stamped by the runner at claim time (same edge as
+  // routedProfile/routedModel/routedComplexity above) so an operator can see
+  // WHICH work-type lane + failover hop a task was actually routed through.
+  workType?: string;
+  workTypeTier?: string;
+  workTypeFailoverHop?: string;
   // ADR-011 slice 2 — atomic cross-machine claim/lease. Set by claimTask()
   // (findOneAndUpdate pending→working) so two runners can never double-pick.
   claimedBy?: string;
@@ -279,6 +334,11 @@ export interface ITask extends Document {
   // resumed (paused → 'pending') once the urgent task clears.
   preemptedBy?: string;
   preemptedAt?: Date;
+  // Bulk-block guard (tasks/bulk-block-guard.ts) — explicit supersession
+  // record. Set when a pending→blocked transition is authorized because a
+  // named replacement task takes over the work, exempting it from the guard's
+  // unauthorized-transition counter without needing operatorAuthorized:true.
+  supersededBy?: string;
   // Bounded retry-with-backoff (dead-letter queue). failTask() bumps
   // retryCount on every genuine runner failure; while under maxRetries the
   // task is released back to 'pending' with nextRetryAt pushed out by
@@ -291,6 +351,12 @@ export interface ITask extends Document {
   nextRetryAt?: Date;
   deadLetteredAt?: Date;
   lastError?: string;
+  // Consecutive route_task_model exhaustion-defer streak (task-1a74f8c3,
+  // monitoring/task-defer-alerter.ts's in-process counter, mirrored onto the
+  // doc so it's queryable — same pattern as retryCount above). Stamped by
+  // task-store.ts's updateTaskImpl on every routeExhausted:true defer; reset
+  // to 0 the next time the task re-stamps `working` with a real routed model.
+  deferCount?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -310,6 +376,14 @@ const taskSchema = new Schema<ITask>({
   prUrl: { type: String },
   notes: { type: String },
   telegramMessageId: { type: Number },
+  routedProfile: { type: String },
+  executionLane: { type: String, enum: ['claude', 'agentic-fallback'] },
+  executionProvider: { type: String },
+  workType: { type: String },
+  workTypeTier: { type: String },
+  workTypeFailoverHop: { type: String },
+  routedModel: { type: String },
+  routedComplexity: { type: String },
   claimedBy: { type: String },
   claimedAt: { type: Date },
   leaseUntil: { type: Date },
@@ -317,11 +391,13 @@ const taskSchema = new Schema<ITask>({
   completedAt: { type: Date },
   preemptedBy: { type: String },
   preemptedAt: { type: Date },
+  supersededBy: { type: String },
   retryCount: { type: Number, required: true, default: 0 },
   maxRetries: { type: Number, required: true, default: 3 },
   nextRetryAt: { type: Date },
   deadLetteredAt: { type: Date },
   lastError: { type: String },
+  deferCount: { type: Number, default: 0 },
 }, { timestamps: true });
 
 // ── Task index strategy (hot path — polled every runner fire) ───────────
@@ -388,6 +464,50 @@ runnerLeaseSchema.index({ tenantId: 1, slot: 1 }, { unique: true });
 // collection stays tiny. Mongo's TTL monitor lags up to 60s — never rely on it
 // for correctness.
 runnerLeaseSchema.index({ leaseUntil: 1 }, { expireAfterSeconds: 3600 });
+
+// ── RunnerLeaseHistory (ADR-011 slice 7 — runs log) ──
+// RunnerLease only exists while a slot is HELD — release deletes the doc, so
+// there is no operator-visible record of "which account/slot ran which task
+// and for how long" once the run ends (today: grep raw Mongo / gateway logs).
+// This is an append-only history row written whenever a slot stops being held
+// (runner-lease-store.ts: explicit release, or a forced release on account
+// mismatch) — the source for the runs-log dashboard view. A TTL index bounds
+// growth automatically; this is diagnostic history, not a system of record.
+
+export interface IRunnerLeaseHistory extends Document {
+  tenantId: string;
+  slot: number;
+  holder: string;
+  machine?: string;
+  account?: string;
+  taskId?: string;
+  acquiredAt: Date;
+  releasedAt: Date;
+  durationMs: number;
+  reason: 'released' | 'reclaimed' | 'account_mismatch';
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const runnerLeaseHistorySchema = new Schema<IRunnerLeaseHistory>({
+  tenantId: tenantField,
+  slot: { type: Number, required: true },
+  holder: { type: String, required: true },
+  machine: { type: String },
+  account: { type: String },
+  taskId: { type: String },
+  acquiredAt: { type: Date, required: true },
+  releasedAt: { type: Date, required: true },
+  durationMs: { type: Number, required: true },
+  reason: { type: String, enum: ['released', 'reclaimed', 'account_mismatch'], required: true },
+}, { timestamps: true, collection: 'runner_lease_history' });
+
+// Newest-first per-tenant listing is the only query shape the dashboard/MCP
+// tool needs.
+runnerLeaseHistorySchema.index({ tenantId: 1, releasedAt: -1 });
+// TTL: keep ~60 days of runs-log history, then GC — bounds an append-only
+// collection without a separate rotation job.
+runnerLeaseHistorySchema.index({ releasedAt: 1 }, { expireAfterSeconds: 60 * 24 * 3600 });
 
 // ── RunnerHeartbeat (liveness alerting — distinct from RunnerLease above) ──
 // RunnerLease only has a document while a runner HOLDS a task-concurrency
@@ -514,6 +634,12 @@ export interface INotification extends Document {
   sentAt: Date;
   success: boolean;
   error?: string;
+  /** Burst id from the delivery-path dedup tracker — repeat events with the same
+   *  (tenantId, type, subject) inside the dedup window collapse into this same
+   *  row (via upsert) instead of creating a new one per event. */
+  dedupKey?: string;
+  /** Number of events collapsed into this row so far (>1 renders as an "xN" suffix). */
+  count?: number;
 }
 
 const notificationSchema = new Schema<INotification>({
@@ -527,6 +653,8 @@ const notificationSchema = new Schema<INotification>({
   sentAt: { type: Date, required: true, default: Date.now, index: true },
   success: { type: Boolean, required: true, default: true },
   error: { type: String },
+  dedupKey: { type: String },
+  count: { type: Number },
 });
 
 // ── Notification index strategy (dashboard history poll) ────────────────
@@ -536,6 +664,7 @@ const notificationSchema = new Schema<INotification>({
 notificationSchema.index({ tenantId: 1, sentAt: -1 });
 notificationSchema.index({ sentAt: -1 });             // unscoped ops/admin view
 notificationSchema.index({ channel: 1, sentAt: -1 }); // per-channel delivery audit
+notificationSchema.index({ tenantId: 1, dedupKey: 1 }, { sparse: true }); // storm-collapse upsert lookup
 
 // ── Push Subscription (REALTIME_NOTIFICATIONS Phase 6) ───
 //
@@ -649,6 +778,130 @@ budgetUsageSchema.index({ provider: 1, createdAt: -1 });
 budgetUsageSchema.index({ tenantId: 1, createdAt: -1 });
 budgetUsageSchema.index({ tenantId: 1, userId: 1, createdAt: -1 }); // per-member breakdown/filter
 
+// ── Budget Usage Rollup (Phase 5b §3.1 — daily/weekly analytics) ────
+// PHASE_5B_BUDGET_GUARDS.md §3.1 originally deferred this as "premature
+// optimization until volume forces it" — BudgetUsage stayed one immutable
+// document per LLM call, aggregated on read. Call volume has since grown
+// enough that repeatedly summing the full per-call log for dashboards/
+// analytics is worth pre-aggregating. This collection is a DERIVED cache —
+// one document per tenant per period (day or ISO-week, UTC) — never the
+// source of truth. `BudgetUsageModel` remains the audit log; a rollup can
+// always be recomputed from it (see `llm/budget-rollup.ts`).
+
+export type BudgetRollupPeriod = 'daily' | 'weekly';
+
+export interface IBudgetRollupBucket {
+  key: string;    // provider name / model name / channelId ('unattributed' when null)
+  costUsd: number;
+  calls: number;
+}
+
+export interface IBudgetUsageRollup extends Omit<Document, 'model'> {
+  tenantId: string;
+  period: BudgetRollupPeriod;
+  /** 'YYYY-MM-DD' (daily, UTC) or 'YYYY-Www' (ISO week, UTC) — dedupe/upsert key. */
+  periodKey: string;
+  periodStart: Date;
+  periodEnd: Date;
+  totalCostUsd: number;
+  totalCalls: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  byProvider: IBudgetRollupBucket[];
+  byModel: IBudgetRollupBucket[];
+  byChannel: IBudgetRollupBucket[];
+  /** When this document was last (re)computed — a same-day/week rollup is
+   *  recomputed repeatedly until the period closes, so this differs from
+   *  Mongoose's `updatedAt` in intent even though it tracks the same event. */
+  computedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const budgetRollupBucketSchema = new Schema<IBudgetRollupBucket>({
+  key: { type: String, required: true },
+  costUsd: { type: Number, required: true, default: 0 },
+  calls: { type: Number, required: true, default: 0 },
+}, { _id: false });
+
+const budgetUsageRollupSchema = new Schema<IBudgetUsageRollup>({
+  tenantId: tenantField,
+  period: { type: String, required: true, enum: ['daily', 'weekly'] },
+  periodKey: { type: String, required: true },
+  periodStart: { type: Date, required: true },
+  periodEnd: { type: Date, required: true },
+  totalCostUsd: { type: Number, required: true, default: 0 },
+  totalCalls: { type: Number, required: true, default: 0 },
+  totalInputTokens: { type: Number, required: true, default: 0 },
+  totalOutputTokens: { type: Number, required: true, default: 0 },
+  byProvider: { type: [budgetRollupBucketSchema], default: [] },
+  byModel: { type: [budgetRollupBucketSchema], default: [] },
+  byChannel: { type: [budgetRollupBucketSchema], default: [] },
+  computedAt: { type: Date, required: true, default: () => new Date() },
+}, { timestamps: true });
+
+// One document per tenant per period per key — upsert target for the rollup job.
+budgetUsageRollupSchema.index({ tenantId: 1, period: 1, periodKey: 1 }, { unique: true });
+// Range queries for analytics ("last 30 daily rollups", "last 12 weekly rollups").
+budgetUsageRollupSchema.index({ tenantId: 1, period: 1, periodStart: -1 });
+
+// ── Budget Cap Override (Phase 5b §8 follow-up — operator per-tenant caps) ──
+// One document per tenant, written by the dashboard's PATCH /api/budget-caps
+// (dashboard/src/app/api/budget-caps/route.ts, backing the "Apply suggestion"
+// button on the adaptive budget-cap suggestions panel). Unlike most schemas in
+// this file, the GATEWAY does not write this collection — the dashboard is the
+// sole writer; the gateway's budget-guard.ts only reads it (read-only mirror,
+// inverse of the usual direction) to override the BUDGET_* env-var caps for a
+// tenant that has applied a suggestion. A field left unset on the document
+// falls back to the corresponding env-configured cap in budget-guard.ts.
+export interface IBudgetCapOverride extends Document {
+  tenantId: string;
+  monthlyHardCapUsd?: number;
+  dailyCapUsd?: number;
+  perChannelCapUsd?: number;
+  updatedAt: Date;
+}
+
+const budgetCapOverrideSchema = new Schema<IBudgetCapOverride>({
+  tenantId: { type: String, required: true, unique: true, index: true },
+  monthlyHardCapUsd: { type: Number },
+  dailyCapUsd: { type: Number },
+  perChannelCapUsd: { type: Number },
+}, { timestamps: { createdAt: false, updatedAt: true }, collection: 'budgetcapoverrides' });
+
+// ── MRR Snapshot (nightly per-tenant revenue history) ────────────────
+// Closes the gap noted on dashboard /revenue and /revenue/nrr: those pages
+// used to reconstruct a single "now" MRR point per tenant (no historical
+// series existed), so cohort expansion/contraction always read as a proxy
+// rather than a real trend. `analytics/mrr-snapshot-job.ts`'s
+// `runMrrSnapshotSweep` writes one document per (tenant, UTC day) — an
+// immutable point-in-time fact, never recomputed once written for a past
+// day (unlike the rollup above, which is a derived cache). The unique
+// {tenantId, snapshotDate} index is the idempotency guard: re-running the
+// sweep the same day upserts (overwrites) that day's row instead of
+// duplicating it.
+export interface IMrrSnapshot extends Document {
+  tenantId: string;
+  mrr: number;
+  plan: TenantPlan;
+  capturedAt: Date;
+  /** 'YYYY-MM-DD' (UTC) — the per-tenant daily dedupe/upsert key. */
+  snapshotDate: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const mrrSnapshotSchema = new Schema<IMrrSnapshot>({
+  tenantId: { type: String, required: true },
+  mrr: { type: Number, required: true, default: 0 },
+  plan: { type: String, required: true, enum: ['free', 'solo', 'team', 'scale'] },
+  capturedAt: { type: Date, required: true },
+  snapshotDate: { type: String, required: true },
+}, { timestamps: true });
+
+mrrSnapshotSchema.index({ tenantId: 1, snapshotDate: 1 }, { unique: true });
+mrrSnapshotSchema.index({ tenantId: 1, capturedAt: -1 }); // "this tenant's history, newest first"
+
 // ── Spend Alert State (FINOPS tenant-facing spend alert) ─────────────
 // Dedup watermark so the customer-facing "80%/100% of plan-included spend"
 // alert (llm/spend-alert.ts) fires AT MOST ONCE per threshold per tenant per
@@ -674,6 +927,44 @@ const spendAlertStateSchema = new Schema<ISpendAlertState>({
 }, { timestamps: true });
 
 spendAlertStateSchema.index({ tenantId: 1, period: 1 }, { unique: true });
+
+
+// ── Atlas Vector Index Health (self-heal repeat-non-ok alert) ─────
+// ensureAtlasVectorSearchIndex() (memory/atlas-search-index.ts) self-heals
+// the `vectors` Atlas Search index on every gateway boot — action is one of
+// created/updated/recreated/ok/skipped/failed. A ONE-TIME create/update/
+// recreate (first boot ever, or Atlas UI drift repaired) is healthy; the
+// SAME non-'ok' outcome firing on every boot in a row means something keeps
+// fighting the index definition (an M0 tier silently dropping the index, two
+// gateway replicas racing on createSearchIndex, etc). This state carries the
+// consecutive-non-ok streak ACROSS PROCESS RESTARTS (an in-memory counter
+// can't — each boot is a new process), so monitoring/atlas-index-health-
+// alerter.ts can tell "fixed it once" (a boot landing on 'ok' or 'skipped'
+// resets the streak to 0) from "something keeps breaking it" (the streak
+// crosses the alert threshold). One tiny doc per index name — there is
+// currently only one (`vector_index`).
+
+export interface IAtlasIndexHealthState extends Document {
+  /** Atlas Search index name, e.g. "vector_index" (atlasVectorIndexName()). */
+  index: string;
+  /** Consecutive boots in a row whose ensureAtlasVectorSearchIndex() action was NOT 'ok'/'skipped'. */
+  consecutiveNonOk: number;
+  /** Set once the alert has fired for the CURRENT streak; cleared when the streak resets. */
+  alertedThisIncident: boolean;
+  /** The most recent ensureAtlasVectorSearchIndex() action, for diagnostics. */
+  lastAction: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const atlasIndexHealthStateSchema = new Schema<IAtlasIndexHealthState>({
+  index: { type: String, required: true },
+  consecutiveNonOk: { type: Number, required: true, default: 0 },
+  alertedThisIncident: { type: Boolean, required: true, default: false },
+  lastAction: { type: String, required: true, default: '' },
+}, { timestamps: true });
+
+atlasIndexHealthStateSchema.index({ index: 1 }, { unique: true });
 
 
 // ── Usage Event (product meter — ADR-014, S2 slice 1) ───────
@@ -789,7 +1080,7 @@ export interface IRepo extends Document {
   brainNamespace?: string;
   stack: string[];
   group?: string;
-  source: 'seed' | 'myai-init' | 'scan' | 'manual';
+  source: 'seed' | 'myai-init' | 'scan' | 'manual' | 'repocard' | 'headless-new-app';
   enabled: boolean;
   lastSeenAt?: Date;
   createdAt: Date;
@@ -804,7 +1095,7 @@ const repoSchema = new Schema<IRepo>({
   brainNamespace: { type: String },
   stack: { type: [String], default: [] },
   group: { type: String },
-  source: { type: String, enum: ['seed', 'myai-init', 'scan', 'manual'], default: 'manual' },
+  source: { type: String, enum: ['seed', 'myai-init', 'scan', 'manual', 'repocard', 'headless-new-app'], default: 'manual' },
   enabled: { type: Boolean, default: true },
   lastSeenAt: { type: Date },
 }, { timestamps: true });
@@ -1152,6 +1443,13 @@ continuityMetricSchema.index({ tenantId: 1, userId: 1, createdAt: -1 });
 // (ACTIVATION_STEPS stays fixed at 5) — they reuse this same idempotent
 // first-wins recorder purely as the trigger for the lifecycle email sequence
 // (notifications/lifecycle-emails.ts): first task queued, first task shipped.
+//
+// `first_hosted_brain` (ADR-023 Slice P3) is also outside the 5-step display
+// funnel, for the same reason: it's the countable numerator for the
+// cross-machine-sync conversion KPI (GO_LIVE_PLAN §6), stamped once per tenant
+// at their first successful `brain_host_provision` call — see
+// mcp/tools.ts:handleBrainHostProvision and
+// monitoring/activation-funnel.ts:getHostedBrainConversion.
 
 export type ActivationStep =
   | 'signup'            // a fresh tenant was provisioned (account created)
@@ -1160,7 +1458,8 @@ export type ActivationStep =
   | 'first_brain_delta'// the tenant's first brain_delta catch-up served
   | 'wrapup_merge'     // the tenant's first wrap-up brain_merge (continuity aha)
   | 'first_task'       // the tenant's first task queued (lifecycle email only)
-  | 'first_ship';      // the tenant's first task shipped/done (lifecycle email only)
+  | 'first_ship'       // the tenant's first task shipped/done (lifecycle email only)
+  | 'first_hosted_brain'; // the tenant's first hosted-brain provision (cross-machine sync conversion KPI)
 
 export interface IActivationEvent extends Document {
   tenantId: string;        // tenantField — scoped, required (ADR-010)
@@ -1178,7 +1477,7 @@ const activationEventSchema = new Schema<IActivationEvent>({
   step: {
     type: String,
     required: true,
-    enum: ['signup', 'init', 'first_brain_boot', 'first_brain_delta', 'wrapup_merge', 'first_task', 'first_ship'],
+    enum: ['signup', 'init', 'first_brain_boot', 'first_brain_delta', 'wrapup_merge', 'first_task', 'first_ship', 'first_hosted_brain'],
   },
   repo: { type: String },
   source: { type: String, required: true, enum: ['gateway', 'signup', 'runner', 'dashboard'], default: 'gateway' },
@@ -1344,6 +1643,10 @@ export type SubscriptionStatus =
 // every pre-ADR-023 tenant (see migration 003) — it MUST stay first/default so
 // existing single-region deployments are unaffected.
 export type TenantRegion = 'us' | 'eu' | 'au';
+// Physical DB isolation tier (ADR-030). 'shared' is the implicit tier of every
+// pre-ADR-030 tenant (see migration 004) — it MUST stay first/default so the
+// shared-tier majority is unaffected.
+export type TenantIsolationTier = 'shared' | 'dedicated-db' | 'dedicated-cluster';
 
 export interface ITenant extends Document {
   tenantId: string;          // stable slug/uuid stamped on every scoped record
@@ -1405,6 +1708,21 @@ export interface ITenant extends Document {
   // regardless of how far past its retention window a row is. Support/operator
   // toggle only — no self-serve endpoint, same posture as `region` above.
   legalHold?: boolean;
+  // Per-org MCP tool visibility override (Wave-2 #15, core/rbac.ts
+  // `isToolVisibleForTenant`). Orthogonal to the RBAC role→capability gate:
+  // `mcpToolDenylist` additionally hides an otherwise-visible tool from THIS
+  // org; `mcpToolAllowlist` punches a documented hole through the default
+  // `OPERATOR_ONLY_TOOLS` hiding for THIS org. Both empty/absent for every
+  // tenant by default — operator-set only, no self-serve endpoint (same
+  // posture as `legalHold`/`region`).
+  mcpToolAllowlist?: string[];
+  mcpToolDenylist?: string[];
+  // Physical isolation tier (ADR-030, data-model-only slice — no routing code
+  // reads this yet, that's the getConnectionForTenant chokepoint, a separate
+  // queued follow-up). 'shared' is the default for every tenant, including
+  // every pre-existing row backfilled by migration 004 — zero behavior change
+  // until the Phase-3 enterprise tier is actually sold.
+  isolationTier: TenantIsolationTier;
   metadata: Record<string, unknown>;
   createdAt: Date;
   updatedAt: Date;
@@ -1439,6 +1757,18 @@ const tenantSchema = new Schema<ITenant>({
   creditBalance: { type: Number, default: 0 },       // gift/redeemable-code credit grants
   require2fa: { type: Boolean, default: false },     // per-tenant TOTP enforcement policy
   legalHold: { type: Boolean, default: false, index: true }, // data-retention purge exemption
+  mcpToolAllowlist: { type: [String], default: undefined },  // per-org MCP tool visibility override (allow)
+  mcpToolDenylist: { type: [String], default: undefined },   // per-org MCP tool visibility override (deny)
+  // ADR-030 physical isolation tier. 'shared' default keeps every pre-existing
+  // tenant row (backfilled by migration 004) and every isolation-unaware
+  // caller unchanged.
+  isolationTier: {
+    type: String,
+    required: true,
+    enum: ['shared', 'dedicated-db', 'dedicated-cluster'],
+    default: 'shared',
+    index: true,
+  },
   emailBranding: {
     type: new Schema({
       fromName: { type: String },
@@ -1502,6 +1832,47 @@ const tenantApiKeySchema = new Schema<ITenantApiKey>({
 
 tenantApiKeySchema.index({ tenantId: 1, status: 1 }); // per-tenant list + hot path
 tenantApiKeySchema.index({ apiKeyPrefix: 1, status: 1 }); // auth hot path
+
+// ── TenantDbBinding (ADR-030 §4 — physical isolation routing table) ────────
+// Gateway-internal, lives in the *shared* cluster alongside Tenant (it has to
+// — it's what tells the gateway where a tenant's dedicated database is, so it
+// can't itself be behind that indirection). Data-model-only in this slice:
+// nothing reads/writes it yet — the routing chokepoint (`getConnectionForTenant`
+// in a future `tenant-db-registry.ts`) and the provisioning/migration flow
+// (ADR-030 §3) are separate queued follow-ups. A row only ever exists for a
+// tenant that has opted into `dedicated-db`/`dedicated-cluster`; `shared`-tier
+// tenants (the default, unconditionally today) have no binding at all.
+export interface ITenantDbBinding extends Document {
+  tenantId: string;              // unique, indexed — FK to Tenant.tenantId
+  isolationTier: Exclude<TenantIsolationTier, 'shared'>;
+  // Live credentials to the tenant's dedicated infrastructure — same
+  // select:false + never-logged posture as Tenant.apiKeyHash. Any logging of
+  // this field MUST go through the existing redactMongoUri() helper, never a
+  // reimplementation (ADR-030 "Severity flags for implementers", HIGH).
+  mongoUri: string;
+  dbName: string;
+  status: 'provisioning' | 'migrating' | 'active' | 'suspended';
+  provisionedAt: Date;
+  migratedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const tenantDbBindingSchema = new Schema<ITenantDbBinding>({
+  tenantId: { type: String, required: true, unique: true, index: true },
+  isolationTier: { type: String, required: true, enum: ['dedicated-db', 'dedicated-cluster'] },
+  mongoUri: { type: String, required: true, select: false },
+  dbName: { type: String, required: true },
+  status: {
+    type: String,
+    required: true,
+    enum: ['provisioning', 'migrating', 'active', 'suspended'],
+    default: 'provisioning',
+    index: true,
+  },
+  provisionedAt: { type: Date, required: true, default: Date.now },
+  migratedAt: { type: Date },
+}, { timestamps: true });
 
 // ── Tenant Secret Key (envelope encryption, ADR-010 §3.7) ──────────
 // One per-tenant Data Encryption Key (DEK), itself wrapped ("envelope
@@ -1955,6 +2326,7 @@ export const hotPathSchemas = {
 
 export let TenantModel: Model<ITenant>;
 export let TenantApiKeyModel: Model<ITenantApiKey>;
+export let TenantDbBindingModel: Model<ITenantDbBinding>;
 export let TenantSecretKeyModel: Model<ITenantSecretKey>;
 export let GatewaySessionModel: Model<IGatewaySession>;
 export let AIPatternModel: Model<IAIPattern>;
@@ -1965,10 +2337,14 @@ export let RuleModel: Model<IRule>;
 export let VectorModel: Model<IVector>;
 export let TaskModel: Model<ITask>;
 export let RunnerLeaseModel: Model<IRunnerLease>;
+export let RunnerLeaseHistoryModel: Model<IRunnerLeaseHistory>;
 export let RunnerHeartbeatModel: Model<IRunnerHeartbeat>;
 export let FleetMaintenanceModel: Model<IFleetMaintenance>;
 export let ScheduleModel: Model<ISchedule>;
 export let BudgetUsageModel: Model<IBudgetUsage>;
+export let BudgetUsageRollupModel: Model<IBudgetUsageRollup>;
+export let BudgetCapOverrideModel: Model<IBudgetCapOverride>;
+export let MrrSnapshotModel: Model<IMrrSnapshot>;
 export let UsageEventModel: Model<IUsageEvent>;
 export let NotificationModel: Model<INotification>;
 export let PushSubscriptionModel: Model<IPushSubscription>;
@@ -1997,11 +2373,33 @@ export let InboundWebhookDeliveryModel: Model<IInboundWebhookDelivery>;
 export let ArtifactModel: Model<IArtifact>;
 export let ErasureRequestModel: Model<IErasureRequest>;
 export let SpendAlertStateModel: Model<ISpendAlertState>;
+export let AtlasIndexHealthStateModel: Model<IAtlasIndexHealthState>;
 export let MigrationRecordModel: Model<IMigrationRecord>;
 
 // ── Connection ──────────────────────────────────────────
 
 let connection: typeof mongoose | null = null;
+let guardPluginRegistered = false;
+
+const CONNECT_OPTS = {
+  serverSelectionTimeoutMS: 5000,
+  connectTimeoutMS: 5000,
+  maxPoolSize: 20,
+  minPoolSize: 2,
+  maxIdleTimeMS: 30000,
+} as const;
+
+/** Resolve the local-mirror URI for read-side failover. Explicit
+ *  MYAI_DB_FAILOVER_URI wins; otherwise default to the compose local mongo
+ *  (`mongo` service host, root creds matching docker-compose.yml / the
+ *  `myai mirror` destination). */
+function resolveFailoverUri(config: ReturnType<typeof getConfig>): string {
+  if (config.database.failoverUri) return config.database.failoverUri;
+  const user = process.env.LOCAL_MONGO_USER || 'admin';
+  const pass = process.env.LOCAL_MONGO_PASS || 'password';
+  const host = process.env.LOCAL_MONGO_HOST || 'mongo:27017';
+  return `mongodb://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}/${config.database.name}?authSource=admin`;
+}
 
 export async function connectDB(): Promise<typeof mongoose> {
   const config = getConfig();
@@ -2009,18 +2407,65 @@ export async function connectDB(): Promise<typeof mongoose> {
 
   if (connection) return connection;
 
+  // Read-only failover guard (db-failover.ts) — global plugin so every model
+  // compiled below rejects writes while failover is active. A no-op in the
+  // normal (primary-connected) posture. Must register before mongoose.model().
+  if (!guardPluginRegistered) {
+    mongoose.plugin(readOnlyGuardPlugin);
+    guardPluginRegistered = true;
+  }
+
   try {
-    connection = await mongoose.connect(config.database.uri, {
-      dbName: config.database.name,
-      serverSelectionTimeoutMS: 5000,
-      connectTimeoutMS: 5000,
-      maxPoolSize: 20,
-      minPoolSize: 2,
-      maxIdleTimeMS: 30000,
-    });
+    try {
+      connection = await mongoose.connect(config.database.uri, {
+        dbName: config.database.name,
+        ...CONNECT_OPTS,
+      });
+    } catch (primaryErr) {
+      // Read-side local-first failover (MONGO_MIRROR.md follow-up). Explicit
+      // opt-in (MYAI_DB_FAILOVER=local), loudly logged, READ-ONLY — never a
+      // silent swap (2026-07-04 split-brain lesson). Surfaced on /health/deep
+      // via getDbFailoverState() so the dashboard health panel shows it.
+      const failoverUri = resolveFailoverUri(config);
+      if (config.database.failover !== 'local' || failoverUri === config.database.uri) {
+        throw primaryErr;
+      }
+      log.error(
+        { err: primaryErr, primary: redactMongoUri(config.database.uri), mirror: redactMongoUri(failoverUri) },
+        'Primary MongoDB unreachable — MYAI_DB_FAILOVER=local set, attempting READ-ONLY failover to the local mirror',
+      );
+      try {
+        connection = await mongoose.connect(failoverUri, {
+          dbName: config.database.name,
+          ...CONNECT_OPTS,
+        });
+      } catch (failoverErr) {
+        log.error(
+          { err: failoverErr, mirror: redactMongoUri(failoverUri) },
+          'DB FAILOVER FAILED: local mirror also unreachable — gateway running WITHOUT persistence',
+        );
+        throw primaryErr;
+      }
+      activateDbFailover({
+        primaryUriHost: redactMongoUri(config.database.uri),
+        failoverUriHost: redactMongoUri(failoverUri),
+        reason: (primaryErr as Error).message,
+      });
+      log.error(
+        {
+          primary: redactMongoUri(config.database.uri),
+          mirror: redactMongoUri(failoverUri),
+          reason: (primaryErr as Error).message,
+        },
+        'DB FAILOVER ACTIVE: serving READS from the local mirror in READ-ONLY degraded mode. ' +
+          'All writes are rejected until the primary is restored and the gateway restarted. ' +
+          'Mirror freshness = last `myai mirror` run.',
+      );
+    }
 
     TenantModel = mongoose.model<ITenant>('Tenant', tenantSchema);
     TenantApiKeyModel = mongoose.model<ITenantApiKey>('TenantApiKey', tenantApiKeySchema);
+    TenantDbBindingModel = mongoose.model<ITenantDbBinding>('TenantDbBinding', tenantDbBindingSchema);
     TenantSecretKeyModel = mongoose.model<ITenantSecretKey>('TenantSecretKey', tenantSecretKeySchema);
     GatewaySessionModel = mongoose.model<IGatewaySession>('GatewaySession', gatewaySessionSchema);
     AIPatternModel = mongoose.model<IAIPattern>('AIPattern', aiPatternSchema);
@@ -2031,10 +2476,14 @@ export async function connectDB(): Promise<typeof mongoose> {
     VectorModel = mongoose.model<IVector>('Vector', vectorSchema);
     TaskModel = mongoose.model<ITask>('Task', taskSchema);
     RunnerLeaseModel = mongoose.model<IRunnerLease>('RunnerLease', runnerLeaseSchema);
+    RunnerLeaseHistoryModel = mongoose.model<IRunnerLeaseHistory>('RunnerLeaseHistory', runnerLeaseHistorySchema);
     RunnerHeartbeatModel = mongoose.model<IRunnerHeartbeat>('RunnerHeartbeat', runnerHeartbeatSchema);
     FleetMaintenanceModel = mongoose.model<IFleetMaintenance>('FleetMaintenance', fleetMaintenanceSchema);
     ScheduleModel = mongoose.model<ISchedule>('Schedule', scheduleSchema);
     BudgetUsageModel = mongoose.model<IBudgetUsage>('BudgetUsage', budgetUsageSchema);
+    BudgetUsageRollupModel = mongoose.model<IBudgetUsageRollup>('BudgetUsageRollup', budgetUsageRollupSchema);
+    BudgetCapOverrideModel = mongoose.model<IBudgetCapOverride>('BudgetCapOverride', budgetCapOverrideSchema);
+    MrrSnapshotModel = mongoose.model<IMrrSnapshot>('MrrSnapshot', mrrSnapshotSchema);
     UsageEventModel = mongoose.model<IUsageEvent>('UsageEvent', usageEventSchema);
     NotificationModel = mongoose.model<INotification>('Notification', notificationSchema);
     PushSubscriptionModel = mongoose.model<IPushSubscription>('PushSubscription', pushSubscriptionSchema);
@@ -2063,6 +2512,7 @@ export async function connectDB(): Promise<typeof mongoose> {
     ArtifactModel = mongoose.model<IArtifact>('Artifact', artifactSchema);
     ErasureRequestModel = mongoose.model<IErasureRequest>('ErasureRequest', erasureRequestSchema);
     SpendAlertStateModel = mongoose.model<ISpendAlertState>('SpendAlertState', spendAlertStateSchema);
+    AtlasIndexHealthStateModel = mongoose.model<IAtlasIndexHealthState>('AtlasIndexHealthState', atlasIndexHealthStateSchema);
     MigrationRecordModel = mongoose.model<IMigrationRecord>('MigrationRecord', migrationRecordSchema);
 
     log.info({ db: config.database.name }, 'MongoDB connected');

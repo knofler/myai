@@ -19,6 +19,11 @@ import AutoRefresh from '@/components/auto-refresh';
 export const dynamic = 'force-dynamic';
 
 interface DayBucket { _id: string; count: number }
+// Execution-lane usage (task-47098709 / ADR_AGENTIC_FALLBACK_LANE.md) — the
+// $facet result grouping stamped tasks by executionLane across two trailing
+// windows in a single aggregate call.
+interface LaneBucket { _id: string; count: number }
+interface LaneFacet { d7: LaneBucket[]; d30: LaneBucket[] }
 interface SpendBucket { _id: string; cost: number; calls: number }
 interface PlanDoc { repo: string; status: string }
 interface ContinuityBucket { _id: string; tokens: number; boots: number }
@@ -109,6 +114,8 @@ export default async function AnalyticsPage() {
   const windowStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate() - (N - 1)));
   const monthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
   const rollingStart = new Date(Date.now() - ROLLING_WINDOW_HOURS * 3_600_000);
+  const lane30Start = new Date(Date.now() - 30 * 24 * 3_600_000);
+  const lane7Start = new Date(Date.now() - 7 * 24 * 3_600_000);
 
   const [
     throughput,
@@ -129,6 +136,7 @@ export default async function AnalyticsPage() {
     selfServeRetainedRows,
     burnMonth,
     burnRolling,
+    laneUsageRows,
   ] = await Promise.all([
     Task.aggregate<DayBucket>([
       { $match: { ...tf, status: 'done', completedAt: { $gte: windowStart } } },
@@ -217,6 +225,16 @@ export default async function AnalyticsPage() {
       { $match: { ...tf, createdAt: { $gte: rollingStart } } },
       { $group: { _id: null, output: { $sum: { $ifNull: ['$outputTokens', 0] } } } },
     ]),
+    // Execution-lane usage (task-47098709) — fallback (DeepSeek/Kimi) vs native
+    // Claude, over trailing 7d and 30d windows in a single $facet call. Only
+    // tasks the runner actually stamped a lane on count (executionLane exists).
+    Task.aggregate<LaneFacet>([
+      { $match: { ...tf, executionLane: { $exists: true }, updatedAt: { $gte: lane30Start } } },
+      { $facet: {
+        d30: [{ $group: { _id: '$executionLane', count: { $sum: 1 } } }],
+        d7: [{ $match: { updatedAt: { $gte: lane7Start } } }, { $group: { _id: '$executionLane', count: { $sum: 1 } } }],
+      } },
+    ]),
   ]);
 
   // Live gateway perf meter — in-process p95 + slow-query log (best-effort; the
@@ -288,6 +306,17 @@ export default async function AnalyticsPage() {
   const totalRuns = schedules.reduce((s, x) => s + (x.runCount ?? 0), 0);
   const totalErrs = schedules.reduce((s, x) => s + (x.errorCount ?? 0), 0);
   const runnerRate = totalRuns > 0 ? Math.round(((totalRuns - totalErrs) / totalRuns) * 100) : 100;
+
+  // Execution-lane usage — fallback (DeepSeek/Kimi) vs native Claude, 7d/30d.
+  function laneSummary(rows: LaneBucket[]) {
+    const claude = rows.find((r) => r._id === 'claude')?.count ?? 0;
+    const fallback = rows.find((r) => r._id === 'agentic-fallback')?.count ?? 0;
+    const total = claude + fallback;
+    return { claude, fallback, total, pct: total > 0 ? Math.round((fallback / total) * 100) : 0 };
+  }
+  const laneFacet = laneUsageRows[0] ?? { d7: [], d30: [] };
+  const lane7 = laneSummary(laneFacet.d7);
+  const lane30 = laneSummary(laneFacet.d30);
 
   // Activation funnel — distinct tenants per step, per-step conversion, and the
   // headline activation rate (activated ÷ signed up).
@@ -429,12 +458,18 @@ export default async function AnalyticsPage() {
       </div>
 
       {/* Headline stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-8">
         <StatCard label={`Tasks done (${N}d)`} value={tputTotal} sub={`~${tputAvg.toFixed(1)}/day`} accent="green" />
         <StatCard label="Task success rate" value={`${successRate}%`} sub={`${doneTotal} done · ${blockedTotal} blocked`} accent={successRate >= 90 ? 'green' : 'yellow'} />
         <StatCard label="Runner success" value={`${runnerRate}%`} sub={`${totalRuns} runs · ${totalErrs} err`} accent={runnerRate >= 90 ? 'green' : 'yellow'} />
         <StatCard label={`Spend (${N}d)`} value={fmtUsd(spendTotal)} sub={`${workingNow} working now`} accent="blue" />
         <StatCard label="Tokens saved (month)" value={fmtTokens(contMonth.tokens)} sub={`${contMonth.boots} boots · ${fmtTokens(contAll.tokens)} all-time`} accent="green" />
+        <StatCard
+          label="Fallback lane usage"
+          value={lane7.total > 0 ? `${lane7.pct}%` : '—'}
+          sub={`7d: ${lane7.fallback}/${lane7.total} · 30d: ${lane30.total > 0 ? `${lane30.pct}%` : '—'} (${lane30.fallback}/${lane30.total})`}
+          accent={lane7.total === 0 ? 'gray' : lane7.pct >= 50 ? 'yellow' : 'blue'}
+        />
       </div>
 
       {/* Task throughput */}

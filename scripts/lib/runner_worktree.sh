@@ -14,10 +14,15 @@
 #
 # bash 3.2-safe — no associative arrays, no mapfile.
 
-# wt_sanitize <string> — git branch/path-safe: keep [A-Za-z0-9/_.-], everything
-# else becomes '-'. Used on tenant ids and task ids before they land in a path
-# or ref name (both may contain arbitrary characters from the queue/registry).
-wt_sanitize() { printf '%s' "$1" | tr -c 'A-Za-z0-9/_.-' '-'; }
+# wt_sanitize <string> — a single branch/path SEGMENT: keep [A-Za-z0-9_-],
+# everything else becomes '-'. Used on tenant ids, repo names, and task ids
+# before they land in a path or ref name (all may contain arbitrary characters
+# from the queue/registry). '.' and '/' are deliberately EXCLUDED from the safe
+# set: a crafted tenant id like '../../etc' would otherwise survive verbatim
+# and traverse OUT of the worktree root in wt_dir — whose result wt_create
+# feeds to `rm -rf`. Separators belong to the fixed templates below only,
+# never to the input.
+wt_sanitize() { printf '%s' "$1" | tr -c 'A-Za-z0-9_-' '-'; }
 
 # wt_branch_name <tenantId> <taskId> — the unique local branch a task's
 # worktree is checked out on. Never collides across tenants or tasks, so N
@@ -31,6 +36,16 @@ wt_branch_name() {
 # share a directory even if task ids ever collided across tenants.
 wt_dir() {
     printf '%s/.worktrees/%s/%s-%s' "$1" "$(wt_sanitize "${3:-default}")" "$(wt_sanitize "$2")" "$(wt_sanitize "$4")"
+}
+
+# wt_path_tenant <worktree_dir> — extract the (sanitized) tenant segment from a
+# wt_dir-shaped path (<root>/.worktrees/<tenant>/<repo>-<taskId>). rc 1 when the
+# path doesn't look like a wt_dir product. Lets the stale sweep resolve which
+# tenant OWNS a worktree, so its age check can use that tenant's own cap.
+wt_path_tenant() {
+    case "$1" in */.worktrees/*/*) : ;; *) return 1 ;; esac
+    local rest="${1##*/.worktrees/}"
+    printf '%s' "${rest%%/*}"
 }
 
 # wt_create <base_repo_dir> <worktree_dir> <branch> <base_ref> — create (or
@@ -61,13 +76,19 @@ wt_remove() {
     return 0
 }
 
-# wt_list_stale <base_repo_dir> <worktrees_root> <max_age_sec> [now_epoch] —
+# wt_list_stale <base_repo_dir> <worktrees_root> <max_age_sec> [now_epoch] [age_fn] —
 # print "path<TAB>branch" for every registered worktree under <worktrees_root>
 # whose directory is older than <max_age_sec>. Read-only (no removal) so it's
 # unit-testable independent of wt_remove. Guards against a worktree left behind
 # by a hard crash (the script's own EXIT-trap cleanup handles the normal case).
+# [age_fn] (optional): name of a function called with each worktree's path; if
+# it prints a numeric max-age-sec, THAT threshold is used for the path instead
+# of the sweep-wide <max_age_sec> (rc!=0 / empty / non-numeric → fall back).
+# This is how the runner sizes each age check to the OWNING tenant's resolved
+# maxMinutes override rather than the global default cap.
 wt_list_stale() {
-    local base="$1" root="$2" max_age="${3:-3600}" now="${4:-$(date +%s)}"
+    local base="$1" root="$2" max_age="${3:-3600}" now="${4:-}" age_fn="${5:-}"
+    [ -n "$now" ] || now="$(date +%s)"
     local porcelain path="" branch="" mtime age line
     # `git worktree list --porcelain` reports each worktree's CANONICAL path
     # (symlinks resolved, e.g. macOS /tmp → /private/tmp) — resolve $root the
@@ -91,7 +112,11 @@ wt_list_stale() {
         mtime=$(stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null || printf '%s' "$now")
         case "$mtime" in ''|*[!0-9]*) mtime="$now" ;; esac   # never let a non-numeric value break the age math
         age=$(( now - mtime ))
-        [ "$age" -ge "$max_age" ] && printf '%s\t%s\n' "$path" "$branch"
+        local cap="$max_age" per
+        if [ -n "$age_fn" ] && per="$("$age_fn" "$path" 2>/dev/null)"; then
+            case "$per" in ''|*[!0-9]*) : ;; *) cap="$per" ;; esac
+        fi
+        [ "$age" -ge "$cap" ] && printf '%s\t%s\n' "$path" "$branch"
     }
     while IFS= read -r line; do
         case "$line" in
@@ -105,17 +130,18 @@ EOF
     _wt_emit_if_stale   # the final record has no trailing blank-line trigger
 }
 
-# wt_prune_stale <base_repo_dir> <worktrees_root> <max_age_sec> [now_epoch] —
+# wt_prune_stale <base_repo_dir> <worktrees_root> <max_age_sec> [now_epoch] [age_fn] —
 # remove every stale worktree wt_list_stale finds. Safe to call on every fire
 # (cheap no-op when nothing is stale); mirrors the runner's existing stale-slot
-# pruning pattern (SLOT_ROOT) at the top of cli_task_runner.sh.
+# pruning pattern (SLOT_ROOT) at the top of cli_task_runner.sh. [age_fn] is
+# threaded through to wt_list_stale (per-path threshold, see there).
 wt_prune_stale() {
-    local base="$1" root="$2" max_age="$3" now="${4:-$(date +%s)}" path branch TAB
+    local base="$1" root="$2" max_age="$3" now="${4:-}" age_fn="${5:-}" path branch TAB
     TAB="$(printf '\t')"
     while IFS="$TAB" read -r path branch; do
         [ -z "$path" ] && continue
         wt_remove "$base" "$path" "$branch"
     done <<EOF
-$(wt_list_stale "$base" "$root" "$max_age" "$now")
+$(wt_list_stale "$base" "$root" "$max_age" "$now" "$age_fn")
 EOF
 }

@@ -41,6 +41,11 @@ export interface NotificationHistoryEntry {
   sentAt: Date;
   success: boolean;
   error?: string;
+  /** Delivery-path storm-collapse burst id (see notifications/dedup.ts). When set,
+   *  this write upserts onto the existing row for the same (tenantId, dedupKey)
+   *  instead of creating a new document — repeats collapse into one entry. */
+  dedupKey?: string;
+  count?: number;
 }
 
 // ── Level prefix mapping ─────────────────────────────────
@@ -91,6 +96,16 @@ async function storeNotification(tenantId: string, entry: NotificationHistoryEnt
   try {
     const { NotificationModel } = await import('../shared/db.js');
     if (!NotificationModel) return;
+    if (entry.dedupKey) {
+      // Storm collapse: repeats with the same burst id update the one row
+      // (bumping `count`/message in place) instead of inserting a new document.
+      await NotificationModel.findOneAndUpdate(
+        { ...tenantScope(tenantId), dedupKey: entry.dedupKey },
+        { $set: { ...tenantScope(tenantId), ...entry } },
+        { upsert: true },
+      );
+      return;
+    }
     await NotificationModel.create({ ...tenantScope(tenantId), ...entry });
   } catch (err) {
     log.warn({ err }, 'Failed to store notification in DB');

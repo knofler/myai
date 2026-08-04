@@ -21,7 +21,7 @@
 // and every entry point returns a `reason` rather than throwing.
 
 import { stripeForm, type TenantPlan } from './billing';
-import { UsageEvent } from './db';
+import { Tenant, UsageEvent } from './db';
 
 const STRIPE_API = 'https://api.stripe.com/v1';
 
@@ -285,5 +285,95 @@ export async function invoiceTenantOverage(opts: {
     reason: okCount === items.length ? undefined : 'partial',
     periodKey,
     items,
+  };
+}
+
+// ── Fleet sweep (period-boundary job) ─────────────────────────
+// The automation that turns the per-tenant push into a REAL billing pipeline:
+// at a period boundary (operator/cron — same invocation posture as
+// scheduler/quota-reset-sweep.ts and the SLA-credit job), walk every
+// overage-billed tenant with a Stripe customer and report the just-ended
+// period's overage. Per-tenant isolation: one tenant's failure never aborts
+// the rest. Idempotent end-to-end — re-running the sweep re-sends the same
+// meter-event identifiers, which Stripe dedupes.
+
+/** The tenant fields the sweep needs. Injectable so the orchestration is
+ *  unit-testable without Mongo (same discipline as invoiceTenantOverage). */
+export interface SweepTenant {
+  tenantId: string;
+  plan: TenantPlan;
+  stripeCustomerId?: string;
+}
+
+export interface OverageSweepTenantResult extends OverageResult {
+  tenantId: string;
+  usage?: UsageTotals;
+  error?: string; // meter read threw — nothing was reported for this tenant
+}
+
+export interface OverageSweepResult {
+  period: { from: string; to: string };
+  scanned: number;   // overage-billed tenants with a Stripe customer examined
+  reported: number;  // tenants with >= 1 accepted meter event
+  skipped: number;   // no-overage / no-customer skips
+  failed: number;    // meter read threw, or every line was rejected by Stripe
+  tenants: OverageSweepTenantResult[];
+}
+
+/** All overage-billed tenants that can actually be invoiced (Stripe customer
+ *  attached). Plans outside OVERAGE_PLANS are excluded at the query. */
+async function listOverageTenants(): Promise<SweepTenant[]> {
+  const rows = await Tenant.find(
+    { plan: { $in: OVERAGE_PLANS as TenantPlan[] }, stripeCustomerId: { $exists: true, $nin: [null, ''] } },
+    { tenantId: 1, plan: 1, stripeCustomerId: 1 },
+  ).lean();
+  return rows as unknown as SweepTenant[];
+}
+
+/**
+ * Report overage for EVERY billable tenant over one billing period. Deps are
+ * injectable for tests; production callers pass only the period. Assumes the
+ * caller has already checked `isOverageConfigured()` (the route 503s first) —
+ * when it isn't, every tenant just resolves `reason: 'disabled'` harmlessly.
+ */
+export async function runOverageSweep(opts: {
+  periodStart: Date;
+  periodEnd: Date;
+  tenants?: SweepTenant[];
+  readUsage?: (tenantId: string, window: { from: Date; to?: Date }) => Promise<UsageTotals>;
+}): Promise<OverageSweepResult> {
+  const readUsage = opts.readUsage ?? getOverageUsage;
+  const tenants = opts.tenants ?? (await listOverageTenants());
+
+  const results: OverageSweepTenantResult[] = [];
+  for (const tenant of tenants) {
+    try {
+      const usage = await readUsage(tenant.tenantId, { from: opts.periodStart, to: opts.periodEnd });
+      const result = await invoiceTenantOverage({
+        plan: tenant.plan,
+        stripeCustomerId: tenant.stripeCustomerId,
+        totals: usage,
+        periodEnd: opts.periodEnd,
+      });
+      results.push({ tenantId: tenant.tenantId, usage, ...result });
+    } catch (err) {
+      // Meter read failed — record and continue with the next tenant.
+      results.push({
+        tenantId: tenant.tenantId,
+        reported: false,
+        periodKey: opts.periodEnd.toISOString().slice(0, 10),
+        items: [],
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  return {
+    period: { from: opts.periodStart.toISOString(), to: opts.periodEnd.toISOString() },
+    scanned: tenants.length,
+    reported: results.filter((r) => r.reported).length,
+    skipped: results.filter((r) => !r.reported && !r.error && r.reason !== 'partial').length,
+    failed: results.filter((r) => !!r.error || (!r.reported && r.reason === 'partial')).length,
+    tenants: results,
   };
 }

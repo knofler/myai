@@ -8,6 +8,321 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-08-04
+
+### Added
+- feat(marketplace): package myai-marketplace CLI as an installable bin (ADR-028 §6)
+- feat(db): ADR-030 §2 getConnectionForTenant chokepoint — shared-tier no-op path
+- feat(db): ADR-030 §4 isolationTier field + TenantDbBinding collection (schema-only)
+- feat(marketplace): ADR-029 §5/§6 staging TTL sweep + per-tenant artifact upload quota
+- feat(marketplace): ADR-029 §4 fetch-time artifact hash-recheck helper
+- feat(marketplace): wire marketplace_publish upload path to the ADR-029 artifact store
+- feat(runner): reap stale 'working' tasks past leaseUntil back to pending
+- feat(runner): wire Codex/Gemini CLIs as L4 external-CLI runner backends
+- feat(marketplace): ADR-029 artifact put/get-by-key interface + local backend
+- feat(marketplace): operator review-queue UI with declaredTools widening diff (ADR-028 §4)
+- feat(rbac): export marketplaceExposableTools() allowlist (ADR-028 §5)
+- feat(marketplace): implement myai-marketplace validate/pack local CLI (ADR-028 §3)
+- Merge pull request #400 from knofler/test
+- feat(marketplace): implement marketplace_publish MCP tool (ADR-019 #2, ADR-028 §3)
+- feat(ops): archive fully-popped prefixes of runner_backlog.jsonl
+- feat(ops): schema/lint check for config/runner_backlog.jsonl
+- feat(ops): surface queue_topup.sh planner drift on the SCHEDULE banner
+- feat(ops): false-healthy empty-queue detector for the fleet
+- feat(dashboard): replace connect 'coming soon' placeholder on /showcase with real content
+- feat(dashboard): replace agentFlow 'coming soon' placeholder on /showcase with real content
+- feat(fleet): wire ADR-015 §3 — FleetRun for the /projects fan-out composer
+- feat(dashboard): surface task-defer starvation on /work Up Next tab
+- feat(brain): implement B-4's $MYAI_RERANK_CMD hook backend
+- feat(observability): promote pricing-staleness warning to SCHEDULE banner
+- feat(soc2): continuous evidence store for Type II observation window (ADR-013 §5 follow-up)
+- feat(billing): daily usage-metering reconcile sweep (ADR-014 follow-up)
+- feat(runner): runner-lease runs log + dashboard view (ADR-011 slice 7)
+- feat(runner): concurrency-lease dual-account binding (ADR-011 slice 6)
+- feat(marketplace): Stripe Connect payout wiring for revenue-share enforcement (ADR-019 follow-up #4)
+- feat(dashboard): surface work-type routing decision on task views (task-de8b40ff)
+- feat(dashboard): surface agentic-fallback per-provider pass-rate on PoolCapacityPanel
+- feat(myai-init): default greenfield scaffolds to bypassPermissions
+- feat(runner): wire all-pools-capped exhaustion into agentic_fallback demotion lane
+- feat(hooks): surface backlog-well-low warning on the SCHEDULE banner (task-d8a33c2f)
+- feat(monitoring): alert on N consecutive route_task_model exhaustion defers
+- feat(monitoring): wire pool-capacity drift detection into the alert pipeline
+- feat(dashboard): Retrieval strategy card surfacing the retrieval_bandit's favored arm
+- feat(observability): lane filter chip + fallback-ratio stat for execution-lane stamp (task-47098709)
+- feat(budgets): add one-click apply for adaptive budget-cap suggestions
+- feat(repos): tag headless new-app self-registration with its own provenance
+- feat(observability): surface agentic-fallback day-ledger on dashboard + session close (task-eac0704e)
+- feat(dashboard): add gift-codes admin tab (mint/list/revoke)
+- feat(agentic-fallback): opt-in queue-depth overflow trigger (ADR follow-up)
+- feat(agentic-fallback): per-provider quality ledger + rolling pass-rate
+- feat(agentic-fallback): pre-run pricing-staleness check for DeepSeek/Kimi $/token table
+- feat(router): wire the 13-work-type routing table from MULTI_PROVIDER_ORCHESTRATION.md §3
+- feat(cli): wire `myai new-app <idea>` to agentFlow's headless pipeline
+- feat(gateway): pool-capacity ground-truth drift self-check (task-0824a68e)
+- feat(brain): ADR-023 Slice P2/P3 — onboarding upsell moment + cross-machine-sync KPI
+- feat(doctor): warn when the runner-backlog well runs low (task-618ccbe7)
+- feat(alerts): proactive alert on the API-credit RESERVE hard cap (task-d383b7e8)
+- feat(brain): wire retrieval_bandit's recommended config into live B-3/B-4 loop
+- feat(ops): proactive Docker VM disk-pressure guard before mongo WT_PANIC
+- feat(dashboard): hosted-brain provisioning UI (ADR-023 Slice P1a)
+- feat(revenue): nightly MRR-snapshot job + real historical NRR cohorts
+- feat(security): admin surface for per-org MCP tool visibility override (task-01af5b05)
+- feat(dashboard): surface adaptive budget-cap suggestions (Phase 5b §8 follow-up)
+- feat(ops): push alert for the mongo-mirror schedule check (task-906c973f)
+- feat(governance): audit-log PATCH /api/hooks toggles (task-bd18a5ec)
+- feat(runner): stamp execution lane (claude|agentic-fallback) on task docs (task-b1776200)
+- feat(brain): thread ADR-020 topic/tier into B-8 bundle ordering (task-82e5416b)
+- feat(dashboard): Fleet Overview v0 observability fields on /projects (task-5911555d)
+- feat(rbac): persist shadow-mode denials + surface a soak panel (ADR-013 §6)
+- feat(ci): guard MCP tool surface against silent regression (Mythos Track 3)
+- feat(router): stamp {routedProfile,routedModel,routedComplexity} on tasks for dashboard audit trail
+- feat(monitoring): alert on repeated Atlas index recreate-on-wrong-type self-heal
+- feat(monitoring): alert on agentic-fallback lane's own USD day-ledger cap (task-f5897132)
+- feat(docs): capability-counts drift guard — derive shipped truth, block stale releases (task-cebe9567)
+- feat(ci): auditable JSONL ledger for local-ci.sh posted commit statuses
+- feat(llm): OpenRouter backend for the Kimi tier — free K2 lane without a paid Moonshot key (task-13b8f283)
+- feat(ci): tracked-file hygiene gate — machine-local ledgers can never enter the index (task-3e11b004)
+- feat(notifications): content-hash dedup + per-channel storm collapse in delivery path
+- feat(dashboard): add loading + error boundaries to control-plane routes
+- feat(llm): wire Gemini API as a Class-B gateway provider (task-1351f6ee)
+- feat(repos): seed repocards-only repos into the tenant roster (ADR-021 Phase 2 tail, task-30683891)
+- feat(brain): brain_lookup v2 — embedding-scored branch selection (task-62c8c6b8)
+- feat(brain): ADR-020 one-time topic backfill pass + untagged-atom drift report (task-30874db9)
+- feat(ops): myai sync schedule — installable timer for mongo_sync.sh + staleness alert (ADR-022)
+- feat(dashboard): /marketplace — ADR-019 catalog browse + free-tier install UI (task-4ea6f99f)
+- feat(brain): git-over-HTTP transport route for the hosted brain remote (ADR-017 deferred slice)
+- feat(brain): explicit topic on every bash/runner brain_commit caller (ADR-020 rollout tail) (task-dfe2cbb7)
+- feat(security): enforce RBAC capabilities on the MCP tool surface (task-6ff79627)
+- feat(cli): myai setup — global first-run brain wizard
+- feat(memory): feed brain session atoms into the RAG vector corpus
+- feat(budget): add BudgetUsage daily/weekly rollup model for analytics
+- feat(runner): anti-destructive guard for local-tier (qwen) commits
+- feat(runner): capability×cost×availability model/account router (task-21dc2746)
+- feat(brain): B-2 boot manifest in the boot path + B-8 prompt-cache-aware bundle ordering (task-463fce7d)
+- feat(runner): $155 personal API credit as capped metered-fallback RESERVE pool (task-874364a3)
+- feat(dashboard): hook enable/disable toggle from the UI — settings.json-backed (task-7ad7cb6d)
+- feat(billing): downloadable branded invoice PDF — SDK-free Stripe fetch + built-in PDF writer (task-4dff7336)
+- feat(monitoring): pool-capacity threshold alert — push when a subscription pool's weekly budget runs low (task-81e269ed)
+- feat(billing): wire the usage meter into a real Stripe overage push — premium stamping + fleet period-end sweep (task-b3e501e8)
+- feat(runner): non-Claude agentic fallback lane — DeepSeek/Kimi real edit→test→commit→push for Claude session-cap windows (task-4f813e39)
+- feat(qa): external-repo fresh-install init E2E — 3 real stacks in a clean container (task-502c1aba)
+- feat(ops): schedule the Atlas→local mongo mirror (launchd/cron) + doctor last-run check (task-b4c58215)
+- feat(gateway): read-side local-first DB failover — MYAI_DB_FAILOVER=local (task-605e90b6)
+- feat(runner): capacity-aware Fable auto-routing + all-3-models standard (task-56e65748)
+- Merge pull request #392 from knofler/test
+- feat(runner): Fable is mainstream — default worker model + pacing-ledger exemption
+- feat(gateway): Docker MCP Toolkit catalog packaging for myAI (Phase 7)
+- feat(budget): adaptive budget-cap suggestions from historical spend (Phase 5b §8)
+- Merge pull request #391 from knofler/test
+- feat(brain): ADR-020 topic-indexed GOLD/SILVER/BRONZE hierarchy + brain_lookup
+- feat(hooks): session-start brain status sign (orange 🧠)
+
+### Fixed
+- fix(mcp): inline WORK_TYPE_ENUM into tool defs + refresh tool-surface baseline (132)
+- fix(security): gate marketplace review-queue routes to operator-only (403)
+- fix(compliance): wire runErasureSweep into the daily scheduler
+- Merge pull request #399 from knofler/test
+- fix(ops): queue_topup reads tasks JSON from stdin, not argv (ARG_MAX)
+- fix(billing): mark usage-reconcile sweep as sanctioned cross-tenant (ADR-010 §3.4)
+- fix(ops): archive_runner_backlog reads tasks JSON from stdin, not argv
+- fix(runner): PLANNER duplicate-guard must check working/review, not just pending
+- fix(budgets): wire BudgetCapOverride into gateway enforcement path
+- fix(gateway): inventory brain_bandit_stats in TOOL_CAPS + contracts; pin budget tests to mid-month
+- fix(selfheal): escalate gateway image-staleness warning across consecutive sessions
+- fix(brain): close free-tier rotate loophole in hosted-brain plan gate
+- fix(security): B-9 obfuscation salt — no shared fixed-default, mint+persist per-install salt
+- fix(tests): resolve the 6 untracked pre-existing vitest failures
+- fix(sdk): regenerate TS/Python SDKs for hooks-toggle + tenant MCP-tools endpoints
+- fix: 2 test-gate failures from the overnight runner batch
+- fix(runner): route_task_model exhaustion branch — defer instead of stall/misroute
+- fix(tasks): guard against unauthorized bulk pending→blocked transitions
+- fix(monitoring): broaden Atlas index health alert to all non-ok self-heal outcomes
+- fix(runner): apply per-task worktree isolation to the default tenant too (task-6adc8df1)
+- fix(rbac): gate webhook mutations + memory/vector import routes
+- fix: restore scripts/fleet_resume.sh gutted by local-tier automated fix
+- fix(planner): drop 2 items from the just-pushed refill made stale by concurrent test-branch work
+- fix(security): remove stray unsanitized wt_sanitize redefinition in cli_task_runner.sh fallback
+- fix(release): npm-auth preflight + post-publish verification in publish_release.sh
+- fix(security): eliminate the well-known default GATEWAY_LOCAL_TOKEN (task-7f8b20a3)
+- fix(ollama): write-time guard on local-tier tool_write_file + finish 4ece268 repair
+- fix(billing): dedup Stripe webhook deliveries + out-of-order guard
+- fix(git): restore .gitignore from main (qwen 4ece268 gutted 88 rules)
+- fix(memory): provision the Atlas $vectorSearch index + boot-time self-heal (task-b875cf92)
+- fix(init): stage init artifacts individually — missing .mcp.json no longer aborts the greenfield init commit
+- fix(runner): stale-worktree sweep + working-watchdog honor per-tenant maxMinutes
+- fix(security): wt_sanitize permits '.' and '/' — tenant-id path traversal in worktree paths
+- Merge pull request #390 from knofler/test
+- fix(memory): repair RAG vector retrieval returning empty for all queries
+
+### Performance
+- perf(runner): consolidate pick/resolve field extraction into one python3 parse
+
+> 150+ commits since `v0.6.4` — grouped below by conventional-commit type. State/handoff
+> checkpoint commits (`chore(state): ...`), routine runner-backlog refills
+> (`chore(planner): refill runner backlog well ...`), and local-tier auto-fix/revert noise
+> are intentionally omitted as non-user-facing.
+
+### Added
+- feat(dashboard): `/marketplace` — ADR-019 catalog browse + listing/install UI. Published-only catalog with search + kind/category filters, listing detail (versions table with manifest-hash integrity anchor), and an install panel driving the specced install state machine (install gate → active ↔ disabled → uninstalled, tenant-scoped). Free-tier installs only — paid listings render with pricing but return 402 at the install boundary until the Stripe charge/payout follow-ups land. Catalog seeds from the ADR-019 fixtures; installs live in process memory pending the deferred gateway db.ts store.
+- feat(runner): concurrency-lease dual-account binding (ADR-011 slice 6) — `runner_lease_heartbeat` now validates the caller's current Claude account/profile against the account the lease slot was acquired with; a mismatch (`CLAUDE_CONFIG_DIR` resolution drift) releases the slot instead of extending it, so the fleet reclaims it rather than trust a stale account binding.
+- feat(dashboard): replace connect 'coming soon' placeholder on /showcase with real content
+- feat(dashboard): replace agentFlow 'coming soon' placeholder on /showcase with real content
+- feat(fleet): wire ADR-015 §3 — FleetRun for the /projects fan-out composer
+- feat(dashboard): surface task-defer starvation on /work Up Next tab
+- feat(brain): implement B-4's $MYAI_RERANK_CMD hook backend
+- feat(observability): promote pricing-staleness warning to SCHEDULE banner
+- feat(soc2): continuous evidence store for Type II observation window (ADR-013 §5 follow-up)
+- feat(billing): daily usage-metering reconcile sweep (ADR-014 follow-up)
+- feat(runner): runner-lease runs log + dashboard view (ADR-011 slice 7)
+- feat(marketplace): Stripe Connect payout wiring for revenue-share enforcement (ADR-019 follow-up #4)
+- feat(dashboard): surface work-type routing decision on task views
+- feat(dashboard): surface agentic-fallback per-provider pass-rate on PoolCapacityPanel
+- feat(myai-init): default greenfield scaffolds to bypassPermissions
+- feat(runner): wire all-pools-capped exhaustion into agentic_fallback demotion lane
+- feat(hooks): surface backlog-well-low warning on the SCHEDULE banner
+- feat(monitoring): alert on N consecutive route_task_model exhaustion defers
+- feat(monitoring): wire pool-capacity drift detection into the alert pipeline
+- feat(dashboard): Retrieval strategy card surfacing the retrieval_bandit's favored arm
+- feat(observability): lane filter chip + fallback-ratio stat for execution-lane stamp
+- feat(budgets): add one-click apply for adaptive budget-cap suggestions
+- feat(repos): tag headless new-app self-registration with its own provenance
+- feat(observability): surface agentic-fallback day-ledger on dashboard + session close
+- feat(dashboard): add gift-codes admin tab (mint/list/revoke)
+- feat(agentic-fallback): opt-in queue-depth overflow trigger (ADR follow-up)
+- feat(agentic-fallback): per-provider quality ledger + rolling pass-rate
+- feat(agentic-fallback): pre-run pricing-staleness check for DeepSeek/Kimi $/token table
+- feat(router): wire the 13-work-type routing table from MULTI_PROVIDER_ORCHESTRATION.md §3
+- feat(cli): wire `myai new-app <idea>` to agentFlow's headless pipeline
+- feat(gateway): pool-capacity ground-truth drift self-check
+- feat(brain): ADR-023 Slice P2/P3 — onboarding upsell moment + cross-machine-sync KPI
+- feat(doctor): warn when the runner-backlog well runs low
+- feat(alerts): proactive alert on the API-credit RESERVE hard cap
+- feat(brain): wire retrieval_bandit's recommended config into live B-3/B-4 loop
+- feat(ops): proactive Docker VM disk-pressure guard before mongo WT_PANIC
+- feat(dashboard): hosted-brain provisioning UI (ADR-023 Slice P1a)
+- feat(revenue): nightly MRR-snapshot job + real historical NRR cohorts
+- feat(security): admin surface for per-org MCP tool visibility override
+- feat(dashboard): surface adaptive budget-cap suggestions (Phase 5b §8 follow-up)
+- feat(ops): push alert for the mongo-mirror schedule check
+- feat(governance): audit-log PATCH /api/hooks toggles
+- feat(runner): stamp execution lane (claude|agentic-fallback) on task docs
+- feat(brain): thread ADR-020 topic/tier into B-8 bundle ordering
+- feat(dashboard): Fleet Overview v0 observability fields on /projects
+- feat(rbac): persist shadow-mode denials + surface a soak panel (ADR-013 §6)
+- feat(ci): guard MCP tool surface against silent regression (Mythos Track 3)
+- feat(router): stamp {routedProfile,routedModel,routedComplexity} on tasks for dashboard audit trail
+- feat(monitoring): alert on repeated Atlas index recreate-on-wrong-type self-heal
+- feat(monitoring): alert on agentic-fallback lane's own USD day-ledger cap
+- feat(docs): capability-counts drift guard — derive shipped truth, block stale releases
+- feat(ci): auditable JSONL ledger for local-ci.sh posted commit statuses
+- feat(llm): OpenRouter backend for the Kimi tier — free K2 lane without a paid Moonshot key
+- feat(ci): tracked-file hygiene gate — machine-local ledgers can never enter the index
+- feat(notifications): content-hash dedup + per-channel storm collapse in delivery path
+- feat(dashboard): add loading + error boundaries to control-plane routes
+- feat(llm): wire Gemini API as a Class-B gateway provider
+- feat(repos): seed repocards-only repos into the tenant roster (ADR-021 Phase 2 tail)
+- feat(brain): brain_lookup v2 — embedding-scored branch selection
+- feat(brain): ADR-020 one-time topic backfill pass + untagged-atom drift report
+- feat(ops): myai sync schedule — installable timer for mongo_sync.sh + staleness alert (ADR-022)
+- feat(brain): git-over-HTTP transport route for the hosted brain remote (ADR-017 deferred slice)
+- feat(brain): explicit topic on every bash/runner brain_commit caller (ADR-020 rollout tail)
+- feat(security): enforce RBAC capabilities on the MCP tool surface
+- feat(cli): myai setup — global first-run brain wizard
+- feat(memory): feed brain session atoms into the RAG vector corpus
+- feat(budget): add BudgetUsage daily/weekly rollup model for analytics
+- feat(runner): anti-destructive guard for local-tier (qwen) commits
+- feat(runner): capability×cost×availability model/account router
+- feat(brain): B-2 boot manifest in the boot path + B-8 prompt-cache-aware bundle ordering
+- feat(runner): $155 personal API credit as capped metered-fallback RESERVE pool
+- feat(dashboard): hook enable/disable toggle from the UI — settings.json-backed
+- feat(billing): downloadable branded invoice PDF — SDK-free Stripe fetch + built-in PDF writer
+- feat(monitoring): pool-capacity threshold alert — push when a subscription pool's weekly budget runs low
+- feat(billing): wire the usage meter into a real Stripe overage push — premium stamping + fleet period-end sweep
+- feat(runner): non-Claude agentic fallback lane — DeepSeek/Kimi real edit→test→commit→push for Claude session-cap windows
+- feat(qa): external-repo fresh-install init E2E — 3 real stacks in a clean container
+- feat(ops): schedule the Atlas→local mongo mirror (launchd/cron) + doctor last-run check
+- feat(gateway): read-side local-first DB failover — MYAI_DB_FAILOVER=local
+- feat(runner): capacity-aware Fable auto-routing + all-3-models standard
+- feat(runner): Fable is mainstream — default worker model + pacing-ledger exemption
+- feat(gateway): Docker MCP Toolkit catalog packaging for myAI (Phase 7)
+- feat(budget): adaptive budget-cap suggestions from historical spend (Phase 5b §8)
+- feat(brain): ADR-020 topic-indexed GOLD/SILVER/BRONZE hierarchy + brain_lookup
+- feat(hooks): session-start brain status sign (orange 🧠)
+
+### Fixed
+- fix(budgets): wire BudgetCapOverride into gateway enforcement path
+- fix(gateway): inventory brain_bandit_stats in TOOL_CAPS + contracts; pin budget tests to mid-month
+- fix(selfheal): escalate gateway image-staleness warning across consecutive sessions
+- fix(brain): close free-tier rotate loophole in hosted-brain plan gate
+- fix(tests): resolve the 6 untracked pre-existing vitest failures
+- fix(sdk): regenerate TS/Python SDKs for hooks-toggle + tenant MCP-tools endpoints
+- fix: 2 test-gate failures from the overnight runner batch
+- fix(runner): route_task_model exhaustion branch — defer instead of stall/misroute
+- fix(tasks): guard against unauthorized bulk pending→blocked transitions
+- fix(monitoring): broaden Atlas index health alert to all non-ok self-heal outcomes
+- fix(runner): apply per-task worktree isolation to the default tenant too
+- fix(rbac): gate webhook mutations + memory/vector import routes
+- fix(release): npm-auth preflight + post-publish verification in publish_release.sh
+- fix(ollama): write-time guard on local-tier tool_write_file + finish 4ece268 repair
+- fix(billing): dedup Stripe webhook deliveries + out-of-order guard
+- fix(git): restore .gitignore from main (qwen 4ece268 gutted 88 rules)
+- fix(memory): provision the Atlas $vectorSearch index + boot-time self-heal
+- fix(init): stage init artifacts individually — missing .mcp.json no longer aborts the greenfield init commit
+- fix(runner): stale-worktree sweep + working-watchdog honor per-tenant maxMinutes
+- fix(memory): repair RAG vector retrieval returning empty for all queries
+
+### Security
+- security(mcp): per-org tool visibility — hide operator-only tools from tenants
+- fix(security): B-9 obfuscation salt — no shared fixed-default, mint+persist per-install salt
+- fix(security): remove stray unsanitized wt_sanitize redefinition in cli_task_runner.sh fallback
+- fix(security): eliminate the well-known default GATEWAY_LOCAL_TOKEN
+- fix(security): wt_sanitize permits '.' and '/' — tenant-id path traversal in worktree paths
+
+### Changed
+- rollout(agentic-overflow): activation checklist + before/after canary comparison
+- rollout(inline-exec): wire the missing activation cron for ADR-018 inline lane
+- decide(B-9): keep BRAIN_OBFUSCATE_REMOTE default off; document recall risk + salt gap
+- decide(ADR-020): keep BRAIN_LOOKUP_EMBED default off; fix silent hash-fallback gap
+- chore(billing): wire the monthly overage-sweep endpoint to an actual scheduled trigger
+- chore(brain): bundle tiktoken into the gateway image for exact brain_token_eval.py counts
+- build(release): make npm publish + public mirror sync one atomic routine
+- perf(runner): consolidate pick/resolve field extraction into one python3 parse
+
+### Tests
+- test(ops): regression-lock Docker VM disk snapshot as cwd/worktree-invariant
+- test(inline-exec): lock in OFF-path regression for ADR-018 default
+- test(brain): exercise compactManifest's budget-pressure drop through a real tight-budget boot
+- test(mcp): drift smoke test for the Docker MCP catalog file (Phase 7)
+- test(billing): strengthen invoice PDF writer coverage
+- test(runner): static guard against duplicate fallback-stub definitions in cli_task_runner.sh
+- test(eval): enforce recall-eval baseline in the merge gate
+- test(perf): token-budget regression guard for context_boot + brain_delta boot payloads
+- test(hooks): hermetic suites for the safety-critical hooks with zero coverage
+- test(memory): regression tests for vector-store Atlas-fallthrough + select('+embedding') fix
+- test(dashboard): vitest harness for /api route handlers — auth, billing, notifications-push
+- test(runtime): enforce coverage thresholds + wire CI/local-ci gate
+
+### Documentation
+- docs(architecture): spec Phase-3 physical per-tenant DB isolation (ADR-010 §1.5 deferred item)
+- docs(plan): reconcile §5 L1 auto-failover status with §6 roadmap
+- docs(marketplace): spec artifact hosting/CDN for listing versions (ADR-019 deferred item)
+- docs(marketplace): spec third-party developer SDK contract (ADR-019 Phase-4 remaining item)
+- docs(plan): mark Connect fix-engine MVP + validate/learn as shipped
+- docs(security): spec sandboxed execution model for marketplace packages (ADR-027)
+- docs(runbook): full alert-triage procedures for disk-pressure guard + pool-capacity drift
+- docs(architecture): ADR-026 — connect gateway-identity additional login path (design)
+- docs(architecture): ADR-025 — agentFlow/Connect Hub gateway-identity middleware (design)
+- docs(plan): ADR-015 phase-3 spec — fan-out batch observability (corrects stale premise)
+- docs(plan): usage-metering (S2) spec — corrects stale GAP_BACKLOG #16 premise
+- docs(plan): refresh GRAND_PRODUCT_ROADMAP.md — mark Phase 1 MVP as SHIPPED
+- docs(adr): renumber data-residency ADR-023 -> ADR-024 to resolve duplicate ADR number
+- docs(plan): flag GAP_BACKLOG_SCHEDULE #15 as done
+- docs(env): reconstruct .env.example lost in the local-tier incident
+- docs: operator runbook for the non-Claude agentic fallback lane
+- docs(product): multi-repo orchestration UI v0 feature spec
+- docs: operator incident runbook for recurring gateway/runner failure modes
+- docs(runner): verify P1a — Fable routes + RAM-cap kills already fixed
+
 ## [0.6.4] — 2026-07-24
 
 ### Fixed
@@ -42,7 +357,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - feat(gateway): expose gift-code mint/preview/redeem/list/revoke over REST
 - feat(dashboard): public developer portal — API-key issuance, curl quickstarts, rate limits
 - feat(notifications): branded transactional-email template system
-- feat(gateway): data-residency / region pinning (ADR-023)
+- feat(gateway): data-residency / region pinning (ADR-024)
 - feat(brain): composite health-score index (freshness, coverage, contradictions, recall)
 - feat(cli): myai login / whoami — CLI session identity against a hosted gateway
 - feat(gateway): task age-based auto-escalation — pending priority aging curve

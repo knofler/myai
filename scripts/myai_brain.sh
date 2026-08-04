@@ -6,7 +6,9 @@
 #   myai brain init [path] [--remote <url>]   create/adopt the brain repo (no local dir + remote → clone)
 #   myai brain status                          where it lives, branch, atoms, stashes
 #   myai brain health                          composite health score (0-100) + trend
-#   myai brain write <kind> <repo|-> <slug>    append one immutable atom (stdin)
+#   myai brain write <kind> <repo|-> <slug>    append one immutable atom (stdin);
+#                                               tag it: BRAIN_TOPIC=<topic> (ADR-020
+#                                               controlled set — untagged → warned 'general')
 #   myai brain stash <slug> [repo]             freeze context on main (stdin) — resume anywhere
 #   myai brain stash list                      stashes waiting on main, newest first
 #   myai brain pop [slug]                      print + remove the newest (matching) stash

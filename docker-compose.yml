@@ -35,9 +35,13 @@ services:
       - REPOS_BASE=/repos
       # ADR-010 multi-tenancy: enforcement is on by default. This token lets the
       # in-cluster dashboard authenticate over the Docker bridge (non-loopback);
-      # host callers (CLI runner, hooks) stay trusted via loopback. Override in
-      # .env for hosted, and set TENANT_ENFORCE=false to disable enforcement.
-      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}
+      # host callers (CLI runner, hooks) stay trusted via loopback. Set in .env
+      # — `myai up` generates a random one on first boot (myai_up.sh
+      # ensure_local_token) if none is present. NO published fallback here: a
+      # hardcoded default would ship in the npm package/public mirror as a
+      # known credential (SECURITY, task-7f8b20a3). An empty value here is
+      # refused by the gateway's config loader when TENANT_ENFORCE=true.
+      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-}
       # JWT signing secret for dashboard password sessions (M2). A stable value
       # keeps sessions valid across restarts/instances; override in .env for
       # hosted. Unset → the gateway falls back to an ephemeral per-process secret
@@ -114,8 +118,9 @@ services:
       - GATEWAY_MCP_URL=http://gateway:3100/mcp
       # ADR-010: under enforce=true the dashboard reaches the gateway over the
       # Docker bridge (non-loopback), so it must present the local bridge token.
-      # Must match the gateway's GATEWAY_LOCAL_TOKEN. Override both in .env for hosted.
-      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}
+      # Must match the gateway's GATEWAY_LOCAL_TOKEN — set in .env (see the
+      # gateway service above; no published fallback, SECURITY task-7f8b20a3).
+      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-}
       # Hosted login-wall (src/middleware.ts). false (default) → no gate, the
       # dashboard renders without login (local dev). true → public/non-loopback
       # requests without a session are redirected to /login; localhost is ALWAYS

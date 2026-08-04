@@ -61,18 +61,34 @@ docker exec myai-mongo mongosh -u "$MGU" -p "$MGP" --authenticationDatabase admi
 
 ## Scheduling a periodic mirror (optional)
 
-The script is idempotent and safe to run on a timer. Two fleet-consistent
-options — pick one; neither is installed automatically (so a machine never grows
-a surprise job):
+The script is idempotent and safe to run on a timer.
+`scripts/setup_mongo_mirror_schedule.sh` installs the job — **never installed
+automatically** (a machine must not grow a surprise job); the operator runs it
+once, explicitly:
 
-- **launchd (macOS)** — a `StartInterval` agent that runs `myai mirror` hourly.
-- **cron / systemd-timer (Linux/VPS)** — a line invoking `myai mirror`.
-
-Example crontab entry (hourly):
-
-```cron
-0 * * * * /usr/local/bin/myai mirror >> ~/.myai/logs/mongo-mirror.log 2>&1
+```bash
+myai mirror --install-schedule                     # hourly (the default)
+myai mirror --install-schedule --every-minutes 30  # custom cadence
+myai mirror --schedule-status                      # installed? last run?
+myai mirror --uninstall-schedule                   # remove
 ```
+
+Platform routing (mirrors the CLI runner's launchd pattern,
+`setup_cli_runner_schedule.sh`):
+
+- **macOS** — a user LaunchAgent (`com.myai.mongo-mirror`) with `StartInterval`;
+  launchd not cron because macOS TCC blocks cron from the home directory by
+  default. Logs → `~/.myai/logs/mongo-mirror.{out,err}`.
+- **Linux/VPS** — an idempotent, marker-tagged (`# myai-mongo-mirror`) crontab
+  line; reinstall replaces only that line, other crontab entries are preserved.
+
+Reinstalling is idempotent (rewrites the job in place with the new cadence).
+
+**Observability:** every non-dry mirror run records its outcome
+(epoch/rc/direction/db/collections) in `~/.myai/mongo-mirror.last`.
+`myai doctor` surfaces this as the warn-only **`mongo mirror schedule`** check:
+not scheduled (optional hint), never run, last run failed, or stale (more than
+two intervals since the last success) — a fresh successful run reads `OK`.
 
 ## Local-first mode (2026-07-22, ADR-022) — `scripts/mongo_sync.sh`
 
@@ -111,14 +127,83 @@ or interrupted run) always converges to the primary's current state; there
 is no separate delta/resume step to track. See ADR-022 for the full
 design and the trade-off against true bidirectional replication.
 
-## Next step (not in this change) — read-side local-first failover
+### Scheduling mongo_sync + staleness alerting (2026-07-26, ADR-022 follow-up)
 
-Local-first mode (above) still requires the operator to point `MONGODB_URI`
-at local mongo and rebuild the gateway themselves. It does NOT make the
-gateway **automatically read from** the local mirror when Atlas becomes
-unreachable mid-session — that is a larger, riskier change to
-`runtime/src/core/index.ts` connection handling and must avoid the
-2026-07-04 split-brain lesson (the gateway must never silently serve stale
-local data as if it were canonical). Recommended shape when it lands: an
-explicit, logged, read-only degraded mode (`MYAI_DB_FAILOVER=local`) that the
-operator opts into, never an automatic silent swap. Tracked as a follow-up.
+ADR-022's scheduling section said to "run `mongo_sync.sh` on a cron/launchd
+timer" but shipped no such timer — convergence depended on an operator
+remembering to run it by hand. `mongo_sync.sh schedule` (CLI: `myai sync
+schedule`) closes that gap, same as `myai mirror --install-schedule` does
+for the mirror:
+
+```bash
+myai sync schedule install                   # install: HOURLY (default)
+myai sync schedule install --every-minutes 30   # custom cadence
+myai sync schedule status                    # installed? last sync? last staleness check?
+myai sync schedule uninstall                 # remove
+```
+
+**Never installed automatically** — the operator runs this once, explicitly
+(same rule as the mirror's own `--install-schedule`). Platform routing
+mirrors `setup_mongo_mirror_schedule.sh`: a macOS user LaunchAgent
+(`com.myai.mongo-sync`), or an idempotent, marker-tagged (`# myai-mongo-sync`)
+crontab line on Linux.
+
+`myai sync schedule install` installs **two** independent jobs on the same
+cadence:
+
+1. `mongo_sync.sh` itself — the PRIMARY → SECONDARY convergence run.
+2. `mongo_sync_staleness.sh` — an independent staleness canary. It reads the
+   timestamp `mongo_sync.sh` records on every successful run
+   (`state/.mongo_sync_last`) and, if the last successful sync is older than
+   `MONGO_SYNC_STALE_MINUTES` (default 150 — 2.5× the hourly default cadence)
+   — or no successful sync has ever been recorded — raises a
+   notification-engine alert (`notifications_send` via the gateway MCP
+   endpoint, falling back to `notify-telegram.sh` directly if the gateway
+   itself is unreachable; same mechanism as `brain_sync_canary.sh`). It never
+   touches docker or mongo itself, so it keeps alerting reliably even while
+   the sync job is failing every run (mongo down, docker not running, disk
+   full). Alerts only fire on a stale/never-synced check — a healthy check is
+   silent, matching the notification service's own noise policy.
+
+```bash
+./scripts/mongo_sync_staleness.sh            # run once: check, alert if stale
+./scripts/mongo_sync_staleness.sh --status   # print last recorded check, no run
+```
+
+## Read-side local-first failover (2026-07-24) — `MYAI_DB_FAILOVER=local`
+
+The follow-up landed: the gateway can now fail its **reads** over to the warm
+local mirror when the primary (Atlas) is unreachable **at boot** — as an
+explicit, logged, **READ-ONLY** degraded mode. Never a silent swap
+(2026-07-04 split-brain lesson):
+
+- **Opt-in only.** Off unless the gateway env carries `MYAI_DB_FAILOVER=local`
+  (set it in `AI/.env` next to `MONGODB_URI`). Any other value = off.
+- **Mirror URI**: `MYAI_DB_FAILOVER_URI` if set; otherwise the compose local
+  mongo (`mongo` service host, root creds — overridable via
+  `LOCAL_MONGO_USER` / `LOCAL_MONGO_PASS` / `LOCAL_MONGO_HOST`).
+- **Loudly logged**: activation logs at `error` level with the redacted
+  primary + mirror hosts and the original connection error.
+- **Surfaced on the health panel**: `/health/deep` reports mongodb as
+  `degraded` (never `up`) with a `details.failover` block
+  (`{active, primaryUriHost, failoverUriHost, reason, activatedAt}`); the
+  dashboard `/status` page shows "READ-ONLY failover to local mirror" on the
+  mongo component, and the `health_status` MCP tool carries
+  `mongodb.failover` for the api-health panel.
+- **READ-ONLY enforced**: a global mongoose guard plugin
+  (`runtime/src/shared/db-failover.ts`) rejects every write
+  (save/insertMany/update*/delete*/findOneAnd*/replaceOne) with
+  `DbReadOnlyError` while failover is active, and the boot-time
+  agents/skills/hooks/rules `bulkWrite` syncs (which bypass mongoose
+  middleware) skip themselves explicitly — so the mirror can never diverge
+  from Atlas while it stands in.
+- **Freshness caveat**: the mirror is only as fresh as the last `myai mirror`
+  run — schedule it (see above) if you rely on failover.
+- **Exit**: restore Atlas reachability and restart the gateway (a deploy
+  action, MASTER checkout only). Failover never flips back mid-process.
+
+Scope note: this covers **boot-time** unreachability (the common case: gateway
+restarts while Atlas/network is down and still serves memory/registry reads).
+A mid-session Atlas drop still surfaces as query errors — a live re-connect
+swap would need connection-pool juggling that isn't worth the split-brain
+risk today.

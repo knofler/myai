@@ -30,10 +30,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { BudgetUsageModel, isConnected } from '../shared/db.js';
+import { BudgetUsageModel, BudgetCapOverrideModel, isConnected } from '../shared/db.js';
+import type { IBudgetCapOverride } from '../shared/db.js';
 import { getConfig } from '../shared/config.js';
 import { createChildLogger } from '../shared/logger.js';
-import { tenantScope } from '../shared/scoped-query.js';
+import { tenantScope, scopedFindOne } from '../shared/scoped-query.js';
 import { checkAndEmitSpendAlert } from './spend-alert.js';
 import type { LlmRequest, LlmResponse } from './provider.js';
 
@@ -92,6 +93,58 @@ function writeCache(key: string, value: number): void {
 /** Test hook — clears the in-memory aggregation cache. Not exported via index. */
 export function _resetBudgetCache(): void {
   cache.clear();
+  overrideCache.clear();
+}
+
+// ── Per-tenant cap override (Phase 5b §8 follow-up) ──────
+// Dashboard operators can PATCH a per-tenant BudgetCapOverride (via
+// /api/budget-caps, backing the "Apply suggestion" button on the adaptive
+// budget-cap suggestions panel) to raise/lower a cap without a gateway
+// restart. This guard is the enforcement consumer: it looks the override up
+// here (cached 30s, same TTL as the spend aggregation) and merges it over
+// the env-configured `config.budgets` caps. A field left unset on the
+// override document (or no override document at all) falls back to the
+// corresponding BUDGET_* env var.
+
+interface OverrideCacheEntry { value: IBudgetCapOverride | null; expiresAt: number; }
+const overrideCache = new Map<string, OverrideCacheEntry>();
+
+export interface EffectiveBudgetCaps {
+  monthlyHardCapUsd: number;
+  monthlyDailyCapUsd: number;
+  perChannelMonthlyCapUsd?: number;
+}
+
+async function getBudgetCapOverride(tenantId: string): Promise<IBudgetCapOverride | null> {
+  const cached = overrideCache.get(tenantId);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  if (!isConnected() || !BudgetCapOverrideModel) return null;
+
+  try {
+    const doc = await scopedFindOne(BudgetCapOverrideModel, tenantId, {}).lean<IBudgetCapOverride | null>();
+    overrideCache.set(tenantId, { value: doc, expiresAt: Date.now() + CACHE_TTL_MS });
+    return doc;
+  } catch (err) {
+    log.warn({ err, tenantId }, 'budget-guard: BudgetCapOverride lookup failed — falling back to env-configured caps');
+    return null;
+  }
+}
+
+/**
+ * Merge a tenant's BudgetCapOverride over the env-configured caps. A field
+ * left unset on the override (or no override at all) falls back to
+ * `budgets`. Pure — exported for tests.
+ */
+export function resolveEffectiveBudgetCaps(
+  budgets: { monthlyHardCapUsd: number; monthlyDailyCapUsd: number; perChannelMonthlyCapUsd?: number },
+  override: Pick<IBudgetCapOverride, 'monthlyHardCapUsd' | 'dailyCapUsd' | 'perChannelCapUsd'> | null,
+): EffectiveBudgetCaps {
+  return {
+    monthlyHardCapUsd: typeof override?.monthlyHardCapUsd === 'number' ? override.monthlyHardCapUsd : budgets.monthlyHardCapUsd,
+    monthlyDailyCapUsd: typeof override?.dailyCapUsd === 'number' ? override.dailyCapUsd : budgets.monthlyDailyCapUsd,
+    perChannelMonthlyCapUsd: typeof override?.perChannelCapUsd === 'number' ? override.perChannelCapUsd : budgets.perChannelMonthlyCapUsd,
+  };
 }
 
 // ── Time helpers (UTC) ───────────────────────────────────
@@ -241,6 +294,14 @@ export async function applyBudgetGuard(
     return { allow: true, rewrittenReq: req, spendSnapshot: { mtd: 0, today: 0 } };
   }
 
+  // Per-tenant operator override (Phase 5b §8 follow-up) — a field left
+  // unset on the override, or no override document at all, falls back to
+  // the env-configured cap below. `caps` (not `budgets`) is the source of
+  // truth for every cap comparison from here on; `budgets.downgradeOpusThreshold`
+  // /`downgradeSonnetThreshold`/`bypassChannelIds` stay env-only (not overridable).
+  const override = await getBudgetCapOverride(ctx.tenantId);
+  const caps = resolveEffectiveBudgetCaps(budgets, override);
+
   // Aggregate current spend (cached 30s). Every match is scoped to the tenant
   // (ADR-010 §3.5), so the monthly/daily caps are PER-TENANT spend meters — a
   // forgotten tenant throws via `tenantScope`. Cache keys are tenant-namespaced
@@ -257,7 +318,7 @@ export async function applyBudgetGuard(
   ]);
 
   let channelMtd: number | undefined;
-  if (ctx.channelId && typeof budgets.perChannelMonthlyCapUsd === 'number') {
+  if (ctx.channelId && typeof caps.perChannelMonthlyCapUsd === 'number') {
     const channelKey = `${ctx.tenantId}:channel:${ctx.channelId}:${monthStart.toISOString()}`;
     channelMtd = await aggregateCostSum(
       { ...t, channelId: ctx.channelId, createdAt: { $gte: monthStart } },
@@ -266,19 +327,19 @@ export async function applyBudgetGuard(
   }
 
   const spendSnapshot = { mtd, today, channelMtd };
-  const remainingUsd = computeRemainingBudgetUsd(spendSnapshot, budgets);
+  const remainingUsd = computeRemainingBudgetUsd(spendSnapshot, caps);
 
   // Hard caps — order: monthly → daily → per-channel. First trip wins.
-  if (mtd >= budgets.monthlyHardCapUsd) {
+  if (mtd >= caps.monthlyHardCapUsd) {
     return { allow: false, reason: 'monthly_hard', rewrittenReq: req, spendSnapshot };
   }
-  if (today >= budgets.monthlyDailyCapUsd) {
+  if (today >= caps.monthlyDailyCapUsd) {
     return { allow: false, reason: 'daily_hard', rewrittenReq: req, spendSnapshot };
   }
   if (
-    typeof budgets.perChannelMonthlyCapUsd === 'number' &&
+    typeof caps.perChannelMonthlyCapUsd === 'number' &&
     typeof channelMtd === 'number' &&
-    channelMtd >= budgets.perChannelMonthlyCapUsd
+    channelMtd >= caps.perChannelMonthlyCapUsd
   ) {
     return { allow: false, reason: 'channel_hard', rewrittenReq: req, spendSnapshot };
   }
@@ -287,8 +348,8 @@ export async function applyBudgetGuard(
   // (We still return their requests unchanged; the actual provider routing
   // happens in dispatchByMode.)
   const effectiveModel = getModelForRequest(req);
-  const opusThreshold = budgets.monthlyHardCapUsd * budgets.downgradeOpusThreshold;
-  const sonnetThreshold = budgets.monthlyHardCapUsd * budgets.downgradeSonnetThreshold;
+  const opusThreshold = caps.monthlyHardCapUsd * budgets.downgradeOpusThreshold;
+  const sonnetThreshold = caps.monthlyHardCapUsd * budgets.downgradeSonnetThreshold;
 
   // Sonnet downgrade trips at >=90% AND model is sonnet.
   // Opus downgrade trips at >=80% AND model is opus.
@@ -296,7 +357,7 @@ export async function applyBudgetGuard(
   // we want sonnet→haiku regardless of whether opus→sonnet would also have
   // fired (opus is not in scope at this point — it'd already be sonnet).
   if (mtd >= sonnetThreshold && isSonnetModel(effectiveModel)) {
-    const pct = Math.round((mtd / budgets.monthlyHardCapUsd) * 100);
+    const pct = Math.round((mtd / caps.monthlyHardCapUsd) * 100);
     return {
       allow: true,
       downgradedFrom: effectiveModel,
@@ -307,7 +368,7 @@ export async function applyBudgetGuard(
     };
   }
   if (mtd >= opusThreshold && isOpusModel(effectiveModel)) {
-    const pct = Math.round((mtd / budgets.monthlyHardCapUsd) * 100);
+    const pct = Math.round((mtd / caps.monthlyHardCapUsd) * 100);
     return {
       allow: true,
       downgradedFrom: effectiveModel,

@@ -50,6 +50,23 @@ export function ModelBadge({ model }: { model: string }) {
   return <Badge className={MODEL[model]}>{model}</Badge>;
 }
 
+/* ── Execution lane (task-b1776200: which backend wrote the shipped diff) ── */
+
+const LANE: Record<string, string> = {
+  claude: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+  'agentic-fallback': 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
+};
+
+export function LaneBadge({ lane, provider }: { lane?: string; provider?: string }) {
+  if (!lane) return <span className="text-zinc-600 text-xs">—</span>;
+  const label = lane === 'agentic-fallback' ? `fallback${provider ? `: ${provider}` : ''}` : lane;
+  return (
+    <span title={provider ? `${lane} (${provider})` : lane}>
+      <Badge className={LANE[lane]}>{label}</Badge>
+    </span>
+  );
+}
+
 /* ── Schedule last-run status (never | success | error) ───── */
 
 export function RunStatusBadge({ status }: { status?: string }) {
@@ -126,6 +143,78 @@ const SOURCE: Record<string, string> = {
 
 export function SourceBadge({ source }: { source: string }) {
   return <Badge className={SOURCE[source]}>{source}</Badge>;
+}
+
+/* ── Router audit trail ────────────────────────────────────── */
+// {routedProfile, routedModel, routedComplexity} — stamped by the runner's
+// route_task_model (capability×cost×availability router) onto the task record
+// at claim time (task-d9300dac), so WHICH pool/model a task actually ran on is
+// visible on the dashboard instead of only ever existing in the runner's stdout
+// log. Renders "—" for tasks claimed before the stamp existed / never claimed.
+
+export function RoutedBadge({
+  routedProfile,
+  routedModel,
+  routedComplexity,
+}: {
+  routedProfile?: string;
+  routedModel?: string;
+  routedComplexity?: string;
+}) {
+  if (!routedModel) return <span className="text-zinc-600 text-xs">—</span>;
+  return (
+    <span
+      className="text-xs inline-flex items-center gap-1"
+      title={`routed profile: ${routedProfile ?? '—'} · complexity: ${routedComplexity ?? '—'}`}
+    >
+      <ModelBadge model={routedModel} />
+      {routedComplexity && <span className="text-zinc-600">{routedComplexity}</span>}
+    </span>
+  );
+}
+
+/* ── Work-type routing stamp (task-de8b40ff) ───────────────── */
+// {workType, workTypeTier, workTypeFailoverHop} — the WORK_TYPE_TIER_MAP
+// decision (plan/MULTI_PROVIDER_ORCHESTRATION.md §3, wired to router.ts in
+// db9e937) stamped onto the task at claim time, so which work-type lane +
+// failover hop a task was actually routed through is visible here instead of
+// only ever existing in an MCP routing_info response or the runner's stdout
+// log. Renders "—" for tasks claimed before the stamp existed / never claimed.
+
+export function WorkTypeBadge({
+  workType,
+  workTypeTier,
+  workTypeFailoverHop,
+}: {
+  workType?: string;
+  workTypeTier?: string;
+  workTypeFailoverHop?: string;
+}) {
+  if (!workType) return <span className="text-zinc-600 text-xs">—</span>;
+  return (
+    <span
+      className="text-xs inline-flex items-center gap-1"
+      title={`work-type: ${workType} · tier: ${workTypeTier ?? '—'}${workTypeFailoverHop ? ` · failover: ${workTypeFailoverHop}` : ''}`}
+    >
+      <Badge className="bg-indigo-500/15 text-indigo-300 border-indigo-500/30">{workType}</Badge>
+      {workTypeTier && <span className="text-zinc-600">{workTypeTier}</span>}
+      {workTypeFailoverHop && <span className="text-zinc-700">→ {workTypeFailoverHop}</span>}
+    </span>
+  );
+}
+
+/* ── Budget cap-suggestion recommendation (Phase 5b §8 follow-up) ── */
+
+const RECOMMENDATION: Record<string, string> = {
+  increase: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+  decrease: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  keep: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  insufficient_data: 'bg-zinc-600/20 text-zinc-400 border-zinc-600/30',
+};
+
+export function RecommendationBadge({ recommendation }: { recommendation: string }) {
+  const label = recommendation === 'insufficient_data' ? 'insufficient data' : recommendation;
+  return <Badge className={RECOMMENDATION[recommendation] ?? RECOMMENDATION.keep}>{label}</Badge>;
 }
 
 /* ── Enabled/on-off dot ────────────────────────────────────── */

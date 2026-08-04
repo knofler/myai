@@ -71,18 +71,35 @@ export const getHooksCached = unstable_cache(
   async () => {
     await connectDB();
     const hooks = await Hook.find({}).select('-__v').sort({ priority: 1 }).lean();
-    return hooks.map(h => ({
-      _id: String(h._id),
-      name: h.name as string,
-      events: (h.events as string[]) ?? [],
-      priority: h.priority as number,
-      source: h.source as string,
-      timeout: h.timeout as number,
-      enabled: !!h.enabled,
-    }));
+    return hooks.map(h => {
+      const lastToggle = h.lastToggle as
+        | { actorUserId?: string; role?: string; via?: string; previousState?: boolean; newState?: boolean; at?: Date }
+        | undefined;
+      return {
+        _id: String(h._id),
+        name: h.name as string,
+        events: (h.events as string[]) ?? [],
+        priority: h.priority as number,
+        source: h.source as string,
+        timeout: h.timeout as number,
+        enabled: !!h.enabled,
+        lastToggle: lastToggle
+          ? {
+              actorUserId: lastToggle.actorUserId,
+              role: lastToggle.role,
+              via: lastToggle.via,
+              previousState: !!lastToggle.previousState,
+              newState: !!lastToggle.newState,
+              at: lastToggle.at ? new Date(lastToggle.at).toISOString() : '',
+            }
+          : undefined,
+      };
+    });
   },
   ['registry-hooks'],
-  { revalidate: REVALIDATE }
+  // Tagged so the /api/hooks toggle route can bust this cache immediately
+  // (revalidateTag) instead of waiting out the 60s TTL.
+  { revalidate: REVALIDATE, tags: ['registry-hooks'] }
 );
 
 export const getRulesCached = unstable_cache(

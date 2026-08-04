@@ -43,6 +43,17 @@ const PRICING: Record<string, PricingEntry> = {
   'moonshot-v1-128k': { inputPerMillion: 2.00, outputPerMillion: 20.00 },
   'kimi-k2': { inputPerMillion: 0.20, outputPerMillion: 2.00 },
   'kimi-k2.6': { inputPerMillion: 0.20, outputPerMillion: 2.00 },
+  // OpenRouter-hosted free K2 slug (Kimi lane via OPENROUTER_API_KEY, no paid
+  // Moonshot key). Free tier bills $0; a paid OpenRouter slug needs its own entry.
+  'moonshotai/kimi-k2:free': { inputPerMillion: 0, outputPerMillion: 0 },
+
+  // ── Google Gemini ────────────────────────────────
+  // Class-B free-tier gateway provider (research/bulk lane). Rates below
+  // price PAID-tier usage past the free quota — AI Studio's free tier bills
+  // $0 until the per-model rate limit, at which point these apply.
+  'gemini-2.0-flash': { inputPerMillion: 0.10, outputPerMillion: 0.40 },
+  'gemini-1.5-flash': { inputPerMillion: 0.075, outputPerMillion: 0.30 },
+  'gemini-1.5-pro': { inputPerMillion: 1.25, outputPerMillion: 5.00 },
 };
 
 /** Providers that don't bill per token (local Ollama, CLI). */

@@ -19,7 +19,7 @@
 // up like any other (ADR-015 §5).
 import { NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
-import { connectDB, Task, RepoCard } from '@/lib/db';
+import { connectDB, Task, RepoCard, FleetRun } from '@/lib/db';
 import { getActiveTenant, tenantFilter } from '@/lib/tenant';
 import { planFanout, fanoutPreamble, PRIORITIES, type Priority } from '@/lib/projects';
 
@@ -80,6 +80,27 @@ async function handleFanout(tenantId: string, body: Record<string, unknown>) {
 
   const created = await Task.insertMany(docs, { ordered: false });
   console.log(`[api/projects] fanout ${batchId}: ${created.length} tasks across ${plan.repos.length} repos (tenant ${tenantId})`);
+
+  // ADR-015 §3: give the batch its own FleetRun so a tenant fanning a task
+  // across N repos has one place to check "how is my batch doing" instead of
+  // opening N tabs on /work. type:'task-fanout' keeps it out of /fleet's
+  // morning-resume-all console (that query filters the type out — see
+  // dashboard/src/app/fleet/page.tsx). Best-effort: a failure here must not
+  // roll back the tasks that already landed.
+  try {
+    await FleetRun.create({
+      tenantId,
+      runId: batchId,
+      type: 'task-fanout',
+      status: 'running',
+      startedAt: now,
+      repos: plan.repos.map((repo) => ({ repo, recommendation: 'pending', actionStatus: 'pending', updatedAt: now })),
+      summary: { total: plan.repos.length, needsAction: plan.repos.length, shipped: 0, failed: 0 },
+    });
+  } catch (err) {
+    console.error(`[api/projects] fanout ${batchId}: FleetRun.create failed (tasks still created):`, err);
+  }
+
   return NextResponse.json({
     ok: true,
     batchId,

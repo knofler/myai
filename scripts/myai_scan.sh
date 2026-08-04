@@ -43,6 +43,38 @@ c_warn() { printf '  %s!%s %s\n' "$YELLOW" "$RESET" "$1"; }
 c_err()  { printf '  %s✗%s %s\n' "$RED" "$RESET" "$1"; }
 c_info() { printf '  %s•%s %s\n' "$CYAN" "$RESET" "$1"; }
 
+# ── stack detection (pure helpers — no args, no env, no gateway) ──────────────
+# detect_stack DIR → comma-joined stack labels ("Next.js,React,TypeScript", …).
+detect_stack() {
+  local r="$1" stack=""
+  if [ -f "$r/package.json" ]; then
+    grep -q '"next"' "$r/package.json" 2>/dev/null && stack="${stack}Next.js,"
+    grep -q '"express"' "$r/package.json" 2>/dev/null && stack="${stack}Express,"
+    grep -q '"react"' "$r/package.json" 2>/dev/null && stack="${stack}React,"
+    [ -z "$stack" ] && stack="${stack}Node,"
+  fi
+  [ -f "$r/tsconfig.json" ] && stack="${stack}TypeScript,"
+  { [ -f "$r/requirements.txt" ] || [ -f "$r/pyproject.toml" ] || ls "$r"/*.py >/dev/null 2>&1; } && stack="${stack}Python,"
+  [ -f "$r/go.mod" ] && stack="${stack}Go,"
+  ls "$r"/docker-compose*.y*ml >/dev/null 2>&1 && stack="${stack}Docker,"
+  [ -f "$r/Dockerfile" ] && case "$stack" in *Docker*) ;; *) stack="${stack}Docker,";; esac
+  echo "${stack%,}"
+}
+# local_port DIR → http://localhost:<first-published-compose-port> (or nothing).
+local_port() {
+  local r="$1" compose port
+  compose="$(ls "$r"/docker-compose*.y*ml 2>/dev/null | head -1 || true)"
+  [ -n "$compose" ] || return 0
+  port="$(grep -oE '"?[0-9]{2,5}:[0-9]{2,5}"?' "$compose" 2>/dev/null | head -1 | tr -d '"' | cut -d: -f1 || true)"
+  [ -n "$port" ] && echo "http://localhost:$port"
+}
+
+# Sourced for tests (scripts/tests/e2e_init_external_repos.sh) — stop before the
+# executable body so detect_stack/local_port can be exercised against arbitrary
+# repos without spidering $PWD or touching the gateway (mirrors MYAI_INIT_LIB_ONLY
+# in myai_init.sh).
+[ "${MYAI_SCAN_LIB_ONLY:-0}" = 1 ] && return 0 2>/dev/null
+
 # ── gateway token (host→gateway escape hatch, ADR-010) ────────────────────────
 GATEWAY_MCP=${GATEWAY_MCP:-http://localhost:3100/mcp}
 # shellcheck disable=SC1091
@@ -95,29 +127,6 @@ COUNT="$(printf '%s\n' "$REPO_ROOTS" | grep -c . || true)"
 [ "$AS_JSON" = 1 ] || c_ok "discovered $COUNT git repo(s)"
 
 # ── build a JSON array of repo metadata (host-side derivation) ─────────────────
-detect_stack() {
-  local r="$1" stack=""
-  if [ -f "$r/package.json" ]; then
-    grep -q '"next"' "$r/package.json" 2>/dev/null && stack="${stack}Next.js,"
-    grep -q '"express"' "$r/package.json" 2>/dev/null && stack="${stack}Express,"
-    grep -q '"react"' "$r/package.json" 2>/dev/null && stack="${stack}React,"
-    [ -z "$stack" ] && stack="${stack}Node,"
-  fi
-  [ -f "$r/tsconfig.json" ] && stack="${stack}TypeScript,"
-  { [ -f "$r/requirements.txt" ] || [ -f "$r/pyproject.toml" ] || ls "$r"/*.py >/dev/null 2>&1; } && stack="${stack}Python,"
-  [ -f "$r/go.mod" ] && stack="${stack}Go,"
-  ls "$r"/docker-compose*.y*ml >/dev/null 2>&1 && stack="${stack}Docker,"
-  [ -f "$r/Dockerfile" ] && case "$stack" in *Docker*) ;; *) stack="${stack}Docker,";; esac
-  echo "${stack%,}"
-}
-local_port() {
-  local r="$1" compose port
-  compose="$(ls "$r"/docker-compose*.y*ml 2>/dev/null | head -1 || true)"
-  [ -n "$compose" ] || return 0
-  port="$(grep -oE '"?[0-9]{2,5}:[0-9]{2,5}"?' "$compose" 2>/dev/null | head -1 | tr -d '"' | cut -d: -f1 || true)"
-  [ -n "$port" ] && echo "http://localhost:$port"
-}
-
 META_JSON="$(
   python3 - <<'PYEOF' "$DIR" "$REPO_ROOTS"
 import json, os, subprocess, sys

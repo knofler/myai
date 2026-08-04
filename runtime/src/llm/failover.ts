@@ -35,6 +35,7 @@ const MODE_TO_PROVIDER_ID: Record<string, string> = {
   api: 'claude-api',
   deepseek: 'deepseek-api',
   moonshot: 'moonshot-api',
+  gemini: 'gemini-api',
   ollama: 'ollama',
   bridge: 'claude-bridge',
   direct: 'claude-cli',

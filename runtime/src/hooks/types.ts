@@ -45,6 +45,22 @@ export type HookHandler = (ctx: HookContext) => Promise<HookResult | void>;
 
 // ── Hook Registration ───────────────────────────────────
 
+/**
+ * Governance record of the most recent PATCH /api/hooks call for a hook
+ * (task-bd18a5ec) — who flipped it, from what state to what state, and
+ * when. Mirrored onto the Mongo `Hook` doc's `lastToggle` field and, here,
+ * onto the in-memory registration so the dashboard tooltip works even
+ * without Mongo.
+ */
+export interface HookLastToggle {
+  actorUserId?: string;
+  role: string;
+  via: string;
+  previousState: boolean;
+  newState: boolean;
+  at: string;
+}
+
 export interface HookRegistration {
   /** Unique name for this hook */
   name: string;
@@ -60,4 +76,6 @@ export interface HookRegistration {
   enabled: boolean;
   /** Source: 'builtin' | 'user' | 'bash' */
   source: 'builtin' | 'user' | 'bash';
+  /** Most recent PATCH /api/hooks toggle, if any (see HookLastToggle). */
+  lastToggle?: HookLastToggle;
 }

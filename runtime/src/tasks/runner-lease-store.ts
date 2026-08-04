@@ -20,7 +20,7 @@
  * deletes the slot doc so the next fire acquires instantly. A TTL index on the
  * collection garbage-collects leftovers of crashed runners ~1h after expiry.
  */
-import { RunnerLeaseModel, isConnected } from '../shared/db.js';
+import { RunnerLeaseModel, RunnerLeaseHistoryModel, isConnected } from '../shared/db.js';
 import type { IRunnerLease } from '../shared/db.js';
 import { createChildLogger } from '../shared/logger.js';
 import { scopedFind, scopedFindOneAndUpdate, scopedDeleteOne, scopedCountDocuments } from '../shared/scoped-query.js';
@@ -51,6 +51,14 @@ export interface HeartbeatLeaseInput {
   leaseSeconds?: number;
   /** Optionally stamp the task being worked (visibility). */
   taskId?: string;
+  /**
+   * Claude account/profile the heartbeating process is actually running under
+   * right now (slice 6). When provided and the slot was acquired with an
+   * `account`, a mismatch means CLAUDE_CONFIG_DIR resolution drifted from the
+   * lease's assumed binding — the slot is released instead of extended so the
+   * fleet doesn't trust a stale account assumption for another `leaseSeconds`.
+   */
+  account?: string;
 }
 
 export interface ReleaseLeaseInput {
@@ -93,6 +101,48 @@ function requireDb(): void {
 
 function isDuplicateKey(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: number }).code === 11000;
+}
+
+export interface RunnerLeaseHistoryView {
+  slot: number;
+  holder: string;
+  machine?: string;
+  account?: string;
+  taskId?: string;
+  acquiredAt: Date;
+  releasedAt: Date;
+  durationMs: number;
+  reason: string;
+}
+
+/**
+ * Append a runs-log row for a lease that just stopped being held. Best-effort:
+ * a history-write failure must never fail the release/heartbeat it's attached
+ * to, so errors are logged and swallowed.
+ */
+async function recordLeaseHistory(
+  tenantId: string,
+  lease: IRunnerLease,
+  releasedAt: Date,
+  reason: 'released' | 'reclaimed' | 'account_mismatch',
+): Promise<void> {
+  if (!RunnerLeaseHistoryModel) return;
+  try {
+    await RunnerLeaseHistoryModel.create({
+      tenantId,
+      slot: lease.slot,
+      holder: lease.holder,
+      machine: lease.machine,
+      account: lease.account,
+      taskId: lease.taskId,
+      acquiredAt: lease.acquiredAt,
+      releasedAt,
+      durationMs: Math.max(0, releasedAt.getTime() - lease.acquiredAt.getTime()),
+      reason,
+    });
+  } catch (err) {
+    log.warn({ err, slot: lease.slot, holder: lease.holder, reason }, 'Failed to record runner-lease history (non-fatal)');
+  }
 }
 
 /**
@@ -175,6 +225,15 @@ export async function acquireLease(
  * the runner must treat as "lost the slot" (finish current step, don't claim
  * more work). Extending an expired-but-unreclaimed lease is allowed: the doc
  * still being ours proves nobody took it.
+ *
+ * Slice 6 (dual-account binding): when the caller reports its current
+ * `account` and the lease was acquired with one, the two must match. A
+ * mismatch means the heartbeating process's CLAUDE_CONFIG_DIR resolved to a
+ * different profile than the lease was bound to at acquire time — e.g. env
+ * drift, or the same account double-booked across slots. Rather than extend
+ * a lease that no longer represents the account it claims to, the slot is
+ * released immediately (ok:false) so the fleet reclaims it instead of
+ * trusting the stale binding for another `leaseSeconds`.
  */
 export async function heartbeatLease(
   tenantId: string,
@@ -197,23 +256,81 @@ export async function heartbeatLease(
   if (!doc) {
     return { ok: false, reason: `slot ${input.slot} not held by ${input.holder} (expired and reclaimed, released, or never acquired)` };
   }
+  if (input.account !== undefined && doc.account !== undefined && doc.account !== input.account) {
+    await scopedDeleteOne(RunnerLeaseModel, tenantId, { slot: input.slot, holder: input.holder });
+    await recordLeaseHistory(tenantId, doc, now, 'account_mismatch');
+    log.warn(
+      { slot: input.slot, holder: input.holder, leaseAccount: doc.account, heartbeatAccount: input.account },
+      'Runner lease account mismatch on heartbeat — releasing slot',
+    );
+    return {
+      ok: false,
+      reason: `account mismatch on slot ${input.slot}: lease bound to "${doc.account}", heartbeat reported "${input.account}" — slot released`,
+    };
+  }
   return { ok: true, lease: toView(doc, now) };
 }
 
 /**
  * Release a held lease (delete the slot doc). Holder-scoped so a runner can
  * never free a slot another runner reclaimed from it. Idempotent — releasing
- * an already-released slot reports released:false, not an error.
+ * an already-released slot reports released:false, not an error. Records the
+ * completed hold to RunnerLeaseHistory (ADR-011 slice 7 runs log) so an
+ * operator can see which account/slot ran which task and for how long after
+ * the live RunnerLease doc is gone.
  */
 export async function releaseLease(
   tenantId: string,
   input: ReleaseLeaseInput,
 ): Promise<{ released: boolean }> {
   requireDb();
+  // Pre-image read for the history record — best-effort, not atomic with the
+  // delete below. Safe: only the actual holder ever releases its own slot, so
+  // there's no other writer racing this read.
+  const existing = (await scopedFind(RunnerLeaseModel, tenantId, { slot: input.slot, holder: input.holder })
+    .sort({ slot: 1 })
+    .exec()) as IRunnerLease[];
   const res = await scopedDeleteOne(RunnerLeaseModel, tenantId, { slot: input.slot, holder: input.holder });
   const released = (res.deletedCount ?? 0) > 0;
-  if (released) log.info({ slot: input.slot, holder: input.holder }, 'Runner lease released');
+  if (released) {
+    log.info({ slot: input.slot, holder: input.holder }, 'Runner lease released');
+    if (existing[0]) await recordLeaseHistory(tenantId, existing[0], new Date(), 'released');
+  }
   return { released };
+}
+
+/**
+ * Runs-log read (ADR-011 slice 7): newest-first history of completed lease
+ * holds — which holder/machine/account ran which task, on which slot, and
+ * for how long. Powers the dashboard runner-leases view and replaces
+ * grepping raw Mongo to debug a starved queue or a slow account.
+ */
+export async function listLeaseHistory(
+  tenantId: string,
+  opts?: { limit?: number; account?: string; slot?: number },
+): Promise<RunnerLeaseHistoryView[]> {
+  requireDb();
+  if (!RunnerLeaseHistoryModel) return [];
+  const limit = Math.min(Math.max(1, opts?.limit ?? 50), 500);
+  const filter: Record<string, unknown> = {};
+  if (opts?.account !== undefined) filter.account = opts.account;
+  if (opts?.slot !== undefined) filter.slot = opts.slot;
+  const docs = (await scopedFind(RunnerLeaseHistoryModel, tenantId, filter)
+    .sort({ releasedAt: -1 })
+    .limit(limit)
+    .lean()
+    .exec()) as unknown as RunnerLeaseHistoryView[];
+  return docs.map((d) => ({
+    slot: d.slot,
+    holder: d.holder,
+    machine: d.machine,
+    account: d.account,
+    taskId: d.taskId,
+    acquiredAt: d.acquiredAt,
+    releasedAt: d.releasedAt,
+    durationMs: d.durationMs,
+    reason: d.reason,
+  }));
 }
 
 /** All lease docs for the tenant (active + stale-awaiting-GC), slot order. */

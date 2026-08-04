@@ -2,18 +2,53 @@ import { createChildLogger } from '../shared/logger.js';
 
 const log = createChildLogger({ module: 'llm-moonshot' });
 
-// Moonshot cloud API (kimi-k2.6)
-const MOONSHOT_BASE_URL = 'https://api.moonshot.ai/v1';
+// ── Kimi lane backends ─────────────────────────────────────
+//
+// The 'moonshot' provider mode is really the Kimi K2 lane — it can be served
+// by two OpenAI-compatible backends:
+//
+//   moonshot   — Moonshot's own cloud API (paid; MOONSHOT_API_KEY)
+//   openrouter — OpenRouter's hosted K2, including the free
+//                `moonshotai/kimi-k2:free` slug (OPENROUTER_API_KEY)
+//
+// Direct Moonshot wins when both keys are configured (first-party paid lane
+// is the more reliable one); OpenRouter activates only when it is the sole
+// key, so the free lane is opt-in and never silently swaps a paid deployment.
+// This replaces the 2026-07-24 manual operator recipe ("repoint the moonshot
+// provider baseURL to openrouter") with first-class config.
+
+// Moonshot cloud API (kimi-k2.6) — overridable via MOONSHOT_BASE_URL
+const MOONSHOT_DEFAULT_BASE_URL = 'https://api.moonshot.ai/v1';
+const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
+/** OpenRouter's free Kimi K2 slug — the point of the OpenRouter lane. */
+const OPENROUTER_DEFAULT_MODEL = 'moonshotai/kimi-k2:free';
 
 // Ollama local API (OpenAI-compatible)
 const OLLAMA_DEFAULT_URL = 'http://localhost:11434/v1';
 
 let moonshotApiKey: string | null = null;
+let moonshotBaseUrl: string = MOONSHOT_DEFAULT_BASE_URL;
+let openrouterApiKey: string | null = null;
+let openrouterBaseUrl: string = OPENROUTER_DEFAULT_BASE_URL;
+let openrouterModel: string = OPENROUTER_DEFAULT_MODEL;
 let ollamaBaseUrl: string = OLLAMA_DEFAULT_URL;
 
-export function initMoonshot(key: string): void {
+export function initMoonshot(key: string, baseUrl?: string): void {
   moonshotApiKey = key;
-  log.info('Moonshot API client initialized');
+  if (baseUrl) moonshotBaseUrl = baseUrl;
+  log.info({ baseUrl: moonshotBaseUrl }, 'Moonshot API client initialized');
+}
+
+/**
+ * Configure the OpenRouter backend for the Kimi lane (free K2 without a paid
+ * Moonshot key). Off by default — initProvider() calls this only when
+ * OPENROUTER_API_KEY is set. Direct Moonshot still wins when both are keyed.
+ */
+export function initOpenRouter(key: string, model?: string, baseUrl?: string): void {
+  openrouterApiKey = key;
+  if (model) openrouterModel = model;
+  if (baseUrl) openrouterBaseUrl = baseUrl;
+  log.info({ baseUrl: openrouterBaseUrl, model: openrouterModel }, 'OpenRouter (Kimi lane) client initialized');
 }
 
 export function initOllama(baseUrl?: string): void {
@@ -22,7 +57,64 @@ export function initOllama(baseUrl?: string): void {
 }
 
 export function isMoonshotConfigured(): boolean {
-  return !!moonshotApiKey;
+  return !!(moonshotApiKey || openrouterApiKey);
+}
+
+interface KimiBackend {
+  backend: 'moonshot' | 'openrouter';
+  baseUrl: string;
+  apiKey: string;
+  providerName: string;
+  extraHeaders?: Record<string, string>;
+}
+
+function resolveKimiBackend(): KimiBackend {
+  if (moonshotApiKey) {
+    return { backend: 'moonshot', baseUrl: moonshotBaseUrl, apiKey: moonshotApiKey, providerName: 'Moonshot' };
+  }
+  if (openrouterApiKey) {
+    return {
+      backend: 'openrouter',
+      baseUrl: openrouterBaseUrl,
+      apiKey: openrouterApiKey,
+      providerName: 'OpenRouter',
+      // OpenRouter's recommended attribution headers — auth itself stays
+      // plain `Authorization: Bearer <key>` like every other backend here.
+      extraHeaders: {
+        'HTTP-Referer': 'https://github.com/knofler/myai',
+        'X-Title': 'myai gateway',
+      },
+    };
+  }
+  throw new Error('Moonshot client not initialized — set MOONSHOT_API_KEY (or OPENROUTER_API_KEY for the free OpenRouter K2 lane)');
+}
+
+/**
+ * Map the requested model onto the OpenRouter backend. OpenRouter slugs are
+ * always `vendor/model[:variant]`; a requested model without a '/' (e.g. the
+ * tier/config default 'kimi-k2.6') is Moonshot-native and is substituted with
+ * the configured OpenRouter slug instead of 404ing upstream.
+ */
+function resolveKimiModel(backend: KimiBackend, requested?: string): string | undefined {
+  if (backend.backend !== 'openrouter') return requested;
+  if (!requested || !requested.includes('/')) return openrouterModel;
+  return requested;
+}
+
+/** Introspection for dashboards/tests — which backend serves the Kimi lane. */
+export function getKimiLane(): { backend: 'moonshot' | 'openrouter' | 'none'; baseUrl: string | null; model: string | null } {
+  if (moonshotApiKey) return { backend: 'moonshot', baseUrl: moonshotBaseUrl, model: null };
+  if (openrouterApiKey) return { backend: 'openrouter', baseUrl: openrouterBaseUrl, model: openrouterModel };
+  return { backend: 'none', baseUrl: null, model: null };
+}
+
+/** Test-only: module-level backend state persists across suites — reset it. */
+export function resetKimiLaneForTests(): void {
+  moonshotApiKey = null;
+  moonshotBaseUrl = MOONSHOT_DEFAULT_BASE_URL;
+  openrouterApiKey = null;
+  openrouterBaseUrl = OPENROUTER_DEFAULT_BASE_URL;
+  openrouterModel = OPENROUTER_DEFAULT_MODEL;
 }
 
 export interface MoonshotRequest {
@@ -41,18 +133,17 @@ export interface MoonshotResponse {
 }
 
 /**
- * Call Moonshot/Kimi cloud API (OpenAI-compatible).
+ * Call the Kimi lane (OpenAI-compatible) — direct Moonshot cloud, or
+ * OpenRouter's hosted K2 when only OPENROUTER_API_KEY is configured.
  */
 export async function callMoonshot(req: MoonshotRequest): Promise<MoonshotResponse> {
-  if (!moonshotApiKey) {
-    throw new Error('Moonshot client not initialized — set MOONSHOT_API_KEY');
-  }
-
+  const backend = resolveKimiBackend();
   return callOpenAICompatible({
-    baseUrl: MOONSHOT_BASE_URL,
-    apiKey: moonshotApiKey,
-    req,
-    providerName: 'Moonshot',
+    baseUrl: backend.baseUrl,
+    apiKey: backend.apiKey,
+    extraHeaders: backend.extraHeaders,
+    req: { ...req, model: resolveKimiModel(backend, req.model) },
+    providerName: backend.providerName,
   });
 }
 
@@ -69,18 +160,17 @@ export async function callOllama(req: MoonshotRequest): Promise<MoonshotResponse
 }
 
 /**
- * Stream Moonshot/Kimi cloud API response via SSE.
+ * Stream the Kimi lane response via SSE — direct Moonshot cloud, or
+ * OpenRouter's hosted K2 when only OPENROUTER_API_KEY is configured.
  */
 export async function* callMoonshotStream(req: MoonshotRequest): AsyncGenerator<string, MoonshotResponse> {
-  if (!moonshotApiKey) {
-    throw new Error('Moonshot client not initialized — set MOONSHOT_API_KEY');
-  }
-
+  const backend = resolveKimiBackend();
   return yield* callOpenAICompatibleStream({
-    baseUrl: MOONSHOT_BASE_URL,
-    apiKey: moonshotApiKey,
-    req,
-    providerName: 'Moonshot',
+    baseUrl: backend.baseUrl,
+    apiKey: backend.apiKey,
+    extraHeaders: backend.extraHeaders,
+    req: { ...req, model: resolveKimiModel(backend, req.model) },
+    providerName: backend.providerName,
   });
 }
 
@@ -97,15 +187,51 @@ export async function* callOllamaStream(req: MoonshotRequest): AsyncGenerator<st
 
 // ── Generic OpenAI-compatible helpers ────────────────────
 
+/**
+ * HTTP error from an OpenAI-compatible backend, carrying the status code as
+ * a typed field so the resilience layer (retry on 429/5xx) and the provider
+ * chain's isRetryableError classify it without regexing the message. 429s —
+ * how OpenRouter surfaces its free-tier per-minute/per-day limits — also
+ * carry the parsed Retry-After hint.
+ */
+export class ProviderHttpError extends Error {
+  readonly status: number;
+  readonly retryAfterMs?: number;
+
+  constructor(providerName: string, status: number, body: string, retryAfterMs?: number) {
+    const detail = body.length > 600 ? `${body.slice(0, 600)}…` : body;
+    super(`${providerName} API ${status}${status === 429 ? ' (rate-limited)' : ''}: ${detail}`);
+    this.name = 'ProviderHttpError';
+    this.status = status;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+function toHttpError(providerName: string, res: Response, body: string): ProviderHttpError {
+  let retryAfterMs: number | undefined;
+  const retryAfter = res.headers.get('retry-after');
+  if (retryAfter) {
+    const secs = Number(retryAfter);
+    if (Number.isFinite(secs)) retryAfterMs = secs * 1000;
+    else {
+      const at = Date.parse(retryAfter);
+      if (!Number.isNaN(at)) retryAfterMs = Math.max(0, at - Date.now());
+    }
+  }
+  return new ProviderHttpError(providerName, res.status, body, retryAfterMs);
+}
+
 interface CallOpts {
   baseUrl: string;
   apiKey?: string;
+  /** Backend-specific headers (e.g. OpenRouter attribution) — merged after the defaults. */
+  extraHeaders?: Record<string, string>;
   req: MoonshotRequest;
   providerName: string;
 }
 
 async function callOpenAICompatible(opts: CallOpts): Promise<MoonshotResponse> {
-  const { baseUrl, apiKey, req, providerName } = opts;
+  const { baseUrl, apiKey, extraHeaders, req, providerName } = opts;
   const model = req.model || 'kimi-k2.6:cloud';
   const maxTokens = req.maxTokens || 4096;
 
@@ -125,6 +251,7 @@ async function callOpenAICompatible(opts: CallOpts): Promise<MoonshotResponse> {
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...extraHeaders,
   };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
@@ -140,7 +267,7 @@ async function callOpenAICompatible(opts: CallOpts): Promise<MoonshotResponse> {
 
   if (!res.ok) {
     const errorBody = await res.text();
-    throw new Error(`${providerName} API ${res.status}: ${errorBody}`);
+    throw toHttpError(providerName, res, errorBody);
   }
 
   const data = await res.json() as {
@@ -171,7 +298,7 @@ async function callOpenAICompatible(opts: CallOpts): Promise<MoonshotResponse> {
 }
 
 async function* callOpenAICompatibleStream(opts: CallOpts): AsyncGenerator<string, MoonshotResponse> {
-  const { baseUrl, apiKey, req, providerName } = opts;
+  const { baseUrl, apiKey, extraHeaders, req, providerName } = opts;
   const model = req.model || 'kimi-k2.6:cloud';
   const maxTokens = req.maxTokens || 4096;
 
@@ -185,6 +312,7 @@ async function* callOpenAICompatibleStream(opts: CallOpts): AsyncGenerator<strin
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...extraHeaders,
   };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
@@ -201,7 +329,7 @@ async function* callOpenAICompatibleStream(opts: CallOpts): AsyncGenerator<strin
 
   if (!res.ok) {
     const errorBody = await res.text();
-    throw new Error(`${providerName} API ${res.status}: ${errorBody}`);
+    throw toHttpError(providerName, res, errorBody);
   }
 
   let fullContent = '';

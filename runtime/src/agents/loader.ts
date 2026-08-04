@@ -5,6 +5,7 @@ import matter from 'gray-matter';
 import { getConfig } from '../shared/config.js';
 import { createChildLogger } from '../shared/logger.js';
 import { AgentModel, SkillModel, isConnected } from '../shared/db.js';
+import { getDbFailoverState } from '../shared/db-failover.js';
 import type { AgentDefinition, SkillDefinition } from '../shared/types.js';
 
 const log = createChildLogger({ module: 'agent-loader' });
@@ -128,6 +129,11 @@ export function loadSkills(): Map<string, SkillDefinition> {
 export async function syncToDatabase(): Promise<{ agents: { upserted: number; unchanged: number }; skills: { upserted: number; unchanged: number } }> {
   if (!isConnected()) {
     log.warn('MongoDB not connected — skipping agent/skill sync');
+    return { agents: { upserted: 0, unchanged: 0 }, skills: { upserted: 0, unchanged: 0 } };
+  }
+  if (getDbFailoverState().active) {
+    // bulkWrite bypasses the read-only guard plugin — skip explicitly.
+    log.warn('READ-ONLY DB failover active — skipping agent/skill sync (mirror must not diverge)');
     return { agents: { upserted: 0, unchanged: 0 }, skills: { upserted: 0, unchanged: 0 } };
   }
 

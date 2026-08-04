@@ -22,6 +22,7 @@
 
 import { createChildLogger } from '../shared/logger.js';
 import { getContextReadService } from './context-read-service.js';
+import type { BrainManifest, BrainManifestNamespace } from './context-read-service.js';
 import { tighten } from './context-text.js';
 
 // `tighten` is re-exported for backwards compatibility — it used to be defined
@@ -43,6 +44,13 @@ export interface BundleParts {
   /** Brain main HEAD when the summary came from the compiled brain brief —
    * the agent's anchor for the next `brain_delta` catch-up. */
   brainSha?: string;
+  /** BRAIN B-2 store TOC line (`name→fetch-tool · …`) — STATIC by construction
+   * (store names + primary fetch tools never vary with brain contents), so it
+   * renders in the B-8 stable prefix. */
+  storesToc?: string;
+  /** BRAIN B-2 namespace-freshness line for the active project — VOLATILE
+   * (counts change every merge), so it renders below the cache boundary. */
+  nsFreshness?: string;
   generatedAt: string;
 }
 
@@ -90,6 +98,69 @@ function budgetChars(): number {
  */
 export function resolveIdentity(): string {
   return getContextReadService().resolveIdentity();
+}
+
+// ── BRAIN B-2 — compact control-plane manifest for the boot payload ──────────
+//
+// `brain_manifest` (the MCP tool) returns the full TOC on demand; the boot
+// payload carries this COMPACT form so a fresh session knows where every
+// store is — and how fresh the brain is — without scanning state files or
+// spending a second tool call. Store names + primary fetch tools are static
+// (they render in the B-8 stable prefix); the freshness row is volatile.
+
+export interface BootManifestStore {
+  name: string;
+  /** Primary fetch tool (MCP tool name or script path) — how to descend into this store. */
+  fetch: string;
+}
+
+export interface BootManifest {
+  /** Brain main HEAD — the freshness anchor for a later `brain_delta({ since })`. */
+  freshnessSha?: string;
+  stores: BootManifestStore[];
+  /** Total namespace count (full per-namespace detail stays behind `brain_manifest`). */
+  namespaces: number;
+  /** The active project's namespace row, when the brain has one. */
+  active?: BrainManifestNamespace;
+  memoryAtoms: number;
+}
+
+/** Compact the full B-2 manifest down to what the boot payload carries. */
+export function compactManifest(manifest: BrainManifest, repo: string): BootManifest {
+  return {
+    freshnessSha: manifest.freshnessSha,
+    stores: manifest.stores.map(s => ({ name: s.name, fetch: s.fetchTools[0] ?? '' })),
+    namespaces: manifest.namespaces.length,
+    active: manifest.namespaces.find(n => n.name === repo),
+    memoryAtoms: manifest.memoryAtoms,
+  };
+}
+
+/** Static store TOC line — `name→fetch · …`. Belongs in the B-8 stable prefix. */
+function storesTocLine(compact: BootManifest): string | undefined {
+  if (!compact.stores.length) return undefined;
+  return compact.stores.map(s => (s.fetch ? `${s.name}→\`${s.fetch}\`` : s.name)).join(' · ');
+}
+
+/** Volatile namespace-freshness line for the active project. */
+function nsFreshnessLine(compact: BootManifest): string | undefined {
+  if (!compact.active && !compact.namespaces) return undefined;
+  const a = compact.active;
+  const head = a
+    ? `${a.name} brief${a.hasBrief ? '✓' : '✗'} working${a.hasWorking ? '✓' : '✗'} · ${a.sessions} sessions · ${a.handoffs} handoffs`
+    : 'active project has no namespace yet';
+  return `${head} · ${compact.namespaces} ns · ${compact.memoryAtoms} memory atoms`;
+}
+
+/** Read + compact the B-2 manifest through the seam. Best-effort, never throws. */
+function resolveBootManifest(tenantId: string, repo: string): BootManifest | undefined {
+  try {
+    const manifest = getContextReadService().readBrainManifest?.(tenantId);
+    return manifest ? compactManifest(manifest, repo) : undefined;
+  } catch (err) {
+    log.debug({ err, repo }, 'boot manifest read failed — bundle renders without it');
+    return undefined;
+  }
 }
 
 /** Pick the active project: highest-priority repo, else the master repo. */
@@ -150,9 +221,26 @@ async function resolvePlanFocus(tenantId: string, repo: string, max: number): Pr
 }
 
 /**
+ * BRAIN B-8 cache boundary — the line that splits the rendered bundle into a
+ * byte-stable prefix (above) and the volatile tail (below). Everything above
+ * it is identical across wakeups while identity/config stand still, so the
+ * Anthropic prompt-cache prefix match survives volatile churn (new brain SHA,
+ * fresh handoff, plan progress) instead of being invalidated by it. Clients
+ * that place explicit `cache_control` breakpoints can split on this marker.
+ */
+export const CACHE_BOUNDARY = '<!-- B-8 cache boundary: stable above · volatile below -->';
+
+/**
  * Render the parts into the final `instructions` string, respecting the total
  * char budget. The identity + active-project + lazy-pointers lines are always
- * kept; handoff/plan are dropped if they'd blow the budget.
+ * kept; handoff/plan/ns-freshness are dropped if they'd blow the budget.
+ *
+ * BRAIN B-8 prompt-cache-aware ordering: static content FIRST (header, lazy
+ * recall instructions, the B-2 store TOC, identity), then the CACHE_BOUNDARY
+ * marker, then everything that changes across wakeups (active project, brain
+ * SHA, handoff, next, namespace freshness). Volatile lines must never render
+ * above the boundary — one moved line resets the cache prefix for every
+ * wakeup that follows.
  */
 export function renderBundle(parts: BundleParts, budget: number = budgetChars()): string {
   const header = '# myAI operator brief — you are pre-loaded with this operator\'s context (betaC auto-boot)';
@@ -163,20 +251,28 @@ export function renderBundle(parts: BundleParts, budget: number = budgetChars())
     '(cross-project memory). This brief is a tight summary by design.';
 
   const brief = briefFromParts(parts);
-  const lines: string[] = [header, '', `**Who:** ${brief.who}`, `**State:** ${brief.state}`];
+
+  // Stable prefix (B-8): byte-identical across wakeups.
+  const stable: string[] = [header, '', lazy];
+  if (parts.storesToc) stable.push(`**Stores:** ${parts.storesToc}`);
+  stable.push(`**Who:** ${brief.who}`, CACHE_BOUNDARY);
+
+  // Volatile tail: always-kept lines first.
+  const volatileLines: string[] = [`**State:** ${brief.state}`];
   if (parts.brainSha) {
-    lines.push(`**Brain:** ${parts.brainSha.slice(0, 8)} — remember this SHA; catch up later with \`brain_delta\``);
+    volatileLines.push(`**Brain:** ${parts.brainSha.slice(0, 8)} — remember this SHA; catch up later with \`brain_delta\``);
   }
 
-  // Optional sections, added only while they fit the budget. `next` is trimmed
-  // before `handoff` — the handoff is the more valuable line under pressure.
-  const draft = (extra: string[]) => [...lines, ...extra, '', lazy].join('\n');
+  const draft = (extra: string[]) => [...stable, ...volatileLines, ...extra].join('\n');
 
+  // Optional sections, added only while they fit the budget. Trimmed from the
+  // bottom: ns-freshness goes first, then `next`, then `handoff` — the handoff
+  // is the most valuable line under pressure.
   let extra: string[] = [];
   if (brief.handoff) extra = [...extra, `**Handoff:** ${brief.handoff}`];
   if (brief.next) extra = [...extra, `**Next:** ${brief.next}`];
+  if (parts.nsFreshness) extra = [...extra, `**Brain-ns:** ${parts.nsFreshness}`];
 
-  // Trim optional sections from the bottom until the whole thing fits.
   while (extra.length && draft(extra).length > budget) extra = extra.slice(0, -1);
 
   return draft(extra);
@@ -205,6 +301,7 @@ export async function buildContextBundle(
     const handoffSummary = brain?.brief
       ?? (await resolveHandoffSummary(tenantId, activeProject, Math.floor(budget * 0.5)));
     const planFocus = await resolvePlanFocus(tenantId, activeProject, Math.floor(budget * 0.25));
+    const manifest = resolveBootManifest(tenantId, activeProject);
 
     const parts: BundleParts = {
       identity,
@@ -212,6 +309,8 @@ export async function buildContextBundle(
       handoffSummary,
       planFocus,
       brainSha: brain?.sha,
+      storesToc: manifest && storesTocLine(manifest),
+      nsFreshness: manifest && nsFreshnessLine(manifest),
       generatedAt: (opts.now?.() ?? new Date()).toISOString(),
     };
     return renderBundle(parts, budget);
@@ -260,6 +359,9 @@ export interface BootBundle {
   brief: OperatorBrief;
   /** Structured parts behind the rendered bundle. */
   parts: BundleParts;
+  /** BRAIN B-2: the compact control-plane manifest — stores + fetch tools,
+   * namespace count, active-namespace freshness, and the freshness SHA. */
+  manifest?: BootManifest;
   /** Lazy RAG results — present ONLY when a `query` was supplied. */
   deeper?: ContextSnippet[];
   /** Brain main HEAD when the brief came from the brain — remember it and
@@ -317,6 +419,7 @@ export async function buildBootBundle(
   const lazyRecall = ['handoff_read', 'recall_session', 'memory_search', 'context_boot', 'brain_delta'];
 
   let parts: BundleParts;
+  let manifest: BootManifest | undefined;
   try {
     const activeProject = opts.repo?.trim() || (await resolveActiveProject(tenantId));
     // Compiled brain brief first (BRAIN B3), handoff store as the fallback.
@@ -324,12 +427,15 @@ export async function buildBootBundle(
     const handoffSummary = brain?.brief
       ?? (await resolveHandoffSummary(tenantId, activeProject, Math.floor(budget * 0.5)));
     const planFocus = await resolvePlanFocus(tenantId, activeProject, Math.floor(budget * 0.25));
+    manifest = resolveBootManifest(tenantId, activeProject);
     parts = {
       identity,
       activeProject,
       handoffSummary,
       planFocus,
       brainSha: brain?.sha,
+      storesToc: manifest && storesTocLine(manifest),
+      nsFreshness: manifest && nsFreshnessLine(manifest),
       generatedAt: (opts.now?.() ?? new Date()).toISOString(),
     };
   } catch (err) {
@@ -351,6 +457,7 @@ export async function buildBootBundle(
     bundle,
     brief: briefFromParts(parts),
     parts,
+    manifest,
     deeper,
     brainSha: parts.brainSha,
     tokenEstimate: Math.ceil(bundle.length / 4),

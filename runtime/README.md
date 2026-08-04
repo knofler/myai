@@ -130,6 +130,52 @@ docker compose down
 
 Ports: HTTP 3200, WebSocket 3201, MongoDB 27200 (mapped from 27017).
 
+## Docker MCP Toolkit
+
+Docker Desktop's MCP Toolkit (`docker mcp`) can manage the connection to this
+gateway instead of hand-editing `.mcp.json`. One-time setup:
+
+```bash
+# Requires: Docker Desktop with MCP Toolkit enabled, and the gateway running
+# (docker compose up -d gateway).
+./scripts/docker-mcp-setup.sh
+```
+
+This registers a `myai` catalog entry (`mcp/catalog/myai-server.yaml`) pointing
+at the gateway's existing HTTP MCP endpoint (`http://host.docker.internal:3100/mcp`),
+creates a `myai` profile, and stores `GATEWAY_LOCAL_TOKEN` in the OS Keychain via
+`docker mcp secret` (no more plaintext token in `.env`/`.mcp.json`). To connect a
+client:
+
+```bash
+docker mcp client connect claude-code --profile myai
+docker mcp tools ls --profile myai
+```
+
+`client connect` merges a single `MCP_DOCKER` entry into `.mcp.json` alongside
+your other servers — it does not remove the manual `myai` HTTP entry, so drop
+that by hand once you've confirmed the toolkit path works.
+
+Verify the packaging (image build + catalog/profile/secret/connect round trip,
+all against throwaway names — never touches the real `myai` catalog/profile or
+this repo's `.mcp.json`):
+
+```bash
+./scripts/docker-mcp-verify.sh          # catalog/profile smoke test
+./scripts/docker-mcp-verify.sh --build  # + OCI image build check
+```
+
+Catch the catalog file drifting from the gateway it describes (port move,
+`/mcp` route rename, `x-gateway-local-token` header rename, `GATEWAY_LOCAL_TOKEN`
+rename) — structural checks run hermetically in CI
+(`scripts/tests/test_docker_mcp_catalog.sh`); the live-gateway + docker-mcp-CLI
+checks run best-effort when available:
+
+```bash
+./scripts/docker-mcp-catalog-check.sh               # all checks (schema + docker CLI + live gateway)
+./scripts/docker-mcp-catalog-check.sh --schema-only  # hermetic subset only
+```
+
 ## Roadmap
 
 | Phase | Status | Description |
@@ -140,4 +186,4 @@ Ports: HTTP 3200, WebSocket 3201, MongoDB 27200 (mapped from 27017).
 | 4 | Next | SONA vector search (semantic memory) |
 | 5 | Planned | Channel system (Telegram, Discord, Slack) |
 | 6 | Planned | LLM integration (Claude, OpenAI providers) |
-| 7 | Planned | npm publish (`npx myai start`) |
+| 7 | Partial | npm publish (`npx myai start`) planned; Docker MCP Toolkit catalog packaging done |

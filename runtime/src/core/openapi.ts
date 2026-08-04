@@ -93,6 +93,18 @@ const schemas: Obj = {
       enabled: { type: 'boolean' },
       source: { type: 'string' },
       timeout: { type: 'number' },
+      lastToggle: {
+        type: 'object',
+        description: 'Governance record of the most recent PATCH /api/hooks toggle (who, when, before/after state).',
+        properties: {
+          actorUserId: { type: 'string' },
+          role: { type: 'string' },
+          via: { type: 'string' },
+          previousState: { type: 'boolean' },
+          newState: { type: 'boolean' },
+          at: { type: 'string', format: 'date-time' },
+        },
+      },
     },
     additionalProperties: true,
   },
@@ -312,6 +324,17 @@ const schemas: Obj = {
       events: { type: 'integer' },
     },
   },
+  TenantMcpTools: {
+    type: 'object',
+    description: "A tenant's per-org MCP tool visibility override (core/rbac.ts OPERATOR_ONLY_TOOLS / isToolVisibleForTenant).",
+    required: ['tenantId', 'mcpToolAllowlist', 'mcpToolDenylist', 'operatorOnlyTools'],
+    properties: {
+      tenantId: { type: 'string' },
+      mcpToolAllowlist: { type: 'array', items: { type: 'string' }, description: 'Tool names exempted from the default OPERATOR_ONLY_TOOLS hiding for this tenant' },
+      mcpToolDenylist: { type: 'array', items: { type: 'string' }, description: 'Tool names additionally hidden from this tenant beyond the default' },
+      operatorOnlyTools: { type: 'array', items: { type: 'string' }, description: 'The full known OPERATOR_ONLY_TOOLS set, for the admin panel to render checkboxes against' },
+    },
+  },
 };
 
 // ── Paths ────────────────────────────────────────────────────
@@ -500,6 +523,46 @@ function buildPaths(): Obj {
           }),
         },
       },
+      patch: {
+        tags: ['Hooks'],
+        summary: 'Enable or disable a hook — bash hooks are patched into .claude/settings.json (reversible, unrelated keys preserved)',
+        operationId: 'setHookEnabled',
+        requestBody: jsonBody({
+          type: 'object',
+          required: ['name', 'enabled'],
+          properties: {
+            name: { type: 'string', description: 'Hook name, e.g. bash:session/13-ram-guard.sh' },
+            enabled: { type: 'boolean' },
+          },
+        }),
+        responses: {
+          '200': jsonResponse('Toggle result', {
+            type: 'object',
+            required: ['ok', 'name', 'enabled', 'settingsPatched'],
+            properties: {
+              ok: { type: 'boolean' },
+              name: { type: 'string' },
+              enabled: { type: 'boolean' },
+              settingsPatched: { type: 'boolean' },
+              lastToggle: {
+                type: 'object',
+                description: 'The audit-trail record just written for this toggle (also recorded to /api/audit as action "hook.toggle").',
+                properties: {
+                  actorUserId: { type: 'string' },
+                  role: { type: 'string' },
+                  via: { type: 'string' },
+                  previousState: { type: 'boolean' },
+                  newState: { type: 'boolean' },
+                  at: { type: 'string', format: 'date-time' },
+                },
+              },
+            },
+          }),
+          '400': errorResponse('Malformed body'),
+          '404': errorResponse('Hook not found'),
+          '500': errorResponse('settings.json patch failed'),
+        },
+      },
     },
 
     // ── Rules ──
@@ -630,7 +693,7 @@ function buildPaths(): Obj {
         operationId: 'exportMemoryBundle',
         parameters: [
           { name: 'repo', in: 'query', schema: { type: 'string' } },
-          { name: 'source', in: 'query', schema: { type: 'string', enum: ['state', 'handoff', 'commit', 'pr', 'pattern', 'bug', 'code', 'feature', 'archive'] } },
+          { name: 'source', in: 'query', schema: { type: 'string', enum: ['state', 'handoff', 'commit', 'pr', 'pattern', 'bug', 'code', 'feature', 'archive', 'brain'] } },
         ],
         responses: {
           '200': jsonResponse('Portable memory bundle', {
@@ -1280,6 +1343,42 @@ function buildPaths(): Obj {
             },
           }),
           '400': errorResponse("format must be 'csv'/'json', unparsable data, or over the per-batch row cap (code BAD_REQUEST)"),
+          ...adminResponses,
+        },
+      },
+    },
+
+    '/api/tenants/{id}/mcp-tools': {
+      get: {
+        tags: ['Tenants'],
+        summary: "Read a tenant's per-org MCP tool visibility override (admin-gated)",
+        operationId: 'getTenantMcpTools',
+        security: adminSecurity,
+        parameters: [pathParam('id', 'Tenant id')],
+        responses: {
+          '200': jsonResponse('Current allow/deny override + the known OPERATOR_ONLY_TOOLS set', ref('TenantMcpTools')),
+          '404': errorResponse('Tenant not found (code NOT_FOUND)'),
+          ...adminResponses,
+        },
+      },
+      patch: {
+        tags: ['Tenants'],
+        summary: "Set a tenant's mcpToolAllowlist and/or mcpToolDenylist override (admin-gated) — grants a trusted tenant an OPERATOR_ONLY_TOOLS exception, or further restricts a tenant's own tool surface",
+        operationId: 'setTenantMcpTools',
+        security: adminSecurity,
+        parameters: [pathParam('id', 'Tenant id')],
+        requestBody: jsonBody({
+          type: 'object',
+          description: 'Either field may be omitted to leave it untouched; an empty array clears that override back to the OPERATOR_ONLY_TOOLS default.',
+          properties: {
+            mcpToolAllowlist: { type: 'array', items: { type: 'string' }, description: 'Tool names exempted from the default OPERATOR_ONLY_TOOLS hiding for this tenant' },
+            mcpToolDenylist: { type: 'array', items: { type: 'string' }, description: 'Tool names additionally hidden from this tenant beyond the default' },
+          },
+        }, false),
+        responses: {
+          '200': jsonResponse('Updated allow/deny override', ref('TenantMcpTools')),
+          '400': errorResponse('Neither field provided, or a field is not an array of non-empty strings (code BAD_REQUEST)'),
+          '404': errorResponse('Tenant not found (code NOT_FOUND)'),
           ...adminResponses,
         },
       },

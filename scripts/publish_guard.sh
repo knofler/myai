@@ -63,6 +63,27 @@ say ""
 say "CLEAN-ROOM PUBLISH GUARD — packing & scanning the real tarball"
 hr
 
+# ── 0. Capability-counts drift gate — docs must match shipped truth ──────────
+# README/SHOWCASE/package.json hardcode "NN agents / NN skills / NN MCP tools"
+# in ~30 places; v0.6.2 reconciled them by hand and still shipped a wrong
+# agent count. A release must not ship stale numbers.
+if [ -x "$ROOT/scripts/check_capability_counts.sh" ]; then
+  say "capability counts: checking README/SHOWCASE/package.json against shipped truth…"
+  if COUNTS_OUT="$("$ROOT/scripts/check_capability_counts.sh" 2>&1)"; then
+    say "capability counts: in sync."
+  else
+    echo ""
+    echo "❌ PUBLISH BLOCKED — capability counts drifted from shipped truth:"
+    echo ""
+    echo "$COUNTS_OUT" | grep -E 'FAIL|ERROR|shipped truth|RESULT'
+    echo ""
+    echo "Fix: scripts/check_capability_counts.sh --fix  (rewrites the stale numbers),"
+    echo "then review the diff and commit before publishing."
+    exit 1
+  fi
+  hr
+fi
+
 # ── 1. Build the tarball npm would actually publish ──────────────────────────
 # When invoked via prepublishOnly under `npm publish --dry-run`, npm exports
 # npm_config_dry_run=true into this script's env — which would turn the nested

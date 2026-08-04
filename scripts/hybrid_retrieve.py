@@ -22,13 +22,18 @@ Two signals, one fusion:
          score(d) = sum over lists of 1 / (RRF_K + rank_d),  RRF_K = 60
      Sort desc, return top-k. The RRF order IS the deterministic reranker.
 
-Learned reranker hook (DEFAULT-OFF, unimplemented on purpose)
+Reranker hook (DEFAULT-OFF)
   A future learned cross-encoder (SPLADE / ColBERT / a real cross-encoder) is
-  the upgrade path for step 4, gated exactly like B-5's embed/index hooks
-  ($MYAI_BRAIN_EMBED_CMD / $MYAI_BRAIN_INDEX_CMD in scripts/lib/brain.sh): read
-  env `MYAI_RERANK_CMD`; when it is UNSET (the default) we skip entirely and the
-  deterministic RRF order stands. This module does NOT implement any learned
-  model — only the plumbing that lets one plug in later. See _maybe_rerank.
+  the eventual upgrade path for step 4, gated exactly like B-5's embed/index
+  hooks ($MYAI_BRAIN_EMBED_CMD / $MYAI_BRAIN_INDEX_CMD in scripts/lib/brain.sh):
+  read env `MYAI_RERANK_CMD`; when it is UNSET (the default) we skip entirely
+  and the deterministic RRF order stands. This module does NOT implement any
+  reranking model itself — only the plumbing that lets one plug in. See
+  _maybe_rerank. scripts/rerank_lexical.py is the first real backend for this
+  hook (a stdlib-only lexical-overlap cross-encoder-STYLE scorer, not a
+  learned model — the cheap first cut ahead of an eventual SPLADE/ColBERT/
+  real cross-encoder); it is NOT wired in by default here, matching the
+  hook's opt-in contract — set `$MYAI_RERANK_CMD` to activate it.
 
 Public interface (B-3 imports this — do not change the signature):
     retrieve(db_path, query, k=10, doc_types=None) -> list[dict]

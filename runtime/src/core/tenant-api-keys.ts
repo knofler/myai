@@ -319,7 +319,16 @@ export async function resolveScopedTenantByKey(
     .exec?.()
     ?.catch?.(() => {});
 
-  return { tenantId: rec.tenantId, plan: tenant.plan, region: tenant.region, scopes: rec.scopes, keyId: rec.keyId };
+  return {
+    tenantId: rec.tenantId,
+    plan: tenant.plan,
+    region: tenant.region,
+    isolationTier: tenant.isolationTier,
+    scopes: rec.scopes,
+    keyId: rec.keyId,
+    mcpToolAllowlist: tenant.mcpToolAllowlist,
+    mcpToolDenylist: tenant.mcpToolDenylist,
+  };
 }
 
 export { sha256Hex };

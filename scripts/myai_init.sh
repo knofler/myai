@@ -428,7 +428,14 @@ PYEOF
   #    .myai-local is gitignored so it is never committed). A clean re-init has
   #    nothing staged.
   if git -C "$ABS_TARGET" rev-parse --git-dir >/dev/null 2>&1; then
-    git -C "$ABS_TARGET" add CLAUDE.md .gitignore .claude/settings.json .mcp.json 2>/dev/null || true
+    # Stage each artifact individually and only when it exists: `git add` with
+    # ANY missing pathspec stages NOTHING (fatal, rc=128), and .mcp.json is
+    # legitimately absent on a python3-free clean box (json_merge.py needs
+    # python3) — one missing file must not silently skip the whole init commit
+    # and leave the target repo dirty (found by e2e_init_external_repos.sh).
+    for _f in CLAUDE.md .gitignore .claude/settings.json .mcp.json; do
+      [ -e "$ABS_TARGET/$_f" ] && git -C "$ABS_TARGET" add "$_f" 2>/dev/null || true
+    done
     if ! git -C "$ABS_TARGET" diff --cached --quiet 2>/dev/null; then
       git -C "$ABS_TARGET" commit -m "chore(myai): add kernel CLAUDE.md + .claude/settings.json + .mcp.json + gitignore .myai-local" >/dev/null 2>&1 || true
       c_ok "Committed kernel CLAUDE.md + .claude/settings.json + .mcp.json + .gitignore"

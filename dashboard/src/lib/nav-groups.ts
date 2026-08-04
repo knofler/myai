@@ -38,6 +38,7 @@ export const FLAT_LINKS: NavLink[] = [
   { href: '/system', label: 'System', short: 'System', icon: '⚙', hint: 'routing · budgets · costs', primary: true },
   { href: '/connectors', label: 'Connectors', short: 'Plugs', icon: '⧉', hint: 'MCP bundle · custom', primary: false },
   { href: '/registry', label: 'Registry', short: 'Registry', icon: '#', hint: 'agents · skills · rules', primary: false },
+  { href: '/marketplace', label: 'Marketplace', short: 'Market', icon: '⬡', hint: 'browse · install agents & skills', primary: false },
   { href: '/showcase', label: 'Showcase', short: 'Showcase', icon: '❏', hint: 'what myAI is · capabilities', primary: true },
   { href: '/notifications', label: 'Notifications', short: 'Alerts', icon: '🔔', hint: 'alerts · history', primary: false },
   { href: '/memory', label: 'Memory', short: 'Memory', icon: '∞', hint: 'sona · sessions', primary: false },
@@ -55,7 +56,7 @@ const GROUP_DEFS: { id: string; label: string; hrefs: string[] }[] = [
   { id: 'overview', label: 'Overview', hrefs: ['/', '/showcase'] },
   { id: 'work', label: 'Work', hrefs: ['/work', '/fleet', '/swarm', '/projects', '/apps'] },
   { id: 'insights', label: 'Insights & Billing', hrefs: ['/analytics', '/savings', '/recap', '/revenue'] },
-  { id: 'system', label: 'System', hrefs: ['/system', '/connectors', '/registry', '/logs'] },
+  { id: 'system', label: 'System', hrefs: ['/system', '/connectors', '/registry', '/marketplace', '/logs'] },
   { id: 'brain', label: 'Brain & Memory', hrefs: ['/memory', '/brain', '/context'] },
   { id: 'account', label: 'Account', hrefs: ['/notifications', '/api-keys', '/sessions', '/audit'] },
 ];

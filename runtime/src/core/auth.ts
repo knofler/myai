@@ -26,6 +26,7 @@ import { getConfig } from '../shared/config.js';
 import { createChildLogger } from '../shared/logger.js';
 import { type ToolContext, AuthError } from './tenant-context.js';
 import { resolveScopedTenantByKey } from './tenant-api-keys.js';
+import { isHostedBrainTransportPath } from './hosted-brain-transport.js';
 
 const log = createChildLogger({ module: 'auth' });
 
@@ -132,7 +133,14 @@ export async function resolveTenantByKey(rawKey: string): Promise<ToolContext> {
   } else if (!timingSafeEqualHex(candidateHash, tenant.apiKeyHash)) {
     throw new AuthError('unauthorized');
   }
-  return { tenantId: tenant.tenantId, plan: tenant.plan, region: tenant.region };
+  return {
+    tenantId: tenant.tenantId,
+    plan: tenant.plan,
+    region: tenant.region,
+    isolationTier: tenant.isolationTier,
+    mcpToolAllowlist: tenant.mcpToolAllowlist,
+    mcpToolDenylist: tenant.mcpToolDenylist,
+  };
 }
 
 /**
@@ -210,6 +218,7 @@ const REST_EXEMPT = new Set([
   // Audit trail + permission matrix (ADR-013 §5, RBAC v2): JWT-cookie
   // authenticated inside the handlers, members-capability gated.
   '/api/auth/audit', '/api/auth/audit/export', '/api/auth/permissions',
+  '/api/auth/rbac/shadow-denials',
   // Scoped per-tenant API-key management (ADR-010 §3.6): JWT-cookie
   // authenticated + owner/admin gated inside the handlers, so they bypass the
   // per-tenant API-key middleware (an owner shouldn't need a key to mint keys).
@@ -233,7 +242,13 @@ const REST_EXEMPT = new Set([
 export function authenticate(opts: AuthOptions = {}) {
   const exemptPaths = opts.exemptPaths ?? REST_EXEMPT;
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    if (exemptPaths.has(req.path) || (opts.exemptGet && req.method === 'GET')) {
+    // Hosted-brain git transport (ADR-017): a different credential scheme
+    // (per-tenant hosted-brain token, HTTP Basic) on a path shape this Set
+    // can't exact-match (`/brain/<tenantId>.git/...`). It authenticates
+    // itself via hostedBrainAuth/verifyHostedToken in
+    // hosted-brain-transport.ts, so it bypasses the tenant-API-key resolver
+    // here rather than being folded into it.
+    if (exemptPaths.has(req.path) || (opts.exemptGet && req.method === 'GET') || isHostedBrainTransportPath(req.path)) {
       next();
       return;
     }

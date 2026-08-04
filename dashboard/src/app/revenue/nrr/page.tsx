@@ -9,10 +9,11 @@
 // Server component reading the Mongo Tenant mirror + the pure cohort engine
 // (src/lib/nrr-cohort.ts, mirrored from runtime/src/analytics/nrr-cohort.ts).
 
-import { connectDB, Tenant } from '@/lib/db';
+import { connectDB, Tenant, MrrSnapshot } from '@/lib/db';
 import { fmtUsd } from '@/lib/format';
 import { mrrForSnapshot, type TenantBillingSnapshot, type BillingInterval } from '@/lib/revenue';
 import { computeCohortNrrReport, type CohortInput } from '@/lib/nrr-cohort';
+import { historicalStartingMrr, type MrrSnapshotPoint } from '@/lib/mrr-snapshots';
 import type { TenantPlan, SubscriptionStatus } from '@/lib/billing';
 import { Card, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
@@ -64,15 +65,26 @@ export default async function NrrCohortPage() {
     { tenantId: 1, plan: 1, subscriptionStatus: 1, billingInterval: 1, status: 1, createdAt: 1, updatedAt: 1, currentPeriodEnd: 1 },
   ).lean()) as unknown as TenantRow[];
 
-  // ── Reconstruct one starting-MRR point per tenant, bucketed by signup month ──
-  // We don't persist historical MRR snapshots yet (same gap noted on /revenue),
-  // so each account gets exactly ONE observed point ("now"): active accounts use
-  // their current MRR as the starting-MRR proxy (we cannot yet tell whether an
-  // active account has already expanded/contracted since signup — that needs a
-  // persisted monthly snapshot); lapsed accounts use what their last known plan
+  const snapshotDocs = (await MrrSnapshot.find(
+    { tenantId: { $in: tenants.map((t) => t.tenantId) } },
+    { tenantId: 1, mrr: 1, capturedAt: 1 },
+  ).lean()) as unknown as Array<{ tenantId: string; mrr: number; capturedAt: Date }>;
+  const snapshotsByTenant = new Map<string, MrrSnapshotPoint[]>();
+  for (const s of snapshotDocs) {
+    const list = snapshotsByTenant.get(s.tenantId) ?? [];
+    list.push({ mrr: s.mrr, capturedAt: new Date(s.capturedAt) });
+    snapshotsByTenant.set(s.tenantId, list);
+  }
+
+  // ── One starting-MRR point per tenant, bucketed by signup month ──
+  // Prefer the tenant's earliest persisted MRR snapshot (real historical
+  // starting point, written by the nightly mrr_snapshot_sweep job) when at
+  // least 2 snapshots exist. Tenants with fewer than 2 snapshots (job hasn't
+  // run long enough for them yet) fall back to the previous proxy: active
+  // accounts use their current MRR as the starting-MRR proxy (we cannot tell
+  // whether an active account has already expanded/contracted since signup
+  // without real history); lapsed accounts use what their last known plan
   // would have billed, so they show up as churned MRR against their cohort.
-  // Expansion/contraction will start reading real, nonzero values once a
-  // nightly MRR-snapshot job lands (tracked alongside the /revenue TODO).
   const cohortMap = new Map<string, { accounts: { tenantId: string; startingMrr: number }[]; currentMrrById: Record<string, number> }>();
 
   for (const t of tenants) {
@@ -87,9 +99,10 @@ export default async function NrrCohortPage() {
     const isActive = currentMrr > 0;
     if (!isActive && t.subscriptionStatus !== 'canceled' && t.subscriptionStatus !== 'past_due') continue; // never paid
 
-    const startingMrr = isActive
+    const historical = historicalStartingMrr(snapshotsByTenant.get(t.tenantId) ?? []);
+    const startingMrr = historical ?? (isActive
       ? currentMrr
-      : mrrForSnapshot({ ...snap, subscriptionStatus: 'active' }); // best-effort: what the lapsed plan would bill
+      : mrrForSnapshot({ ...snap, subscriptionStatus: 'active' })); // best-effort: what the lapsed plan would bill
 
     if (startingMrr <= 0) continue;
 
@@ -178,10 +191,10 @@ export default async function NrrCohortPage() {
             cancelled. NRR = ending MRR ÷ starting MRR (&gt;100% = net expansion).
           </p>
           <p className="text-zinc-600 pt-1 border-t border-zinc-800">
-            No historical MRR snapshots are persisted yet, so each account contributes a single observed point (now):
-            still-active accounts use their current MRR as the starting-MRR proxy, so expansion/contraction read 0 until a
-            nightly MRR-snapshot job lands and starts distinguishing "upgraded since signup" from "always paid this much" —
-            same gap noted on <code className="text-zinc-400">/revenue</code>. Churn is already exact.
+            Starting MRR prefers each account&apos;s earliest persisted MRR snapshot from the nightly snapshot job, so
+            expansion/contraction reflect a real trend once at least 2 daily snapshots exist. Accounts with fewer than 2
+            snapshots still fall back to the current-MRR proxy (expansion/contraction read 0 for those until their history
+            builds up) — same fallback used on <code className="text-zinc-400">/revenue</code>. Churn is already exact.
           </p>
         </div>
       </Card>

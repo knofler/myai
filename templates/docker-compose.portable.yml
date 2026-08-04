@@ -44,8 +44,12 @@ services:
       - MCP_PORT=3100
       - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
       # Loopback bridge token — the in-cluster dashboard authenticates with it over
-      # the Docker bridge; host callers stay trusted via loopback. Override for hosted.
-      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}
+      # the Docker bridge; host callers stay trusted via loopback. Set in .env —
+      # `myai up` generates a random one on first boot if none is present. NO
+      # published fallback (a hardcoded default would ship in the npm package as
+      # a known credential, SECURITY task-7f8b20a3); refused by the gateway when
+      # TENANT_ENFORCE=true.
+      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-}
       - JWT_SECRET=${JWT_SECRET:-myai-dev-jwt-secret-change-me}
       # Anti-lockout bootstrap admin — set BOTH in .env to seed an owner login.
       - ADMIN_EMAIL=${ADMIN_EMAIL:-}
@@ -81,7 +85,7 @@ services:
       - MONGODB_URI=${MONGODB_URI:-mongodb://admin:password@mongo:27017/myai?authSource=admin}
       - AI_ROOT=/app/AI
       - GATEWAY_MCP_URL=http://gateway:3100/mcp
-      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}
+      - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-}
       # Loopback default → no login wall. Set true only for an internet-exposed deploy.
       - REQUIRE_LOGIN=${REQUIRE_LOGIN:-false}
     mem_limit: ${DASHBOARD_MEM_LIMIT:-512m}

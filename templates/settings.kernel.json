@@ -1,5 +1,8 @@
 {
-  "$comment": "myAI kernel settings \u2014 dropped by `myai init` (greenfield) into a kernel-only repo's .claude/settings.json. Wires the PreToolUse SAFETY hooks (block-push-main, secret-scan, no-local-npm, protected-files) from the installed ai-management module, resolved at hook-exec time via `myai root`. The hook BODIES live in the module, never a per-repo copy (plan S-INIT-5, ADR-016 \u00a70.5). Each command FAILS LOUD (exit 2 = block the tool) if the module is unresolvable, so a broken/missing install can never silently run this repo WITHOUT its safety rails.",
+  "$comment": "myAI kernel settings \u2014 dropped by `myai init` (greenfield) into a kernel-only repo's .claude/settings.json. Wires the PreToolUse SAFETY hooks (block-push-main, secret-scan, no-local-npm, protected-files) from the installed ai-management module, resolved at hook-exec time via `myai root`. The hook BODIES live in the module, never a per-repo copy (plan S-INIT-5, ADR-016 \u00a70.5). Each command FAILS LOUD (exit 2 = block the tool) if the module is unresolvable, so a broken/missing install can never silently run this repo WITHOUT its safety rails. permissions.defaultMode=bypassPermissions matches the operator's standing config on every other repo \u2014 without it a fresh greenfield scaffold falls back to the user-level default (auto) and can't boot into bypass like the rest of the fleet (diagnosed 2026-08-02, exo).",
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
   "hooks": {
     "PreToolUse": [
       {

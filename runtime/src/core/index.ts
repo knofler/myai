@@ -2,7 +2,7 @@ import { loadConfig, setConfig } from '../shared/config.js';
 import { validateAndLog } from '../shared/config-validator.js';
 import { getLogger } from '../shared/logger.js';
 import { connectDB, recordMongoBootFailure, redactMongoUri, DEFAULT_TENANT_ID } from '../shared/db.js';
-import { seedReposFromManagedFile } from '../repos/repo-registry.js';
+import { seedReposFromManagedFile, seedReposFromRepoCards } from '../repos/repo-registry.js';
 import { ensureDefaultTenant } from './tenant-keys.js';
 import { ensureBootstrapAdmin } from './user-auth.js';
 import { loadAgents, loadSkills, syncToDatabase, getAgentCount, getSkillCount } from '../agents/loader.js';
@@ -21,6 +21,8 @@ import { startHostControl, stopHostControl } from '../channels/host-control.js';
 import { initProvider } from '../llm/provider.js';
 import { startMcpServer } from '../mcp/handler.js';
 import { indexMasterRepo } from '../memory/indexer.js';
+import { ensureAtlasVectorSearchIndex } from '../memory/atlas-search-index.js';
+import { checkAtlasIndexHealth } from '../monitoring/atlas-index-health-alerter.js';
 import { startScheduler, stopScheduler } from '../scheduler/scheduler.js';
 import { startWebhookDispatcher, stopWebhookDispatcher } from '../webhooks/webhook-dispatcher.js';
 import { startOAuthRefreshWorker, stopOAuthRefreshWorker } from '../connectors/oauth-refresh-worker.js';
@@ -30,6 +32,10 @@ import { startSloAlerts, stopSloAlerts } from '../monitoring/slo-alerter.js';
 import { startQueueWaitAlerts, stopQueueWaitAlerts } from '../monitoring/queue-wait-alerter.js';
 import { startPriorityAgingSweep, stopPriorityAgingSweep } from '../tasks/priority-aging.js';
 import { startSecurityAnomalyAlerts, stopSecurityAnomalyAlerts } from '../monitoring/security-anomaly-alerter.js';
+import { startPoolCapacityAlerts, stopPoolCapacityAlerts } from '../monitoring/pool-capacity-alerter.js';
+import { startPoolCapacityDriftAlerts, stopPoolCapacityDriftAlerts } from '../monitoring/pool-capacity-drift-alerter.js';
+import { startMongoMirrorAlerts, stopMongoMirrorAlerts } from '../monitoring/mongo-mirror-alerter.js';
+import { startDockerVmDiskAlerts, stopDockerVmDiskAlerts } from '../monitoring/docker-vm-disk-alerter.js';
 import { startBudgetReconciliation, stopBudgetReconciliation } from '../monitoring/budget-reconciliation.js';
 import { initSentry, flushSentry } from '../monitoring/sentry.js';
 
@@ -141,6 +147,35 @@ export async function bootstrap(configPath?: string): Promise<void> {
     log.warn({ err }, 'Repos roster seed failed — continuing (txt seed still served via union)');
   }
 
+  // ADR-021 Phase 2 tail: also seed repocards-only repos (e.g. EXO) that have
+  // no counterpart in managed_repos.txt. Idempotent + insert-only; non-fatal.
+  try {
+    const cardSeed = await seedReposFromRepoCards(DEFAULT_TENANT_ID);
+    if (cardSeed.seeded > 0) log.info(cardSeed, 'Repos roster seeded from repocards (card-only repos)');
+  } catch (err) {
+    log.warn({ err }, 'Repocards roster seed failed — continuing');
+  }
+
+  // Self-heal the Atlas Vector Search index (root cause of the PR #390 empty
+  // recall): create/repair `vector_index` on `vectors` so it survives cluster
+  // rebuilds. No-op on local mongo; non-fatal — the embedded-ANN fallback in
+  // vector-store.ts keeps recall alive either way.
+  try {
+    const vectorIndex = await ensureAtlasVectorSearchIndex();
+    if (vectorIndex.action !== 'ok' && vectorIndex.action !== 'skipped') {
+      log.info(vectorIndex, 'Atlas vector search index ensured');
+    }
+    // Reliability: alert (Telegram + dashboard bell) when the self-heal keeps
+    // landing on a non-'ok' outcome (created/updated/recreated/failed) across
+    // repeated consecutive boots — a one-time repair is healthy, a repeated
+    // one means something keeps fighting the index definition (e.g. an M0
+    // tier silently dropping it, or replicas racing on createSearchIndex).
+    // Non-fatal; never blocks boot.
+    await checkAtlasIndexHealth(vectorIndex);
+  } catch (err) {
+    log.warn({ err }, 'Atlas vector index ensure threw — continuing on the embedded-ANN fallback');
+  }
+
   // Migrate SONA patterns from file → MongoDB and index embeddings
   try {
     const migration = await migratePatterns();
@@ -170,6 +205,10 @@ export async function bootstrap(configPath?: string): Promise<void> {
     stopHealthAlerts();
     stopSloAlerts();
     stopQueueWaitAlerts();
+    stopPoolCapacityAlerts();
+    stopPoolCapacityDriftAlerts();
+    stopMongoMirrorAlerts();
+    stopDockerVmDiskAlerts();
     stopPriorityAgingSweep();
     stopSecurityAnomalyAlerts();
     stopBudgetReconciliation();
@@ -243,6 +282,56 @@ export async function bootstrap(configPath?: string): Promise<void> {
     startQueueWaitAlerts();
   } else {
     log.info('Queue-wait alerts disabled by QUEUE_WAIT_ALERTS_DISABLED=1');
+  }
+
+  // Subscription-pool capacity floor — watches state/pool-capacity.json (the
+  // runner-budget/pacing-ledger bridge artifact) and pushes a Telegram +
+  // dashboard-bell alert when a pool's weekly remaining budget crosses the
+  // configured threshold. The operator's OWN pool — distinct from the
+  // per-tenant spend alert (llm/spend-alert.ts). Disable with
+  // POOL_CAPACITY_ALERTS_DISABLED=1.
+  if (process.env.POOL_CAPACITY_ALERTS_DISABLED !== '1') {
+    startPoolCapacityAlerts();
+  } else {
+    log.info('Pool-capacity alerts disabled by POOL_CAPACITY_ALERTS_DISABLED=1');
+  }
+
+  // Pool-capacity ground-truth drift self-check (task-0824a68e) alert bridge
+  // (task-05526048) — watches state/pool-capacity-drift-status.json (the
+  // pool_capacity_drift_check.sh bridge artifact) and pushes the same
+  // Telegram + dashboard-bell alert as the pool-capacity floor check above
+  // when the incremental ledger disagrees with a fresh transcript re-derive
+  // beyond tolerance, instead of that only ever reaching
+  // ~/.ai-cli-runner/pool-capacity-drift.log. Disable with
+  // POOL_CAPACITY_DRIFT_ALERTS_DISABLED=1.
+  if (process.env.POOL_CAPACITY_DRIFT_ALERTS_DISABLED !== '1') {
+    startPoolCapacityDriftAlerts();
+  } else {
+    log.info('Pool-capacity-drift alerts disabled by POOL_CAPACITY_DRIFT_ALERTS_DISABLED=1');
+  }
+
+  // Mongo-mirror schedule health — watches state/mongo-mirror-status.json (the
+  // $MYAI_HOME/mongo-mirror.last + schedule-install bridge artifact) and
+  // pushes a Telegram + dashboard-bell alert when the scheduled Atlas→local
+  // mirror's last run failed or the schedule looks stale, instead of that
+  // only being visible via an on-demand `myai doctor` run (task-906c973f).
+  // Disable with MONGO_MIRROR_ALERTS_DISABLED=1.
+  if (process.env.MONGO_MIRROR_ALERTS_DISABLED !== '1') {
+    startMongoMirrorAlerts();
+  } else {
+    log.info('Mongo-mirror alerts disabled by MONGO_MIRROR_ALERTS_DISABLED=1');
+  }
+
+  // Docker VM disk-pressure guard — watches state/docker-vm-disk-status.json
+  // (the `docker run --rm alpine df -P /` bridge artifact) and pushes a
+  // Telegram + dashboard-bell alert before usage reaches RUNBOOK.md #1's
+  // documented WT_PANIC crash-loop threshold, instead of that only being
+  // caught after myai-mongo is already crash-looping. Disable with
+  // DOCKER_VM_DISK_ALERTS_DISABLED=1.
+  if (process.env.DOCKER_VM_DISK_ALERTS_DISABLED !== '1') {
+    startDockerVmDiskAlerts();
+  } else {
+    log.info('Docker-vm-disk alerts disabled by DOCKER_VM_DISK_ALERTS_DISABLED=1');
   }
 
   // Age-based priority auto-escalation (tasks/priority-aging.ts) — bumps a

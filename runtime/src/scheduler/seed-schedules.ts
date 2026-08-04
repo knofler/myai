@@ -12,6 +12,18 @@
  *   - morning_sweep_daily         → kind=tool, target=morning_sweep, 09:00 UTC daily
  *   - evening_sweep_daily         → kind=tool, target=evening_sweep, 18:00 UTC daily
  *   - data_retention_purge_daily  → kind=tool, target=data_retention_purge, 03:00 UTC daily
+ *   - mrr_snapshot_sweep_daily    → kind=tool, target=mrr_snapshot_sweep, 02:00 UTC daily
+ *   - erasure_sweep_daily         → kind=tool, target=erasure_sweep, 04:00 UTC daily
+ *   - task_lease_reap_15min       → kind=tool, target=task_lease_reap, every 15 minutes
+ *   - inline_exec_cycle_5min      → kind=tool, target=inline_execute, every 5 minutes
+ *
+ * `inline_exec_cycle_5min` (ADR-018) is the activation wire-up for the
+ * in-gateway inline execution lane: seeding it is what actually gives
+ * `INLINE_EXEC_ENABLED=1` an effect. Safe to seed unconditionally — the tool
+ * it dispatches (`inline_execute` → `runInlineCycle`) is a no-op read-then-return
+ * whenever `agentRuntime.inlineEnabled` is false (the default), so this
+ * schedule existing changes nothing until an operator separately opts the
+ * flag in.
  *
  * Conventions mirror `registerDispatchSchedule` in dispatch-worker.ts:
  * tool-kind schedules dispatch the named MCP tool directly, with args
@@ -54,6 +66,34 @@ const DEFAULT_SCHEDULES: DefaultScheduleSpec[] = [
     cronExpr: '0 3 * * *', // 03:00 UTC daily — off-peak, ahead of the morning sweep
     kind: 'tool',
     target: 'data_retention_purge',
+    message: '{}',
+  },
+  {
+    name: 'mrr_snapshot_sweep_daily',
+    cronExpr: '0 2 * * *', // 02:00 UTC daily — ahead of data-retention/morning sweeps
+    kind: 'tool',
+    target: 'mrr_snapshot_sweep',
+    message: '{}',
+  },
+  {
+    name: 'erasure_sweep_daily',
+    cronExpr: '0 4 * * *', // 04:00 UTC daily — after data-retention purge, ahead of the morning sweep
+    kind: 'tool',
+    target: 'erasure_sweep',
+    message: '{}',
+  },
+  {
+    name: 'task_lease_reap_15min',
+    cronExpr: '*/15 * * * *', // every 15 minutes — well under the default 1h claim lease, so a dead runner's task is freed promptly
+    kind: 'tool',
+    target: 'task_lease_reap',
+    message: '{}',
+  },
+  {
+    name: 'inline_exec_cycle_5min',
+    cronExpr: '*/5 * * * *', // every 5 minutes — a no-op cadence until INLINE_EXEC_ENABLED=1
+    kind: 'tool',
+    target: 'inline_execute',
     message: '{}',
   },
 ];

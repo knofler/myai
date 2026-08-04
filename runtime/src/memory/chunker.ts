@@ -160,6 +160,40 @@ export function chunkArchiveFile(content: string, sourceFile: string): Chunk[] {
 }
 
 /**
+ * Chunk a brain session atom (repos/<ns>/sessions/*.md in the brain git store)
+ * into a single vector. One atom = one chunk — atoms are already compact
+ * (~300 tokens, per the wrap-up brain_commit contract). `metadata.sessionDate`
+ * (derived from the `written:` frontmatter timestamp) is the cross-source
+ * dedup key against the later archive-rotation embedding of the same session
+ * (see chunkArchiveFile's `sessionDate`) — indexBrainAtoms/indexArchiveFiles
+ * use it to avoid double-embedding one session from both the brain atom and
+ * its eventual STATE.md archive block.
+ */
+export function chunkBrainAtom(raw: string, file: string): Chunk | null {
+  const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n\n?([\s\S]*)$/);
+  if (!fmMatch) return null;
+  const [, frontmatter, rest] = fmMatch;
+  const body = rest.trim();
+  if (body.length < 20) return null;
+
+  const field = (key: string) => frontmatter.match(new RegExp(`^${key}: (.+)$`, 'm'))?.[1]?.trim();
+  const slug = field('slug') || file.replace(/\.md$/, '');
+  const topic = field('topic') || 'general';
+  const written = field('written');
+  const host = field('host');
+  const sessionDate = written && /^\d{8}T/.test(written)
+    ? `${written.slice(0, 4)}-${written.slice(4, 6)}-${written.slice(6, 8)}`
+    : undefined;
+
+  return {
+    content: `### Session atom: ${slug}\n${body}`,
+    source: 'brain',
+    tags: extractTags(body),
+    metadata: { slug, topic, written, host, sessionDate, atomFile: file },
+  };
+}
+
+/**
  * Chunk a git commit message into a single vector.
  */
 export function chunkCommit(message: string, sha: string): Chunk {

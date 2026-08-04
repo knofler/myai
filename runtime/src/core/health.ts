@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createChildLogger } from '../shared/logger.js';
-import { isConnected, AgentModel, DEFAULT_TENANT_ID, getMongoBootFailure } from '../shared/db.js';
+import { isConnected, AgentModel, DEFAULT_TENANT_ID, getMongoBootFailure, getDbFailoverState } from '../shared/db.js';
 import { isConfigured as isLlmConfigured } from '../llm/provider.js';
 import { getAgentCount, getSkillCount } from '../agents/loader.js';
 import { listAdapters, getChannelSessionCount } from '../channels/registry.js';
@@ -72,6 +72,16 @@ async function checkMongodb(): Promise<ComponentHealth> {
 
   try {
     const { result: count, latencyMs } = await timed(() => AgentModel.countDocuments());
+    // Read-side failover (MYAI_DB_FAILOVER=local): connected, but to the
+    // local mirror in READ-ONLY degraded mode — never report that as 'up'.
+    const failover = getDbFailoverState();
+    if (failover.active) {
+      return {
+        status: 'degraded',
+        latencyMs,
+        details: { state: 'connected', agentDocuments: count, failover },
+      };
+    }
     return {
       status: 'up',
       latencyMs,
@@ -92,7 +102,8 @@ function checkLlm(): ComponentHealth {
 
   if (process.env.ANTHROPIC_API_KEY) providers.push('anthropic');
   if (process.env.DEEPSEEK_API_KEY) providers.push('deepseek');
-  if (process.env.MOONSHOT_API_KEY) providers.push('moonshot');
+  if (process.env.MOONSHOT_API_KEY || process.env.OPENROUTER_API_KEY) providers.push('moonshot');
+  if (process.env.GEMINI_API_KEY) providers.push('gemini');
   // Ollama is always locally available when enabled
   if (process.env.OLLAMA_BASE_URL || process.env.LLM_MODE === 'ollama') providers.push('ollama');
 

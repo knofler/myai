@@ -21,6 +21,14 @@
 #   ./scripts/mongo_sync.sh status                 # show current primary + last successful sync
 #   ./scripts/mongo_sync.sh set-primary atlas|local   # flip local-first mode designation
 #   ./scripts/mongo_sync.sh --collections vectors,agents,repos,tasks   # scope a sync run
+#   ./scripts/mongo_sync.sh schedule install|status|uninstall [--every-minutes N]
+#                                                    # installable launchd/cron timer
+#                                                    # (CLI: myai sync schedule) — forwards to
+#                                                    # setup_mongo_sync_schedule.sh, which installs
+#                                                    # BOTH the periodic sync job AND an independent
+#                                                    # staleness canary (mongo_sync_staleness.sh)
+#                                                    # that alerts via notification-engine when the
+#                                                    # last successful sync exceeds a threshold
 #
 # IDEMPOTENT + RESUMABLE: every run is a full dump→restore convergence of the
 # CURRENT primary onto the secondary (same guarantee mongo_mirror.sh already
@@ -90,12 +98,23 @@ ACTION="sync"
 case "${1:-}" in
   status)      ACTION="status"; shift ;;
   set-primary) ACTION="set-primary"; shift ;;
+  schedule)    ACTION="schedule"; shift ;;
   -h|--help)   ACTION="help" ;;
 esac
 
 if [ "$ACTION" = "help" ]; then
   sed -n '1,32p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
+fi
+
+if [ "$ACTION" = "schedule" ]; then
+  SUB="${1:-install}"
+  case "$SUB" in
+    install)   shift || true; exec bash "$SCRIPT_DIR/setup_mongo_sync_schedule.sh" "$@" ;;
+    status)    exec bash "$SCRIPT_DIR/setup_mongo_sync_schedule.sh" --status ;;
+    uninstall) exec bash "$SCRIPT_DIR/setup_mongo_sync_schedule.sh" --uninstall ;;
+    *) c_err "usage: mongo_sync.sh schedule <install|status|uninstall> [--every-minutes N|--every-hours N]"; exit 2 ;;
+  esac
 fi
 
 if [ "$ACTION" = "status" ]; then

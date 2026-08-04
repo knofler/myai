@@ -123,6 +123,44 @@ export function fetchBrainHealth(): Promise<BrainHealth | null> {
   return callGateway<BrainHealth>('brain_health', { record: false });
 }
 
+// ── Retrieval bandit stats (BRAIN B-7 follow-up, task-49fda69b) ─────────────
+// Mirrors the gateway `brain_bandit_stats` tool (runtime/src/repos/bandit-stats.ts)
+// — a read-only snapshot of scripts/retrieval_bandit.py's bandit_arms table:
+// which retrieval config (k, rerank on/off) the bandit currently favors per
+// query context, and the per-arm pull/reward stats backing that pick. Distinct
+// from BrainHealth — this is retrieval-config tuning state, not memory hygiene.
+
+export interface BanditArmStat {
+  arm: string;
+  k: number;
+  rerankOn: boolean;
+  pulls: number;
+  rewardSum: number;
+  meanReward: number;
+}
+
+export interface BanditFavoredArm {
+  k: number;
+  rerank_on: boolean;
+}
+
+export interface BanditContextStat {
+  context: string;
+  favoredArm: BanditFavoredArm | null;
+  pullsTotal: number;
+  arms: BanditArmStat[];
+}
+
+export interface BanditStats {
+  available: boolean;
+  totalPulls: number;
+  contexts: BanditContextStat[];
+}
+
+export function fetchBanditStats(): Promise<BanditStats | null> {
+  return callGateway<BanditStats>('brain_bandit_stats', {});
+}
+
 /** Render a brain UTC stamp (`YYYYMMDDTHHMMSSZ`) as a locale date-time; falls
  *  back to the raw value when it isn't the expected shape. */
 export function formatBrainStamp(stamp?: string): string {

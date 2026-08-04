@@ -4,10 +4,12 @@ import { createChildLogger } from '../shared/logger.js';
 import { TOOL_DEFINITIONS, executeTool } from './tools.js';
 import { buildContextBundle } from './context-bundle.js';
 import { authenticate, ctxFromReq } from '../core/auth.js';
+import { filterToolsForTenant } from '../core/rbac.js';
 import { tenantQuota } from '../core/tenant-quota.js';
 import { regionGuard } from '../core/region-guard.js';
+import { tenantDbGuard } from '../shared/tenant-db-registry.js';
 import { getConfig } from '../shared/config.js';
-import { type ToolContext, SYSTEM_CONTEXT } from '../core/tenant-context.js';
+import { type ToolContext, SYSTEM_CONTEXT, AuthError } from '../core/tenant-context.js';
 import { IDEMPOTENT_TOOLS, lookupIdempotency, storeIdempotency } from '../core/idempotency-store.js';
 
 const log = createChildLogger({ module: 'mcp-handler' });
@@ -75,11 +77,14 @@ export async function handleMcpRequest(
       return { jsonrpc: '2.0', id: req.id ?? null, result: {} };
 
     case 'tools/list':
+      // Per-org MCP tool visibility (Wave-2 #15): hide operator-only /
+      // org-denylisted tools from tools/list so a restricted tenant never
+      // even sees them advertised (core/rbac.ts filterToolsForTenant).
       return {
         jsonrpc: '2.0',
         id: req.id ?? null,
         result: {
-          tools: TOOL_DEFINITIONS,
+          tools: filterToolsForTenant(ctx, TOOL_DEFINITIONS),
         },
       };
 
@@ -143,6 +148,22 @@ export async function handleMcpRequest(
           result: rpcResult,
         };
       } catch (err) {
+        if (err instanceof AuthError) {
+          // RBAC/auth denial (ADR-013 §3): a structured 403/401-equivalent
+          // JSON-RPC error — code -32003 forbidden / -32001 unauthorized, with
+          // the HTTP status + stable code in `data` — instead of the generic
+          // isError text blob, so clients can branch on the denial.
+          log.warn({ tool: toolName, code: err.code, status: err.status }, 'Tool call denied');
+          return {
+            jsonrpc: '2.0',
+            id: req.id ?? null,
+            error: {
+              code: err.status === 403 ? -32003 : -32001,
+              message: err.message,
+              data: { httpStatus: err.status, code: err.code, tool: toolName },
+            },
+          };
+        }
         log.error({ err, tool: toolName }, 'Tool execution failed');
         return {
           jsonrpc: '2.0',
@@ -236,6 +257,11 @@ export function startMcpServer(port: number, host: string = '0.0.0.0'): void {
   // runner's tasks_claim lands (the "off-hours execution" half of region
   // pinning), so it MUST be gated here too, not only on REST.
   app.use(regionGuard(() => getConfig().region));
+  // Physical DB isolation chokepoint (ADR-030 §2) — same placement as REST
+  // (core/middleware.ts): after auth, before any tool/store call. Inert no-op
+  // for the shared-tier majority; only rejects a dedicated-tier tenant with
+  // no provisioned binding yet.
+  app.use(tenantDbGuard());
   app.use('/mcp', createMcpRouter());
 
   // Health endpoint for MCP server

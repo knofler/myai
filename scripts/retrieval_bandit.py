@@ -49,10 +49,17 @@ PUBLIC INTERFACE
   best_arm(conn, context) -> dict | None   pure argmax-exploit recommendation
   replay_tune(traces_path, db_path, seed=0) -> dict   run the offline pass,
             return the winning (recommended) config per context + metrics.
+  bandit_snapshot(conn) -> dict            READ-ONLY view of bandit_arms as it
+            currently stands (never mutates) — "which arm is favored right
+            now, per context" for operator-facing surfaces (the dashboard's
+            /brain Retrieval strategy card), as opposed to replay_tune which
+            wipes and re-runs the table as one offline experiment.
 
 CLI
   retrieval_bandit.py [--db PATH] [--traces PATH] [--seed 0] [--json]
   Runs replay_tune and prints the recommended retrieval config per context.
+  retrieval_bandit.py [--db PATH] --summary [--json]
+  Prints bandit_snapshot() instead — the live table as-is, no replay.
 
   The recommended config is what the LIVE retriever (B-4 hybrid retrieval /
   B-3 router) SHOULD adopt. Wiring it into the live loop is a FOLLOW-UP once a
@@ -261,6 +268,49 @@ def best_arm(conn, context: str):
     return _arm_dict(best_key) if best_key else None
 
 
+def bandit_snapshot(conn) -> dict:
+    """Read-only snapshot of `bandit_arms` exactly as currently persisted.
+
+    Unlike replay_tune() (which DELETEs bandit_arms and re-runs a clean
+    offline pass), this never mutates the table — it just reports which arm
+    each context currently favors (best_arm's argmax-exploit pick) alongside
+    the per-arm pull/reward stats backing that pick. Used by brain_route.py's
+    dashboard-facing summary (BRAIN B-7 follow-up) so an operator can see the
+    live bandit state without reading raw SQL.
+    """
+    rows = conn.execute(
+        "SELECT context, arm, pulls, reward_sum FROM bandit_arms ORDER BY context, arm"
+    ).fetchall()
+    by_context: dict = {}
+    for context, arm, pulls, reward_sum in rows:
+        by_context.setdefault(context, {})[arm] = (int(pulls), float(reward_sum))
+
+    contexts = []
+    for ctx in sorted(by_context):
+        stats = by_context[ctx]
+        arms_out = [
+            {
+                "arm": arm_key,
+                **_arm_dict(arm_key),  # k, rerank_on — decoded so callers never re-parse the TEXT key
+                "pulls": pulls,
+                "reward_sum": round(rsum, 6),
+                "mean_reward": round(_mean(pulls, rsum), 6),
+            }
+            for arm_key, (pulls, rsum) in sorted(stats.items())
+        ]
+        contexts.append({
+            "context": ctx,
+            "favored_arm": best_arm(conn, ctx),
+            "pulls_total": sum(a["pulls"] for a in arms_out),
+            "arms": arms_out,
+        })
+
+    return {
+        "total_pulls": sum(c["pulls_total"] for c in contexts),
+        "contexts": contexts,
+    }
+
+
 # ── offline replay / tuning loop ──────────────────────────────────────────────
 def load_traces(traces_path: str) -> list:
     if not traces_path or not os.path.exists(traces_path):
@@ -363,12 +413,21 @@ def main(argv=None) -> int:
     p.add_argument("--traces", default=None, help="traces.jsonl (default: route-distill-spike traces)")
     p.add_argument("--seed", type=int, default=0, help="RNG seed for deterministic replay (default 0)")
     p.add_argument("--json", action="store_true", help="emit the full summary as JSON")
+    p.add_argument("--summary", action="store_true",
+                    help="print bandit_snapshot() (read-only, no replay) instead of running replay_tune")
     args = p.parse_args(argv)
 
-    traces_path = args.traces or _default_traces()
     db_path = args.db or _default_db()
     os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
 
+    if args.summary:
+        conn = connect(db_path)
+        snap = bandit_snapshot(conn)
+        conn.close()
+        print(json.dumps(snap, indent=2))
+        return 0
+
+    traces_path = args.traces or _default_traces()
     result = replay_tune(traces_path, db_path, seed=args.seed)
 
     if args.json:

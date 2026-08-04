@@ -15,7 +15,7 @@ import { getActiveTenant, tenantFilter } from '@/lib/tenant';
 import { readRunnerHealth, getRunnerLiveness, getFleetMaintenanceStatus, type RunnerRepoHealth } from '@/lib/runner-health';
 import { timeAgo, fmtSydney } from '@/lib/format';
 import { Card, StatCard, EmptyState, THead } from '@/components/ui/card';
-import { Badge, TaskStatusBadge } from '@/components/ui/badge';
+import { Badge, TaskStatusBadge, RoutedBadge } from '@/components/ui/badge';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +31,30 @@ async function queueDepth(): Promise<Record<string, number>> {
   const depth: Record<string, number> = {};
   for (const r of rows) depth[r._id] = r.count;
   return depth;
+}
+
+interface RoutedTaskRow {
+  taskId: string;
+  repo: string;
+  title: string;
+  status: string;
+  routedProfile?: string;
+  routedModel?: string;
+  routedComplexity?: string;
+  updatedAt?: Date;
+}
+
+/** Router audit trail (task-d9300dac): the runner's route_task_model decision,
+ *  stamped onto the task record at claim time — the last N claimed tasks so an
+ *  operator can audit WHICH pool/model actually ran without grepping runner.out. */
+async function recentRoutedTasks(): Promise<RoutedTaskRow[]> {
+  const tenantId = await getActiveTenant();
+  const tf = tenantFilter(tenantId);
+  return (await Task.find({ ...tf, routedModel: { $exists: true, $ne: null } })
+    .sort({ updatedAt: -1 })
+    .limit(15)
+    .select('taskId repo title status routedProfile routedModel routedComplexity updatedAt')
+    .lean()) as unknown as RoutedTaskRow[];
 }
 
 function OutcomeBadge({ outcome }: { outcome: RunnerRepoHealth['lastOutcome'] }) {
@@ -66,6 +90,52 @@ function MaintenanceBanner({ maintenance }: { maintenance: Awaited<ReturnType<ty
   );
 }
 
+/** Router audit trail (task-d9300dac): last N claimed tasks with the runner's
+ *  actual {routedProfile, routedModel, routedComplexity} pick, so an operator
+ *  can audit WHICH pool/model a task ran on without grepping runner.out. */
+function RecentRoutingCard({ routedTasks }: { routedTasks: RoutedTaskRow[] }) {
+  return (
+    <Card
+      title="Recent routing decisions"
+      meta="capability×cost×availability router — stamped at claim time"
+    >
+      {routedTasks.length === 0 ? (
+        <EmptyState>
+          No routed tasks yet — the router (route_task_model) stamps routedProfile/routedModel/routedComplexity
+          onto a task the first time the runner claims it.
+        </EmptyState>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="card-table w-full text-sm">
+            <THead
+              cols={[
+                { label: 'Repo' },
+                { label: 'Task' },
+                { label: 'Routed' },
+                { label: 'Status' },
+                { label: 'When' },
+              ]}
+            />
+            <tbody className="divide-y divide-zinc-800/50">
+              {routedTasks.map((t) => (
+                <tr key={t.taskId} className="hover:bg-zinc-800/30">
+                  <td className="px-4 py-2.5 text-zinc-500 font-mono text-xs">{t.repo}</td>
+                  <td data-label="Task" className="m-title px-4 py-2.5 text-zinc-200 max-w-xs truncate">{t.title}</td>
+                  <td data-label="Routed" className="px-4 py-2.5">
+                    <RoutedBadge routedProfile={t.routedProfile} routedModel={t.routedModel} routedComplexity={t.routedComplexity} />
+                  </td>
+                  <td data-label="Status" className="px-4 py-2.5"><TaskStatusBadge status={t.status} /></td>
+                  <td data-label="When" className="px-4 py-2.5 text-zinc-600 text-xs">{timeAgo(t.updatedAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function timeAgoFromMinutes(minutes: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
@@ -75,8 +145,8 @@ function timeAgoFromMinutes(minutes: number): string {
 
 export default async function RunnerHealthView() {
   await connectDB();
-  const [health, depth, liveness, maintenance] = await Promise.all([
-    readRunnerHealth(), queueDepth(), getRunnerLiveness(), getFleetMaintenanceStatus(),
+  const [health, depth, liveness, maintenance, routedTasks] = await Promise.all([
+    readRunnerHealth(), queueDepth(), getRunnerLiveness(), getFleetMaintenanceStatus(), recentRoutedTasks(),
   ]);
 
   if (!health || !health.available) {
@@ -91,6 +161,7 @@ export default async function RunnerHealthView() {
             <code className="text-zinc-400">state/runner-health.json</code>.
           </EmptyState>
         </Card>
+        <RecentRoutingCard routedTasks={routedTasks} />
       </div>
     );
   }
@@ -227,6 +298,8 @@ export default async function RunnerHealthView() {
           </div>
         )}
       </Card>
+
+      <RecentRoutingCard routedTasks={routedTasks} />
     </div>
   );
 }

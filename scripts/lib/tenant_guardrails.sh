@@ -72,6 +72,18 @@ tg_lookup_field() {
     return 0
 }
 
+# tg_max_minutes <tenantId> <default> [file] — the tenant's RESOLVED per-task
+# wall-clock cap in minutes: the maxMinutes override when present and numeric,
+# else <default>. Time-based liveness checks (stale-worktree sweep, the
+# stale-"working" watchdog) must size their thresholds from THIS value, not the
+# runner's global default — a tenant configured for a longer budget would
+# otherwise have a still-valid worktree reaped or a running task flagged as hung.
+tg_max_minutes() {
+    local mm
+    mm="$(tg_lookup_field "$1" maxMinutes "${3:-$(tg_resolve_file)}" 2>/dev/null)" || mm=""
+    case "$mm" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$mm" ;; esac
+}
+
 # tg_list_tenants [file] — print each tenant id that has a guardrail line, one per line.
 tg_list_tenants() {
     local file="${1:-$(tg_resolve_file)}" line id

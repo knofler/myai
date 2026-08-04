@@ -1,11 +1,13 @@
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
 import { getConfig } from '../shared/config.js';
-import { storeBatch, deleteVectors, getVectorCount } from './vector-store.js';
-import { chunkStateFile, chunkHandoffFile, chunkArchiveFile } from './chunker.js';
+import { storeBatch, deleteVectors, getVectorCount, sessionDateExists } from './vector-store.js';
+import { chunkStateFile, chunkHandoffFile, chunkArchiveFile, chunkBrainAtom, type Chunk } from './chunker.js';
 import { createChildLogger } from '../shared/logger.js';
 import { listRepoPaths } from '../repos/repo-registry.js';
 import { DEFAULT_TENANT_ID, type IVector } from '../shared/db.js';
+import { isBrainRepo, resolveBrainDir, slugify } from '../core/brain.js';
+import { brainEnvFor } from '../core/distill.js';
 
 const log = createChildLogger({ module: 'indexer' });
 
@@ -135,7 +137,26 @@ export async function indexArchiveFiles(tenantId: string, repoPath: string, repo
     const chunks = chunkArchiveFile(content, file);
     if (chunks.length === 0) continue;
 
-    const batch = chunks.map(c => ({
+    // Cross-source dedup (task-48b73bd1): a session already embedded from a
+    // brain atom (indexBrainAtoms, run at brain_merge time — well before this
+    // session's block rotates out of STATE.md into this archive file) should
+    // not also get an archive-source twin. See sessionDateExists.
+    const toStore: typeof chunks = [];
+    let dedupSkipped = 0;
+    for (const c of chunks) {
+      const sessionDate = c.metadata.sessionDate as string | undefined;
+      if (sessionDate && await sessionDateExists(tenantId, name, sessionDate, ['brain'])) {
+        dedupSkipped++;
+        continue;
+      }
+      toStore.push(c);
+    }
+    if (toStore.length === 0) {
+      totals.skipped += dedupSkipped;
+      continue;
+    }
+
+    const batch = toStore.map(c => ({
       repo: name,
       source: 'archive' as IVector['source'],
       content: c.content,
@@ -145,12 +166,97 @@ export async function indexArchiveFiles(tenantId: string, repoPath: string, repo
 
     const result = await storeBatch(tenantId, batch);
     totals.stored += result.stored;
-    totals.skipped += result.skipped;
+    totals.skipped += result.skipped + dedupSkipped;
     totals.failed += result.failed;
   }
 
   log.info({ repo: name, files: files.length, ...totals }, 'Archives indexed');
   return { repo: name, source: 'archive', ...totals };
+}
+
+/**
+ * Index a repo's brain session atoms (repos/<slugify(repoName)>/sessions/*.md
+ * in the brain git store) into vectors. This is the "last few weeks of work"
+ * gap task-48b73bd1 closes: brain atoms are written at every wrap-up
+ * (brain_commit) but previously only reached the RAG corpus once their
+ * session block rotated out of STATE.md into state/archive/*.md — which could
+ * be weeks. Indexing atoms directly makes recent sessions recallable
+ * immediately. `repoName` is the RAW repo name (e.g. 'ai_management'), stored
+ * verbatim on the vector's `repo` field so it lines up with the 'state' /
+ * 'handoff' / 'archive' sources for the same repo — the brain store itself
+ * uses a slugified namespace directory internally, resolved here.
+ */
+export async function indexBrainAtoms(tenantId: string, brainDir: string, repoName: string): Promise<IndexResult> {
+  const source: IVector['source'] = 'brain';
+  if (!isBrainRepo(brainDir)) {
+    log.debug({ repo: repoName }, 'No brain store — skipping brain atom indexing');
+    return { repo: repoName, source, stored: 0, skipped: 0, failed: 0 };
+  }
+
+  const ns = slugify(repoName);
+  const sessionsDir = resolve(brainDir, 'repos', ns, 'sessions');
+  if (!ns || !existsSync(sessionsDir)) {
+    log.debug({ repo: repoName }, 'No brain session namespace — skipping');
+    return { repo: repoName, source, stored: 0, skipped: 0, failed: 0 };
+  }
+
+  const files = readdirSync(sessionsDir).filter(f => f.endsWith('.md'));
+  if (files.length === 0) {
+    return { repo: repoName, source, stored: 0, skipped: 0, failed: 0 };
+  }
+
+  const toStore: Chunk[] = [];
+  let dedupSkipped = 0;
+  for (const file of files) {
+    const raw = readFileSync(resolve(sessionsDir, file), 'utf-8');
+    const chunk = chunkBrainAtom(raw, file);
+    if (!chunk) continue;
+
+    // Cross-source dedup (task-48b73bd1): skip if this session's day has
+    // already been embedded from the STATE.md archive (see sessionDateExists
+    // in vector-store.ts and the matching check in indexArchiveFiles).
+    const sessionDate = chunk.metadata.sessionDate as string | undefined;
+    if (sessionDate && await sessionDateExists(tenantId, repoName, sessionDate, ['archive'])) {
+      dedupSkipped++;
+      continue;
+    }
+    toStore.push(chunk);
+  }
+
+  if (toStore.length === 0) {
+    return { repo: repoName, source, stored: 0, skipped: dedupSkipped, failed: 0 };
+  }
+
+  const batch = toStore.map(c => ({
+    repo: repoName,
+    source,
+    content: c.content,
+    tags: c.tags,
+    metadata: c.metadata,
+  }));
+
+  const result = await storeBatch(tenantId, batch);
+  log.info({ repo: repoName, atoms: files.length, ...result }, 'Brain session atoms indexed');
+  return { repo: repoName, source, stored: result.stored, skipped: result.skipped + dedupSkipped, failed: result.failed };
+}
+
+/**
+ * Resolve a brain namespace slug (e.g. from a merged session branch's
+ * touched-repos diff) back to the raw repo name used elsewhere in the RAG
+ * corpus, so brain-source vectors carry the same `repo` value as
+ * state/handoff/archive vectors for that repo. Falls back to the slug itself
+ * when no match is found (e.g. an unregistered/ad-hoc namespace) — indexing
+ * still works, just under the slug spelling.
+ */
+export function repoNameForBrainNamespace(namespace: string): string {
+  if (slugify('ai_management') === namespace) return 'ai_management';
+  const match = listRepoPaths().find(r => slugify(r.name) === namespace);
+  return match ? match.name : namespace;
+}
+
+/** indexBrainAtoms, but starting from a brain namespace slug (see repoNameForBrainNamespace). */
+export async function indexBrainNamespace(tenantId: string, brainDir: string, namespace: string): Promise<IndexResult> {
+  return indexBrainAtoms(tenantId, brainDir, repoNameForBrainNamespace(namespace));
 }
 
 /**
@@ -164,6 +270,7 @@ export async function indexMasterRepo(tenantId: string = DEFAULT_TENANT_ID): Pro
   results.push(await indexStateFile(tenantId, repoPath, 'ai_management'));
   results.push(await indexHandoffFile(tenantId, repoPath, 'ai_management'));
   results.push(await indexArchiveFiles(tenantId, repoPath, 'ai_management'));
+  results.push(await indexBrainAtoms(tenantId, resolveBrainDir(brainEnvFor(tenantId)), 'ai_management'));
 
   const totalStored = results.reduce((s, r) => s + r.stored, 0);
   const totalVectors = await getVectorCount(tenantId);
@@ -185,6 +292,7 @@ export async function indexAllRepos(tenantId: string = DEFAULT_TENANT_ID): Promi
   results.push(...await indexMasterRepo(tenantId));
 
   const managed = listRepoPaths();
+  const brainDir = resolveBrainDir(brainEnvFor(tenantId));
 
   // Index each managed repo
   for (const repo of managed) {
@@ -196,6 +304,7 @@ export async function indexAllRepos(tenantId: string = DEFAULT_TENANT_ID): Promi
       results.push(await indexStateFile(tenantId, repo.path, repo.name));
       results.push(await indexHandoffFile(tenantId, repo.path, repo.name));
       results.push(await indexArchiveFiles(tenantId, repo.path, repo.name));
+      results.push(await indexBrainAtoms(tenantId, brainDir, repo.name));
     } catch (err) {
       log.error({ repo: repo.name, err }, 'Failed to index repo');
     }

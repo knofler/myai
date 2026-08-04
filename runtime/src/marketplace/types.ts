@@ -114,6 +114,14 @@ export interface ListingVersion {
   manifestHash: string;
   changelog: string;
   artifactUri: string;          // where the package bytes live (opaque to the model)
+  /**
+   * `PackageCapabilities.declaredTools` (ADR-027 §2), frozen from the
+   * manifest at submission — the tool surface this version claims. Carried on
+   * the version (not the listing) because it's what a reviewer diffs against
+   * the listing's prior published/approved version to spot capability
+   * widening (ADR-028 §4).
+   */
+  declaredTools: string[];
   reviewedBy?: string;          // userId of the platform reviewer
   publishedAt?: string;
   createdAt: string;

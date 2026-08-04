@@ -25,7 +25,8 @@ import { prioritizeRepos, type RepoPriorityEntry } from '../repos/repo-registry.
 import { readHandoff, type ReadHandoffResult } from '../repos/handoff-store.js';
 import { listPlan, type PlanDayView } from '../repos/plan-store.js';
 import { searchVectors, type VectorSearchResult } from '../memory/vector-store.js';
-import { brainEnvFor, brainMainSha, readCompiledBrief } from '../core/distill.js';
+import { brainEnvFor, brainMainSha, brainManifest, readCompiledBrief } from '../core/distill.js';
+import type { BrainManifest, BrainManifestNamespace, BrainManifestStore } from '../core/distill.js';
 import { brainSyncPull } from '../core/brain.js';
 import { tighten } from './context-text.js';
 
@@ -35,6 +36,7 @@ const log = createChildLogger({ module: 'context-read-service' });
 // individual stores — the seam is the stable contract the central service must
 // honour when it takes over.
 export type { RepoPriorityEntry, ReadHandoffResult, PlanDayView, VectorSearchResult };
+export type { BrainManifest, BrainManifestNamespace, BrainManifestStore };
 
 /** Args for a lazy, capped semantic search (the subset the read path needs). */
 export interface VectorSearchArgs {
@@ -70,6 +72,15 @@ export interface ContextReadService {
    * then falls back to the handoff store (pre-brain behaviour, byte-identical).
    */
   readBrainBrief(tenantId: string, repo: string): BrainBriefRead | undefined;
+  /**
+   * Read the control-plane boot manifest (BRAIN B-2) — the tiny TOC of
+   * stores/namespaces/freshness the boot payload carries so an agent knows
+   * WHERE everything is without scanning state files. Best-effort and
+   * OPTIONAL on the interface (injected services may omit it): returns
+   * `undefined` on any failure, and the boot bundle simply renders without
+   * the manifest lines.
+   */
+  readBrainManifest?(tenantId: string): BrainManifest | undefined;
   /**
    * Resolve the operator identity line, already whitespace-tightened + capped.
    * Precedence: BETAC_IDENTITY env → <aiRoot>/state/identity.md → framework
@@ -115,6 +126,17 @@ export const defaultContextReadService: ContextReadService = {
       return { brief, sha: brainMainSha(env) };
     } catch (err) {
       log.debug({ err, repo }, 'brain brief read failed — falling back to handoff store');
+      return undefined;
+    }
+  },
+
+  readBrainManifest(tenantId: string): BrainManifest | undefined {
+    try {
+      // No pull-on-boot here: readBrainBrief already pulled this boot, and the
+      // manifest is directory listings + rev-parse — cheap by construction.
+      return brainManifest(brainEnvFor(tenantId));
+    } catch (err) {
+      log.debug({ err }, 'brain manifest read failed — boot bundle renders without it');
       return undefined;
     }
   },

@@ -18,6 +18,11 @@
 #   RUNNER_BACKLOG_MIN   (default 6)   below this many unconsumed backlog items → planner
 #   scripts/queue_topup.sh [--dry-run] [--floor N]
 #   scripts/queue_topup.sh --report     drift report only (see report_mode below), no top-up
+#   scripts/queue_topup.sh --summary    one-line drift summary only, e.g.
+#                                        "planner drift: 42 done / 3 in-flight / 1 stale"
+#                                        (silent — no output — when there's nothing to
+#                                        report yet, so callers like the SCHEDULE banner
+#                                        can splice it in without extra noise checks)
 # =============================================================================
 set +e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -28,10 +33,26 @@ FLOOR="${RUNNER_QUEUE_FLOOR:-12}"
 BACKLOG_MIN="${RUNNER_BACKLOG_MIN:-6}"
 DRY=false
 REPORT=false
-while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=true;; --floor) shift; FLOOR="${1:-12}";; --report) REPORT=true;; esac; shift; done
+SUMMARY=false
+while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=true;; --floor) shift; FLOOR="${1:-12}";; --report) REPORT=true;; --summary) REPORT=true; SUMMARY=true;; esac; shift; done
 
 . "$SCRIPT_DIR/lib/gateway.sh" 2>/dev/null || true
 log(){ echo "[queue-topup $(TZ=Australia/Sydney date '+%H:%M AEST')] $*"; }
+
+# scripts/archive_runner_backlog.sh tail-rotates fully-fleet-confirmed-popped
+# prefixes out of $BACKLOG into config/archive/runner_backlog-YYYY-MM.jsonl.
+# CONSUMED (the local cursor) is a count over ALL history, never rewritten by
+# a rotation that happens on a different machine — so TOTAL and the pop
+# offset both add back the archived count to stay correct against the
+# (now-shorter) current file regardless of which machine last rotated it.
+archived_total() {
+  local total=0 f
+  for f in "$ROOT"/config/archive/runner_backlog-*.jsonl; do
+    [ -f "$f" ] || continue
+    total=$(( total + $(grep -cvE '^\s*(#|$)' "$f" 2>/dev/null || echo 0) ))
+  done
+  echo "$total"
+}
 
 # =============================================================================
 # --report: PLANNER drift report (operator directive 2026-07-24).
@@ -51,10 +72,12 @@ log(){ echo "[queue-topup $(TZ=Australia/Sydney date '+%H:%M AEST')] $*"; }
 # field is expected to appear unmodified on its corresponding gateway task.
 # =============================================================================
 report_mode() {
-  [ -f "$BACKLOG" ] || { log "report: no backlog file ($BACKLOG) — nothing to report on"; return 0; }
+  [ -f "$BACKLOG" ] || { [ "$SUMMARY" = true ] || log "report: no backlog file ($BACKLOG) — nothing to report on"; return 0; }
   CONSUMED=$(cat "$CURSOR" 2>/dev/null | tr -cd '0-9'); [ -z "$CONSUMED" ] && CONSUMED=0
+  ARCHIVED=$(archived_total)
+  CONSUMED=$(( CONSUMED - ARCHIVED )); [ "$CONSUMED" -lt 0 ] && CONSUMED=0
   if [ "$CONSUMED" -lt 1 ] 2>/dev/null; then
-    log "report: 0 items consumed yet (cursor=$CONSUMED) — nothing to diff"
+    [ "$SUMMARY" = true ] || log "report: 0 items consumed yet (cursor=$CONSUMED) — nothing to diff"
     return 0
   fi
 
@@ -66,15 +89,20 @@ report_mode() {
     -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
     -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"limit":1000}},"id":1}' 2>/dev/null)
   if [ -z "$TASKS_JSON" ]; then
-    log "report: gateway unreachable — cannot diff consumed backlog against the task log"
+    [ "$SUMMARY" = true ] || log "report: gateway unreachable — cannot diff consumed backlog against the task log"
     return 0
   fi
 
-  CONSUMED="$CONSUMED" /usr/bin/python3 -c '
+  CONSUMED="$CONSUMED" SUMMARY_ONLY="$SUMMARY" /usr/bin/python3 -c '
 import sys, os, json
 
 consumed = int(os.environ["CONSUMED"])
-backlog_path, tasks_raw = sys.argv[1], sys.argv[2]
+summary_only = os.environ.get("SUMMARY_ONLY") == "true"
+# tasks_raw comes from stdin, NOT argv — a full gateway task store (1000s of
+# tasks) blows past ARG_MAX as an argument ("Argument list too long"). A
+# here-string spills to a temp file, so there is no size limit.
+backlog_path = sys.argv[1]
+tasks_raw = sys.stdin.read()
 
 lines = [l for l in open(backlog_path) if l.strip() and not l.strip().startswith("#")]
 items = []
@@ -107,6 +135,10 @@ for it in items:
     else:
         inflight.append((title, statuses[0]))
 
+if summary_only:
+    print(f"planner drift: {len(done)} done / {len(inflight)} in-flight / {len(stale)} stale")
+    sys.exit(0)
+
 print("=== queue_topup PLANNER drift report ===")
 print(f"consumed={consumed}  done={len(done)}  in-flight={len(inflight)}  stale(missing)={len(stale)}")
 if stale:
@@ -117,7 +149,7 @@ if inflight:
     print("--- IN-FLIGHT — consumed, still pending/working/review/blocked (not stale) ---")
     for t, s in inflight:
         print(f"  - [{s}] {t}")
-' "$BACKLOG" "$TASKS_JSON"
+' "$BACKLOG" <<<"$TASKS_JSON"
   return 0
 }
 
@@ -145,7 +177,8 @@ log "queue low: $PENDING pending (floor $FLOOR) — topping up"
 
 # ── backlog cursor: how many lines already consumed ──
 [ -f "$BACKLOG" ] || { log "no backlog file ($BACKLOG) — nothing to draw from"; exit 0; }
-TOTAL=$(grep -cvE '^\s*(#|$)' "$BACKLOG" 2>/dev/null || echo 0)
+ARCHIVED=$(archived_total)
+TOTAL=$(( $(grep -cvE '^\s*(#|$)' "$BACKLOG" 2>/dev/null || echo 0) + ARCHIVED ))
 CONSUMED=$(cat "$CURSOR" 2>/dev/null | tr -cd '0-9'); [ -z "$CONSUMED" ] && CONSUMED=0
 REMAINING=$(( TOTAL - CONSUMED ))
 
@@ -191,19 +224,31 @@ if [ "$REMAINING" -le "$BACKLOG_MIN" ]; then
     log "backlog low ($REMAINING) but planner throttled (< ${PLANNER_THROTTLE_HRS}h since last) — skipping regen"
   else
     PLANNER_TITLE="PLANNER: regenerate config/runner_backlog.jsonl from plan docs + repo state (keep the well full)"
-    # avoid duplicate planner tasks: skip if one is already pending
+    # Avoid duplicate planner tasks: skip if one is already in flight.
+    # BUG FIX (2026-08-02, task-a7c44276): this used to filter status=pending
+    # only. A PLANNER task spends nearly all of its life as working (claimed
+    # by the runner) or review (finished, awaiting a test->main merge before
+    # reconcile_review_tasks.sh's ancestor check can flip it to done) — pending
+    # is just the brief moment before it's claimed. So the old guard almost
+    # always saw zero matches and let the next PLANNER_THROTTLE_HRS window
+    # enqueue a fresh duplicate on top of one still sitting in working/review,
+    # which is exactly how multiple simultaneous PLANNER tasks piled up in
+    # review for ai_management. Fetch the repo's full task list (no status
+    # filter — tasks_list has no multi-status filter) and count matches whose
+    # status hasn't reached a terminal state (done/dead_letter).
     EXISTS=$(curl -sf -m 8 -X POST http://localhost:3100/mcp -H 'content-type: application/json' -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
-      -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"repo":"ai_management","status":"pending","limit":500}},"id":1}' 2>/dev/null \
+      -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"repo":"ai_management","limit":500}},"id":1}' 2>/dev/null \
       | /usr/bin/python3 -c 'import sys,json
 try:
     d=json.loads(json.load(sys.stdin)["result"]["content"][0]["text"])
-    print(sum(1 for t in (d if isinstance(d,list) else d.get("tasks",[])) if "PLANNER: regenerate" in t.get("title","")))
+    inflight={"pending","working","review","blocked"}
+    print(sum(1 for t in (d if isinstance(d,list) else d.get("tasks",[])) if "PLANNER: regenerate" in t.get("title","") and t.get("status") in inflight))
 except Exception: print(0)' 2>/dev/null)
     if [ "${EXISTS:-0}" = "0" ]; then
       date +%s > "$PLANNER_STAMP"
       "$SCRIPT_DIR/schedule_task.sh" --repo ai_management --priority P1 --agent product-manager --model claude-fable-5 \
         --title "$PLANNER_TITLE" \
-        --desc "The runner-backlog well (config/runner_backlog.jsonl) is running low. Read plan/GRAND_PRODUCT_ROADMAP.md, plan/PRODUCTION_MVP_SPRINT.md, plan/GAP_BACKLOG_SCHEDULE.md, each core repo's AI/state + AI/plan, and the current queue; APPEND 20-40 fresh, runner-sized, prioritized {repo,title,priority,agent,desc} JSONL lines to config/runner_backlog.jsonl (core repos first: ai_management/agentFlow/connect; playground P2-capped; respect config/schedule_ignore.txt). Do NOT duplicate already-queued or already-shipped work. Before appending, draft your batch to a JSONL file and run 'python3 scripts/backlog_dupe_check.py --candidates <your-draft.jsonl>' — it flags likely near-duplicate titles already in the backlog (token-overlap check) so you can drop them before appending; it does not catch everything, use judgement on what it flags. This keeps the runner never-empty (operator directive). Commit the backlog append. HARD BOUNDARY (non-negotiable): the ONLY write actions this task may take are (1) appending JSONL lines to config/runner_backlog.jsonl and (2) committing that file. You MUST NOT call the tasks_create or tasks_update MCP tools, MUST NOT run schedule_task.sh or curl the gateway to create or modify tasks, and MUST NOT change the status of any existing task — pending, blocked, or otherwise — in this or any other repo. New backlog items reach the live queue later, ONLY via this same queue_topup.sh script's own pop path. If an existing pending task looks stale or superseded, say so in your commit message for a human to review — never touch its status yourself." >/dev/null 2>&1 \
+        --desc "The runner-backlog well (config/runner_backlog.jsonl) is running low. Read plan/BACKLOG_POLICY.md FIRST — it is the source of truth for routing policy (core-repos-first, playground's P2 cap, config/schedule_ignore.txt) and for what else to read/do before drafting. Then read plan/GRAND_PRODUCT_ROADMAP.md, plan/PRODUCTION_MVP_SPRINT.md, plan/GAP_BACKLOG_SCHEDULE.md, each core repo's AI/state + AI/plan, and the current queue; APPEND 20-40 fresh, runner-sized, prioritized {repo,title,priority,agent,desc} JSONL lines to config/runner_backlog.jsonl following plan/BACKLOG_POLICY.md's routing policy. Do NOT duplicate already-queued or already-shipped work. Before appending, draft your batch to a JSONL file and run 'python3 scripts/backlog_dupe_check.py --candidates <your-draft.jsonl>' — it flags likely near-duplicate titles already in the backlog (token-overlap check) so you can drop them before appending; it does not catch everything, use judgement on what it flags. This keeps the runner never-empty (operator directive). Commit the backlog append. HARD BOUNDARY (non-negotiable, see AI/documentation/AI_RULES.md §7 for the durable record): the ONLY write actions this task may take are (1) appending JSONL lines to config/runner_backlog.jsonl and (2) committing that file. You MUST NOT call the tasks_create or tasks_update MCP tools, MUST NOT run schedule_task.sh or curl the gateway to create or modify tasks, and MUST NOT change the status of any existing task — pending, blocked, or otherwise — in this or any other repo. New backlog items reach the live queue later, ONLY via this same queue_topup.sh script's own pop path. If an existing pending task looks stale or superseded, say so in your commit message for a human to review — never touch its status yourself." >/dev/null 2>&1 \
         && log "backlog low ($REMAINING left) → enqueued PLANNER to regenerate it"
     fi
   fi
@@ -215,7 +260,11 @@ NEED=$(( FLOOR - PENDING )); [ "$NEED" -lt 1 ] && exit 0
 [ "$REMAINING" -lt 1 ] && { log "backlog exhausted (planner queued) — no items to pop this cycle"; exit 0; }
 [ "$NEED" -gt "$REMAINING" ] && NEED="$REMAINING"
 
-# emit the next $NEED non-comment lines starting after $CONSUMED, as TSV the shell can read
+# emit the next $NEED non-comment lines starting after $CONSUMED, as TSV the shell can read.
+# OFFSET is CONSUMED with the archived-away prefix subtracted back out, since
+# CONSUMED counts over all history but the current (possibly rotated) file
+# only holds what's left — see archived_total() above.
+OFFSET=$(( CONSUMED - ARCHIVED )); [ "$OFFSET" -lt 0 ] && OFFSET=0
 POPPED=0
 while IFS=$'\t' read -r repo title priority agent desc; do
   [ -n "$title" ] || continue
@@ -225,9 +274,9 @@ while IFS=$'\t' read -r repo title priority agent desc; do
       && log "enqueued [$repo/$priority] $title"
   fi
   POPPED=$(( POPPED + 1 ))
-done < <(CONSUMED="$CONSUMED" NEED="$NEED" /usr/bin/python3 -c '
+done < <(OFFSET="$OFFSET" NEED="$NEED" /usr/bin/python3 -c '
 import sys, os, json
-consumed=int(os.environ["CONSUMED"]); need=int(os.environ["NEED"])
+consumed=int(os.environ["OFFSET"]); need=int(os.environ["NEED"])
 lines=[l for l in open(sys.argv[1]) if l.strip() and not l.strip().startswith("#")]
 for l in lines[consumed:consumed+need]:
     try:

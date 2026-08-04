@@ -6,6 +6,15 @@ const log = createChildLogger({ module: 'embeddings' });
 export interface EmbeddingProvider {
   name: string;
   dimensions: number;
+  /**
+   * True once this provider is known to be serving non-semantic vectors
+   * instead of real embeddings (e.g. LocalEmbeddingProvider's hash fallback
+   * when the ML model fails to load). Callers that trust cosine similarity
+   * as a confidence signal (ADR-020 v2 `brain_lookup`) MUST treat a degraded
+   * provider the same as "no model available" — never score against it.
+   * Absent/false = real embeddings.
+   */
+  degraded?: boolean;
   embed(text: string): Promise<number[]>;
   embedBatch(texts: string[]): Promise<number[][]>;
 }
@@ -16,9 +25,14 @@ class LocalEmbeddingProvider implements EmbeddingProvider {
   name = 'local';
   dimensions: number;
   private pipeline: unknown = null;
+  private _degraded = false;
 
   constructor(dimensions: number) {
     this.dimensions = dimensions;
+  }
+
+  get degraded(): boolean {
+    return this._degraded;
   }
 
   async embed(text: string): Promise<number[]> {
@@ -46,6 +60,7 @@ class LocalEmbeddingProvider implements EmbeddingProvider {
       return this.pipeline;
     } catch (err) {
       log.error({ err }, 'Failed to load local embedding model — falling back to hash-based embeddings');
+      this._degraded = true;
       // Fallback: deterministic hash-based pseudo-embeddings (not semantic, but works for testing)
       this.pipeline = async (text: string) => {
         const dims = this.dimensions;

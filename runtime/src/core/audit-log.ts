@@ -14,6 +14,14 @@
  * record of who exported what. Still signal, not noise: one line per login,
  * one per bulk export, same order of magnitude as `session.revoke`.
  *
+ * One more addition (`marketplace/artifact-integrity.ts`): `marketplace.
+ * artifact_hash_mismatch` records a fetch-time SHA-256 recheck failure against
+ * `ListingVersion.manifestHash` (ADR-029 §4/checklist #5, any consumption
+ * point — review fetch, install flow, the ADR-027 sandboxed-execution
+ * loader). A mismatch is either an infra fault or an active tampering
+ * attempt, so it is logged the same way ADR-027's Repudiation row logs a
+ * denied tool call — signal, one line per abort.
+ *
  * Persistence: append-only JSONL under `auditDir()` (env `MYAI_AUDIT_DIR`,
  * default `<cwd>/data/audit`), one file per UTC day (`audit-YYYY-MM-DD.jsonl`).
  * Dependency-light (node builtins only) and env-injectable — the SAME hermetic
@@ -66,6 +74,7 @@ export const AUDIT_ACTIONS = [
   'billing.update',
   'connector.change',
   'schedule.change',
+  'hook.toggle',
   'account.erasure_request',
   'account.erasure_cancel',
   'account.erasure_purge',
@@ -79,6 +88,7 @@ export const AUDIT_ACTIONS = [
   'session.revoke_all',
   'session.login',
   'data.export',
+  'marketplace.artifact_hash_mismatch',
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

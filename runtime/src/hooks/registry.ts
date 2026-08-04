@@ -34,7 +34,7 @@ export function addBashHook(
   name: string,
   events: HookEvent[],
   command: string,
-  options: { priority?: number; timeout?: number } = {},
+  options: { priority?: number; timeout?: number; enabled?: boolean } = {},
 ): void {
   const handler: HookHandler = async (ctx: HookContext): Promise<HookResult | void> => {
     return new Promise((resolve) => {
@@ -90,7 +90,7 @@ export function addBashHook(
     handler,
     priority: options.priority ?? 90,
     timeout: options.timeout ?? 5000,
-    enabled: true,
+    enabled: options.enabled ?? true,
     source: 'bash',
   };
   registerHook(registration);

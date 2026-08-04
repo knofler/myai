@@ -105,12 +105,24 @@ export function hostedQuota(plan: TenantPlan): number {
 
 // ── location resolution (tenant-scoped by construction) ───────────────────────
 
-function hostedRoot(env: NodeJS.ProcessEnv = process.env): string {
+/**
+ * Root directory holding every tenant's `<tenantId>.git` bare repo +
+ * `<tenantId>.json` metadata. Exported for the git-over-HTTP transport route
+ * (hosted-brain-transport.ts), which needs it as `GIT_PROJECT_ROOT` for the
+ * `git http-backend` CGI process — the one other place allowed to know this
+ * layout, per the tenant-scoping discipline in this module's header.
+ */
+export function hostedRoot(env: NodeJS.ProcessEnv = process.env): string {
   return join(myaiHome(env), 'hosted-brains');
 }
 
-/** Sanitise a tenant id to a safe single path segment; throws on anything unsafe. */
-function safeTenant(tenantId: string): string {
+/**
+ * Sanitise a tenant id to a safe single path segment; throws on anything
+ * unsafe. Exported so the transport route validates/derives the on-disk
+ * `<tenantId>.git` segment the exact same way provisioning did — never its
+ * own copy of the slugify + local-tenant-refusal rule.
+ */
+export function safeTenant(tenantId: string): string {
   const t = slugify(tenantId);
   if (!t) throw new HostedBrainError(`invalid tenantId '${tenantId}'`, 400, 'BAD_TENANT');
   if (tenantId === SYSTEM_CONTEXT.tenantId) {
@@ -234,15 +246,29 @@ export function provisionHostedBrain(
   return { remoteUrl: hostedRemoteUrl(tenantId, token, env), token, created };
 }
 
-/** Mint a fresh token (invalidating the old one) — leak response / reissue. */
+/**
+ * Mint a fresh token (invalidating the old one) — leak response / reissue.
+ *
+ * Re-checks hasHostedBrain(plan) against the CALLER'S CURRENT plan (not the
+ * plan stored at provision time): a tenant that downgraded to free after
+ * provisioning must not be able to keep minting fresh access tokens for a
+ * hosted brain they're no longer paying for. Existing data/repo is untouched
+ * either way (lapse never destroys data — mirrors provisionHostedBrain).
+ */
 export function rotateHostedToken(
   tenantId: string,
+  plan: TenantPlan,
   env: NodeJS.ProcessEnv = process.env,
 ): ProvisionResult {
   const meta = readMeta(tenantId, env);
   if (!meta) throw new HostedBrainError(`no hosted brain for tenant '${tenantId}'`, 404, 'NOT_PROVISIONED');
+  if (!hasHostedBrain(plan)) {
+    throw new HostedBrainError(
+      `plan '${plan}' has no hosted brain — upgrade to Solo to enable cross-device continuity`,
+    );
+  }
   const { token, hash } = mintToken();
-  writeMeta({ ...meta, tokenHash: hash, rotatedAt: new Date().toISOString() }, env);
+  writeMeta({ ...meta, plan, tokenHash: hash, rotatedAt: new Date().toISOString() }, env);
   return { remoteUrl: hostedRemoteUrl(tenantId, token, env), token, created: false };
 }
 

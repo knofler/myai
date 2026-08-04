@@ -77,6 +77,21 @@ export interface AtomInput {
   content: string;
   /** Optional code provenance stamp (BRAIN B5). */
   code?: CodeProvenance;
+  /**
+   * ADR-020 topic tag (the controlled `BRAIN_TOPICS` set — extensible). Missing
+   * → 'general' with a warning; unknown-but-valid slug → accepted with a
+   * warning. This is what lets the distiller build a topic-indexed GOLD/SILVER
+   * hierarchy instead of an ever-growing prose blob.
+   */
+  topic?: string;
+  /**
+   * ADR-020 supersession: the slug or sha8 of a prior atom this one replaces.
+   * The distiller retires the superseded atom from the hot path (GOLD/SILVER),
+   * structurally fixing the ACTION-section-bloat failure mode — no blunt
+   * keep-last-N cap. The superseded atom stays in history (BRONZE) — nothing is
+   * deleted; it just drops out of what a boot reads.
+   */
+  supersedes?: string;
 }
 
 export interface AtomResult {
@@ -164,6 +179,51 @@ export function lintSessionAtom(content: string, priorContent?: string | null): 
     }
   }
   return { warnings };
+}
+
+// ── ADR-020 topic index: controlled tag set + supersession ───────────────────
+// A small, controlled vocabulary so atoms cluster into stable SILVER branches
+// rather than fragmenting into free-text prose with no home. Deliberately
+// EXTENSIBLE — an unknown slug is accepted (the operator can grow the taxonomy)
+// but warned, so the natural clusters surface before the set is tightened.
+
+export const BRAIN_TOPICS = [
+  'general', // catch-all — the warned default for an un-tagged atom
+  'runner-ops',
+  'cost-policy',
+  'gateway-infra',
+  'go-live',
+  'continuity',
+  'distribution',
+  'billing',
+  'brain',
+  'security',
+  'docs',
+] as const;
+
+const TOPIC_SET = new Set<string>(BRAIN_TOPICS);
+
+/**
+ * Normalize a topic tag (ADR-020): missing → 'general' + a nudge; supplied →
+ * slugified. An unknown-but-valid slug is ACCEPTED (the set is extensible) but
+ * warned so branches don't silently fragment. Never throws — the warned-default
+ * rollout keeps un-updated fleet callers working while they migrate.
+ */
+export function normalizeTopic(topic?: string): { topic: string; warning?: string } {
+  const t = topic ? slugify(topic) : '';
+  if (!t) {
+    return {
+      topic: 'general',
+      warning: "no topic supplied — defaulted to 'general'; pass a topic from BRAIN_TOPICS so the atom is indexed (ADR-020)",
+    };
+  }
+  if (!TOPIC_SET.has(t)) {
+    return {
+      topic: t,
+      warning: `topic '${t}' is not in the controlled set (${[...TOPIC_SET].join(', ')}) — accepted, but reuse an existing topic where it fits so SILVER branches stay consolidated`,
+    };
+  }
+  return { topic: t };
 }
 
 export interface BrainStatus {
@@ -446,8 +506,22 @@ export function writeAtom(input: AtomInput, env: NodeJS.ProcessEnv = process.env
   const existing = readdirSync(join(dir, relDir)).find((f) => f.endsWith(suffix));
   if (existing) return { path: `${relDir}/${existing}`, sha8: hash, created: false };
 
-  // Session-atom quality lint runs against what's on disk BEFORE this write.
-  const lint = input.kind === 'session' ? lintSessionAtom(input.content, latestAtomBody(dir, relDir)) : undefined;
+  // ADR-020 topic + supersession. normalizeTopic never throws (warned-default
+  // rollout): a missing/unknown topic still writes, carrying a nudge in the lint.
+  const { topic, warning: topicWarning } = normalizeTopic(input.topic);
+  const supersedes = input.supersedes?.trim() || undefined;
+
+  // Session-atom quality lint runs against what's on disk BEFORE this write; the
+  // topic nudge (any kind) rides the same non-blocking channel back to callers.
+  // Contract: session atoms ALWAYS return a lint object (warnings may be empty);
+  // other kinds return one only when there's something to say (a topic nudge).
+  const sessionLint = input.kind === 'session' ? lintSessionAtom(input.content, latestAtomBody(dir, relDir)) : undefined;
+  const lintWarnings = [
+    ...(sessionLint?.warnings ?? []),
+    ...(topicWarning ? [topicWarning] : []),
+  ];
+  const lint: AtomLint | undefined =
+    input.kind === 'session' || lintWarnings.length ? { warnings: lintWarnings } : undefined;
 
   const ts = utcStamp();
   const host = brainHost(env);
@@ -464,6 +538,8 @@ export function writeAtom(input: AtomInput, env: NodeJS.ProcessEnv = process.env
     `kind: ${input.kind}`,
     `repo: ${repo || '—'}`,
     `slug: ${slug}`,
+    `topic: ${topic}`,
+    ...(supersedes ? [`supersedes: ${supersedes}`] : []),
     `host: ${host}`,
     `written: ${ts}`,
   ];

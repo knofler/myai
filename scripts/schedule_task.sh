@@ -2,9 +2,11 @@
 # schedule_task.sh — the STANDARD way to schedule autonomous work in ANY repo.
 #
 # Pushes a task into the myAI gateway task queue (http://localhost:3100/mcp).
-# The launchd CLI task runner (every few hours, free Fable window, claude-tech,
-# subscription-billed) pulls the highest-priority pending task and works it on a
-# `test` branch, then flips it to "Needs Review" for a human `ship it`.
+# The launchd CLI task runner (every few hours, claude-tech subscription —
+# Sonnet/Fable/Opus per its capability x cost x availability router, Fable a
+# standing part of the Max 20x allocation) pulls the highest-priority pending
+# task and works it on a `test` branch, then flips it to "Needs Review" for a
+# human `ship it`.
 #
 # This is the ONE correct mechanism. Do NOT create gateway *cron schedules* for
 # per-repo work (those bill API tokens and are disabled fleet-wide) — create a
@@ -17,8 +19,14 @@
 #   ./AI/scripts/schedule_task.sh --list           # show this repo's queued tasks
 #   ./AI/scripts/schedule_task.sh --list-all        # show the whole queue (limit 500)
 #
-# Defaults: repo = git repo basename; priority = P2; model = free-window model
-# (claude-fable-5 until 2026-06-22, else agent-tier default); source = manual.
+# Defaults: repo = git repo basename; priority = P2; source = manual; model =
+# unset (tier-default — the runner's capability x cost x availability router,
+# route_task_model in cli_task_runner.sh, picks Fable/Sonnet/Opus per
+# priority+complexity+pool headroom; pass --model claude-fable-5 to pin it).
+# The old FABLE_FREE_UNTIL blanket-Fable-until-2026-06-22 default retired on
+# schedule — Fable is a standing part of the Max 20x allocation now, not a
+# promo window, so it flows through the same router as everything else
+# (verified 2026-07-26, plan/jam/multi-lane-distribution.md P1a).
 #
 # Env: GATEWAY_MCP (default http://localhost:3100/mcp), FABLE_FREE_UNTIL (YYYYMMDD).
 set -euo pipefail
@@ -128,7 +136,10 @@ if [ "${SCHEDULE_CONSENT:-0}" != "1" ] && [ -f "$IGNORE_FILE" ] \
   exit 3
 fi
 
-# Default model: free-window Fable until the window closes, else tier-default (empty).
+# Default model: leave unset (tier-default) past the (retired) Fable free
+# window, so the runner's capability x cost x availability router decides —
+# see the header comment. FABLE_FREE_UNTIL stays honored for a future genuine
+# promo window without a code change.
 if [ -z "$MODEL" ]; then
   TODAY="$(date +%Y%m%d)"
   if [ "$TODAY" -lt "$FABLE_FREE_UNTIL" ]; then MODEL="claude-fable-5"; fi

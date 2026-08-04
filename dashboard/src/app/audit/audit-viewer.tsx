@@ -1,11 +1,14 @@
 'use client';
 
 // Client viewer for the RBAC v2 audit trail + permission matrix (ADR-013 §5).
-// Two panels:
+// Three panels:
 //   1. Audit log — filterable table of privileged actions/denials, newest first,
 //      with JSON/CSV export links (streamed through the export proxy).
 //   2. Permissions — the role × resource × action grid the gateway derives from
 //      the static role→capability lattice (a green/‑ matrix, read-only).
+//   3. Shadow denials — ADR-013 §6 soak visibility: what would 403 per
+//      tool/route if RBAC_ENFORCE were flipped on today, from the ring buffer
+//      `assertCapability` writes to in shadow mode (never the audit trail).
 import { useCallback, useEffect, useState } from 'react';
 
 // ── shared types (mirror the gateway shapes) ──────────────────────────────────
@@ -23,6 +26,13 @@ interface PermRow {
   action: string;
   capability: string;
   roles: Record<string, boolean>;
+}
+interface ShadowDenialSummaryRow {
+  action: string;
+  capability: string;
+  roles: Record<string, number>;
+  count: number;
+  lastAt: number;
 }
 
 const ACTIONS = [
@@ -42,6 +52,8 @@ function Td({ children }: { children: React.ReactNode }) {
 export default function AuditViewer() {
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [grid, setGrid] = useState<PermRow[]>([]);
+  const [shadowSummary, setShadowSummary] = useState<ShadowDenialSummaryRow[]>([]);
+  const [shadowError, setShadowError] = useState<string | null>(null);
   const [action, setAction] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +92,21 @@ export default function AuditViewer() {
         const json = await res.json();
         setGrid(Array.isArray(json.grid) ? json.grid : []);
       } catch { /* matrix is best-effort — the audit table is the primary panel */ }
+    })();
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch('/api/auth/rbac/shadow-denials', { cache: 'no-store' });
+        if (res.status === 403) {
+          setShadowError('You need owner or admin access to view shadow denials.');
+          return;
+        }
+        if (!res.ok) return;
+        const json = await res.json();
+        setShadowSummary(Array.isArray(json.summary) ? json.summary : []);
+      } catch { /* best-effort — the audit table is the primary panel */ }
     })();
   }, []);
 
@@ -183,6 +210,49 @@ export default function AuditViewer() {
           </div>
         </section>
       )}
+
+      {/* ── Shadow denials ────────────────────────────────────────── */}
+      <section>
+        <h2 className="text-lg font-semibold text-zinc-200 mb-1">Shadow denials (would-block if enforced)</h2>
+        <p className="text-sm text-zinc-500 mb-4">
+          RBAC_ENFORCE is currently off, so nothing below is actually blocking a caller — this is a soak view of
+          what would 403 the moment enforcement is switched on, grouped by tool/route.
+        </p>
+        {shadowError ? (
+          <p className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2">{shadowError}</p>
+        ) : shadowSummary.length === 0 ? (
+          <p className="text-sm text-zinc-500">No shadow denials recorded yet.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-zinc-800">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr>
+                  <Th>Tool / route</Th>
+                  <Th>Capability</Th>
+                  <Th>Count</Th>
+                  <Th>By role</Th>
+                  <Th>Last seen (UTC)</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {shadowSummary.map((row) => (
+                  <tr key={row.action}>
+                    <Td><span className="text-zinc-300">{row.action}</span></Td>
+                    <Td><code className="text-xs text-teal-300">{row.capability}</code></Td>
+                    <Td>{row.count}</Td>
+                    <Td>
+                      {Object.entries(row.roles)
+                        .map(([role, count]) => `${role}: ${count}`)
+                        .join(', ')}
+                    </Td>
+                    <Td>{new Date(row.lastAt).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z')}</Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

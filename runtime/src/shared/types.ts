@@ -110,6 +110,13 @@ export interface GatewayConfig {
   database: {
     uri: string;
     name: string;
+    /** Read-side failover posture (MONGO_MIRROR.md). 'local' = on primary
+     *  connect failure, fall back to the local mirror in an explicit, logged,
+     *  READ-ONLY degraded mode. Never automatic — opt-in via MYAI_DB_FAILOVER. */
+    failover: 'none' | 'local';
+    /** Local-mirror URI used when failover fires. Defaults to the compose
+     *  local mongo (`mongo` service host) when unset. */
+    failoverUri?: string;
   };
   aiRoot: string;
   sessions: {
@@ -142,7 +149,7 @@ export interface GatewayConfig {
   };
   llm: {
     enabled: boolean;
-    mode: 'bridge' | 'direct' | 'api' | 'deepseek' | 'moonshot' | 'ollama';
+    mode: 'bridge' | 'direct' | 'api' | 'deepseek' | 'moonshot' | 'gemini' | 'ollama';
     /** Comma-separated provider chain for auto-fallback. When set and the
      * primary mode call fails with a recoverable network error
      * (ECONNRESET / ENETUNREACH / ETIMEDOUT / fetch-network), the router walks
@@ -156,6 +163,18 @@ export interface GatewayConfig {
     deepseekModel?: string;
     moonshotApiKey?: string;
     moonshotModel?: string;
+    /** Override the Moonshot base URL (MOONSHOT_BASE_URL) — point the Kimi
+     * lane at any OpenAI-compatible host without a code change. */
+    moonshotBaseUrl?: string;
+    /** OpenRouter backend for the Kimi lane (OPENROUTER_API_KEY) — free K2
+     * without a paid Moonshot key. Direct Moonshot wins when both are set. */
+    openrouterApiKey?: string;
+    /** OpenRouter model slug (OPENROUTER_MODEL) — default `moonshotai/kimi-k2:free`. */
+    openrouterModel?: string;
+    /** OpenRouter base URL override (OPENROUTER_BASE_URL). */
+    openrouterBaseUrl?: string;
+    geminiApiKey?: string;
+    geminiModel?: string;
     ollamaBaseUrl?: string;
     ollamaModel?: string;
     /** Phase 5d — enable Anthropic prompt caching for the `api` provider.

@@ -26,6 +26,10 @@ export interface AuthedTenant {
   // Free-form per-tenant contract terms (e.g. `slaTargetPct` — negotiated SLA
   // target for Scale/Enterprise) read by the SLA-credit route.
   metadata?: Record<string, unknown>;
+  // ADR-019 follow-up #4 — this tenant's Stripe Connect creator payout account
+  // (present only once onboarding has started; distinct from stripeCustomerId).
+  stripeConnectAccountId?: string;
+  stripeConnectStatus?: 'not_connected' | 'onboarding' | 'restricted' | 'enabled' | 'disconnected';
 }
 
 export type AuthResult =

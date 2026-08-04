@@ -3,15 +3,16 @@
 // tabbed destination: Up Next · Needs Review · Scheduled Runs · 10-Day Plans ·
 // Orchestration. The active tab lives in ?tab= so old URLs redirect cleanly.
 
-import { connectDB, Task, Schedule, PlanDay, BudgetUsage } from '@/lib/db';
+import { connectDB, Task, Schedule, PlanDay, BudgetUsage, RunnerLease, RunnerLeaseHistory } from '@/lib/db';
 import { fetchRoutingConfig, type RoutingConfig } from '@/lib/gateway';
 import { getActiveTenant, tenantFilter } from '@/lib/tenant';
 import { timeAgo, timeUntil, fmtSydney, fmtUtc, fmtUsd, formatDuration } from '@/lib/format';
-import { PriorityBadge, ModelBadge, TaskStatusBadge, RunStatusBadge, PlanStatusBadge, OnDot } from '@/components/ui/badge';
+import { PriorityBadge, ModelBadge, TaskStatusBadge, RunStatusBadge, PlanStatusBadge, OnDot, RoutedBadge, LaneBadge, WorkTypeBadge } from '@/components/ui/badge';
 import { Card, StatCard, EmptyState } from '@/components/ui/card';
 import { DataTable, type DataRow } from '@/components/ui/data-table';
 import { TabBar, resolveTab } from '@/components/ui/tabs';
 import { RepoChips, type RepoChip } from '@/components/ui/repo-chips';
+import { LaneChips, type LaneChip } from '@/components/ui/lane-chips';
 import { PageHeader } from '@/components/page-header';
 import AutoRefresh from '@/components/auto-refresh';
 import { BillingBanner } from '@/components/billing-banner';
@@ -19,6 +20,9 @@ import { SpendAlertBanner } from '@/components/spend-alert-banner';
 import { TaskArtifactsButton } from '@/components/task-artifacts-drawer';
 import { readSchedulePolicy } from '@/lib/schedule-policy';
 import { readUserBlockers } from '@/lib/user-blockers';
+import { readPoolCapacity, type PoolCapacity } from '@/lib/pool-capacity';
+import { PoolCapacityPanel } from '@/components/pool-capacity-panel';
+import { TaskDeferPanel } from '@/components/task-defer-panel';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +34,14 @@ interface TaskDoc {
   status: 'pending' | 'working' | 'review' | 'done' | 'blocked' | 'paused' | 'dead_letter';
   assignedAgent?: string;
   recommendedModel?: string;
+  routedProfile?: string;
+  routedModel?: string;
+  routedComplexity?: string;
+  executionLane?: 'claude' | 'agentic-fallback';
+  executionProvider?: string;
+  workType?: string;
+  workTypeTier?: string;
+  workTypeFailoverHop?: string;
   prUrl?: string;
   notes?: string;
   startedAt?: Date;
@@ -41,6 +53,7 @@ interface TaskDoc {
   nextRetryAt?: Date;
   deadLetteredAt?: Date;
   lastError?: string;
+  deferCount?: number;
 }
 
 interface ScheduleDoc {
@@ -66,11 +79,39 @@ interface PlanDoc {
   status: 'enabled' | 'disabled' | 'done' | 'blocked';
 }
 
+interface RunnerLeaseDoc {
+  slot: number;
+  holder: string;
+  machine?: string;
+  account?: string;
+  taskId?: string;
+  acquiredAt: Date;
+  heartbeatAt: Date;
+  leaseUntil: Date;
+}
+
+interface RunnerLeaseHistoryDoc {
+  slot: number;
+  holder: string;
+  machine?: string;
+  account?: string;
+  taskId?: string;
+  acquiredAt: Date;
+  releasedAt: Date;
+  durationMs: number;
+  reason: 'released' | 'reclaimed' | 'account_mismatch';
+}
+
 const PRIORITY_ORDER: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
 
 /** Repo dimension (ADR-015 slice 1): fold ?repo= into a query filter, or {} for all repos. */
 function repoFilter(repo?: string): { repo?: string } {
   return repo ? { repo } : {};
+}
+
+/** Lane dimension (task-47098709): fold ?lane= into a query filter, or {} for both lanes. */
+function laneFilter(lane?: string): { executionLane?: string } {
+  return lane ? { executionLane: lane } : {};
 }
 
 function effectiveModel(task: TaskDoc, routing: RoutingConfig | null): { model: string; via: string } {
@@ -87,6 +128,9 @@ async function QueueTab({ routing, repo }: { routing: RoutingConfig | null; repo
   const tenantId = await getActiveTenant();
   const tf = tenantFilter(tenantId);
   const tasks = await Task.find({ ...tf, ...repoFilter(repo), status: 'pending' }).sort({ priority: 1, createdAt: 1 }).limit(200).lean() as unknown as TaskDoc[];
+  const starving = tasks
+    .filter((t) => (t.deferCount ?? 0) > 0)
+    .map((t) => ({ taskId: t.taskId, repo: t.repo, title: t.title, deferCount: t.deferCount ?? 0, updatedAt: t.updatedAt }));
   const rows: DataRow[] = tasks.map((t) => {
     const m = effectiveModel(t, routing);
     const quickWin = (t.notes ?? '').includes('quick win');
@@ -108,28 +152,31 @@ async function QueueTab({ routing, repo }: { routing: RoutingConfig | null; repo
     };
   });
   return (
-    <DataTable
-      title="Up next — pending queue"
-      columns={[
-        { label: 'Priority', sortKey: 'priority', mobile: 'badge' },
-        { label: 'Task', mobile: 'title' },
-        { label: 'Repo', mobile: 'meta' },
-        { label: 'Planned agent', mobile: 'detail' },
-        { label: 'Planned model', mobile: 'detail' },
-        { label: 'Created', sortKey: 'created', mobile: 'meta' },
-      ]}
-      rows={rows}
-      defaultSort="priority"
-      searchPlaceholder="Search task, repo, agent, model, P0…"
-      emptyText="Queue empty."
-    />
+    <div className="space-y-4">
+      <TaskDeferPanel tasks={starving} />
+      <DataTable
+        title="Up next — pending queue"
+        columns={[
+          { label: 'Priority', sortKey: 'priority', mobile: 'badge' },
+          { label: 'Task', mobile: 'title' },
+          { label: 'Repo', mobile: 'meta' },
+          { label: 'Planned agent', mobile: 'detail' },
+          { label: 'Planned model', mobile: 'detail' },
+          { label: 'Created', sortKey: 'created', mobile: 'meta' },
+        ]}
+        rows={rows}
+        defaultSort="priority"
+        searchPlaceholder="Search task, repo, agent, model, P0…"
+        emptyText="Queue empty."
+      />
+    </div>
   );
 }
 
-async function ReviewTab({ repo }: { repo?: string }) {
+async function ReviewTab({ repo, lane }: { repo?: string; lane?: string }) {
   const tenantId = await getActiveTenant();
   const tf = tenantFilter(tenantId);
-  const tasks = await Task.find({ ...tf, ...repoFilter(repo), status: 'review' }).sort({ updatedAt: -1 }).limit(100).lean() as unknown as TaskDoc[];
+  const tasks = await Task.find({ ...tf, ...repoFilter(repo), ...laneFilter(lane), status: 'review' }).sort({ updatedAt: -1 }).limit(100).lean() as unknown as TaskDoc[];
   const rows: DataRow[] = tasks.map((t) => ({
     id: t.taskId,
     search: `${t.title} ${t.repo} ${t.assignedAgent ?? ''} ${t.notes ?? ''}`.toLowerCase(),
@@ -140,6 +187,8 @@ async function ReviewTab({ repo }: { repo?: string }) {
         {t.prUrl ? <a href={t.prUrl} target="_blank" rel="noreferrer" className="hover:text-emerald-400 underline decoration-zinc-700">{t.title}</a> : t.title}
       </span>,
       <span key="a" className="text-zinc-400 text-xs">{t.assignedAgent ?? '—'}</span>,
+      <LaneBadge key="l" lane={t.executionLane} provider={t.executionProvider} />,
+      <WorkTypeBadge key="wt" workType={t.workType} workTypeTier={t.workTypeTier} workTypeFailoverHop={t.workTypeFailoverHop} />,
       <span key="n" className="text-zinc-400 text-xs block max-w-md truncate" title={t.notes}>{t.notes?.replace(/^RESULT: /, '') ?? '—'}</span>,
       <span key="f" className="text-zinc-600 text-xs">{timeAgo(t.updatedAt)}</span>,
       <TaskArtifactsButton key="art" taskId={t.taskId} title={t.title} />,
@@ -152,6 +201,8 @@ async function ReviewTab({ repo }: { repo?: string }) {
         { label: 'Repo', mobile: 'meta' },
         { label: 'Task', mobile: 'title' },
         { label: 'Agent', mobile: 'detail' },
+        { label: 'Lane', mobile: 'badge' },
+        { label: 'Work-type', mobile: 'badge' },
         { label: 'Result', mobile: 'detail' },
         { label: 'Finished', sortKey: 'finished', mobile: 'meta' },
         { label: 'Artifacts', mobile: 'detail' },
@@ -209,9 +260,10 @@ function SchedulePolicyPanel({ priorityRepos, ignoreRepos }: { priorityRepos: st
 }
 
 async function SchedulesTab({ tenantId, repo }: { tenantId: string; repo?: string }) {
-  const [schedules, policy] = await Promise.all([
+  const [schedules, policy, capacity] = await Promise.all([
     Schedule.find({ ...tenantFilter(tenantId), ...repoFilter(repo) }).sort({ enabled: -1, nextRun: 1 }).lean() as unknown as Promise<ScheduleDoc[]>,
     readSchedulePolicy(),
+    readPoolCapacity(),
   ]);
   const rows: DataRow[] = schedules.map((s) => ({
     id: s.scheduleId,
@@ -233,6 +285,7 @@ async function SchedulesTab({ tenantId, repo }: { tenantId: string; repo?: strin
   }));
   return (
     <div className="space-y-4">
+      <PoolCapacityPanel capacity={capacity} />
       <SchedulePolicyPanel priorityRepos={policy.priorityRepos} ignoreRepos={policy.ignoreRepos} />
       <DataTable
         title="Scheduled runs"
@@ -350,6 +403,103 @@ async function DeadLetterTab({ repo }: { repo?: string }) {
   );
 }
 
+/**
+ * Runner leases (ADR-011 slice 7 — runs log). Two tables: which slots are
+ * live right now (RunnerLease — deleted on release, so this is the only
+ * place to see it), and the runs-log history of completed holds
+ * (RunnerLeaseHistory — append-only, written on release) so an operator can
+ * tell which account/slot ran which task and for how long without grepping
+ * raw Mongo.
+ */
+async function LeasesTab({ tenantId }: { tenantId: string }) {
+  const [active, history] = await Promise.all([
+    RunnerLease.find({ ...tenantFilter(tenantId) }).sort({ slot: 1 }).lean() as unknown as Promise<RunnerLeaseDoc[]>,
+    RunnerLeaseHistory.find({ ...tenantFilter(tenantId) }).sort({ releasedAt: -1 }).limit(200).lean() as unknown as Promise<RunnerLeaseHistoryDoc[]>,
+  ]);
+  const now = Date.now();
+
+  const activeRows: DataRow[] = active.map((l) => ({
+    id: `${l.slot}`,
+    search: `${l.holder} ${l.machine ?? ''} ${l.account ?? ''} ${l.taskId ?? ''}`.toLowerCase(),
+    sort: { slot: l.slot },
+    cells: [
+      <span key="s" className="text-zinc-200 font-mono text-xs">slot {l.slot}</span>,
+      <span key="h" className="text-zinc-300 text-xs font-mono">{l.holder}</span>,
+      <span key="m" className="text-zinc-400 text-xs">{l.machine ?? '—'}</span>,
+      <span key="a" className="text-zinc-400 text-xs">{l.account ?? '—'}</span>,
+      <span key="t" className="text-zinc-400 text-xs font-mono">{l.taskId ?? '—'}</span>,
+      <span key="d" className="text-zinc-400 text-xs">{formatDuration(l.acquiredAt, new Date())}</span>,
+      <span key="x" className={`text-xs ${new Date(l.leaseUntil).getTime() <= now ? 'text-red-400' : 'text-zinc-500'}`}>
+        {new Date(l.leaseUntil).getTime() <= now ? 'stale' : timeUntil(l.leaseUntil)}
+      </span>,
+    ],
+  }));
+
+  const REASON_STYLE: Record<string, string> = {
+    released: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+    reclaimed: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+    account_mismatch: 'bg-red-500/10 text-red-300 border-red-500/30',
+  };
+  const historyRows: DataRow[] = history.map((h, i) => ({
+    id: `${h.slot}-${h.releasedAt ? new Date(h.releasedAt).getTime() : i}`,
+    search: `${h.holder} ${h.machine ?? ''} ${h.account ?? ''} ${h.taskId ?? ''} ${h.reason}`.toLowerCase(),
+    sort: { released: h.releasedAt ? new Date(h.releasedAt).getTime() : 0, duration: h.durationMs ?? 0 },
+    cells: [
+      <span key="s" className="text-zinc-200 font-mono text-xs">slot {h.slot}</span>,
+      <span key="m" className="text-zinc-400 text-xs">{h.machine ?? '—'}</span>,
+      <span key="a" className="text-zinc-300 text-xs">{h.account ?? '—'}</span>,
+      <span key="t" className="text-zinc-400 text-xs font-mono">{h.taskId ?? '—'}</span>,
+      <span key="d" className="text-zinc-400 text-xs">{formatDuration(h.acquiredAt, h.releasedAt)}</span>,
+      <span key="r" className="text-xs">
+        <span className={`px-2 py-0.5 rounded-full border ${REASON_STYLE[h.reason] ?? 'bg-zinc-500/10 text-zinc-300 border-zinc-500/30'}`}>
+          {h.reason}
+        </span>
+      </span>,
+      <span key="e" className="text-zinc-500 text-xs">{timeAgo(h.releasedAt)}</span>,
+    ],
+  }));
+
+  return (
+    <div className="space-y-4">
+      <DataTable
+        title="Active slots"
+        meta={`${active.length} slot(s) currently held`}
+        columns={[
+          { label: 'Slot', mobile: 'badge' },
+          { label: 'Holder', mobile: 'title' },
+          { label: 'Machine', mobile: 'meta' },
+          { label: 'Account', mobile: 'meta' },
+          { label: 'Task', mobile: 'detail' },
+          { label: 'Held for', mobile: 'meta' },
+          { label: 'Lease', mobile: 'meta' },
+        ]}
+        rows={activeRows}
+        defaultSort="slot"
+        searchPlaceholder="Search holder, machine, account, task…"
+        emptyText="No runner-lease slots currently held — the fleet is idle."
+      />
+      <DataTable
+        title="Runs log"
+        meta={`${history.length} completed run(s) · which account/slot ran which task and when`}
+        columns={[
+          { label: 'Slot', mobile: 'badge' },
+          { label: 'Machine', mobile: 'meta' },
+          { label: 'Account', mobile: 'title' },
+          { label: 'Task', mobile: 'detail' },
+          { label: 'Duration', sortKey: 'duration', mobile: 'meta' },
+          { label: 'Reason', mobile: 'badge' },
+          { label: 'Released', sortKey: 'released', mobile: 'meta' },
+        ]}
+        rows={historyRows}
+        defaultSort="released"
+        defaultDesc
+        searchPlaceholder="Search holder, machine, account, task, reason…"
+        emptyText="No completed runs yet — history is written when a runner releases its lease."
+      />
+    </div>
+  );
+}
+
 async function PlansTab({ tenantId, repo }: { tenantId: string; repo?: string }) {
   const plan = await PlanDay.find({ ...tenantFilter(tenantId), ...repoFilter(repo) }).sort({ repo: 1, day: 1 }).lean() as unknown as PlanDoc[];
   const byRepo: Record<string, PlanDoc[]> = {};
@@ -459,6 +609,8 @@ async function OrchestrationTab({ routing, repo }: { routing: RoutingConfig | nu
                 <th className="px-4 py-2.5 font-medium">Task</th>
                 <th className="px-4 py-2.5 font-medium">Repo</th>
                 <th className="px-4 py-2.5 font-medium">Model</th>
+                <th className="px-4 py-2.5 font-medium" title="The router's actual per-task pick (route_task_model), stamped at claim time — vs. the pre-claim planned Model column.">Routed</th>
+                <th className="px-4 py-2.5 font-medium" title="The work-type routing decision (WORK_TYPE_TIER_MAP, plan/MULTI_PROVIDER_ORCHESTRATION.md §3) this task was routed under — declared work-type, primary tier, and documented first-hop failover.">Work-type</th>
                 <th className="px-4 py-2.5 font-medium">Priority</th>
                 <th className="px-4 py-2.5 font-medium">Started</th>
                 <th className="px-4 py-2.5 font-medium">Duration</th>
@@ -476,6 +628,12 @@ async function OrchestrationTab({ routing, repo }: { routing: RoutingConfig | nu
                     <td data-label="Task" className="m-title px-4 py-2.5 text-zinc-300 max-w-sm truncate">{t.title}</td>
                     <td data-label="Repo" className="px-4 py-2.5 text-zinc-500 font-mono text-xs">{t.repo}</td>
                     <td data-label="Model" className="px-4 py-2.5"><ModelBadge model={m.model} /> <span className="text-zinc-600 text-xs ml-1">{m.via}</span></td>
+                    <td data-label="Routed" className="px-4 py-2.5">
+                      <RoutedBadge routedProfile={t.routedProfile} routedModel={t.routedModel} routedComplexity={t.routedComplexity} />
+                    </td>
+                    <td data-label="Work-type" className="px-4 py-2.5">
+                      <WorkTypeBadge workType={t.workType} workTypeTier={t.workTypeTier} workTypeFailoverHop={t.workTypeFailoverHop} />
+                    </td>
                     <td data-label="Priority" className="px-4 py-2.5"><PriorityBadge priority={t.priority} /></td>
                     <td data-label="Started" className="m-hide px-4 py-2.5 text-zinc-600 text-xs">{timeAgo(t.startedAt)}</td>
                     <td data-label="Duration" className="px-4 py-2.5 text-zinc-600 text-xs font-mono">{formatDuration(t.startedAt)}</td>
@@ -497,6 +655,9 @@ async function OrchestrationTab({ routing, repo }: { routing: RoutingConfig | nu
                 <th className="px-4 py-2.5 font-medium">Repo</th>
                 <th className="px-4 py-2.5 font-medium">Task</th>
                 <th className="px-4 py-2.5 font-medium">Agent</th>
+                <th className="px-4 py-2.5 font-medium">Routed</th>
+                <th className="px-4 py-2.5 font-medium" title="Which backend actually executed this run — Claude, or the non-Claude agentic FALLBACK lane (DeepSeek/Kimi).">Lane</th>
+                <th className="px-4 py-2.5 font-medium" title="The work-type routing decision (WORK_TYPE_TIER_MAP, plan/MULTI_PROVIDER_ORCHESTRATION.md §3) this task was routed under — declared work-type, primary tier, and documented first-hop failover.">Work-type</th>
                 <th className="px-4 py-2.5 font-medium">Duration</th>
                 <th className="px-4 py-2.5 font-medium">Status</th>
                 <th className="px-4 py-2.5 font-medium">Completed</th>
@@ -510,6 +671,15 @@ async function OrchestrationTab({ routing, repo }: { routing: RoutingConfig | nu
                     {t.prUrl ? <a href={t.prUrl} target="_blank" rel="noreferrer" className="hover:text-emerald-400 underline decoration-zinc-700">{t.title}</a> : t.title}
                   </td>
                   <td data-label="Agent" className="m-hide px-4 py-2.5 text-zinc-500 text-xs">{t.assignedAgent ?? '—'}</td>
+                  <td data-label="Routed" className="px-4 py-2.5">
+                    <RoutedBadge routedProfile={t.routedProfile} routedModel={t.routedModel} routedComplexity={t.routedComplexity} />
+                  </td>
+                  <td data-label="Lane" className="px-4 py-2.5">
+                    <LaneBadge lane={t.executionLane} provider={t.executionProvider} />
+                  </td>
+                  <td data-label="Work-type" className="px-4 py-2.5">
+                    <WorkTypeBadge workType={t.workType} workTypeTier={t.workTypeTier} workTypeFailoverHop={t.workTypeFailoverHop} />
+                  </td>
                   <td data-label="Duration" className="m-hide px-4 py-2.5 text-zinc-600 text-xs font-mono">{formatDuration(t.startedAt, t.completedAt)}</td>
                   <td data-label="Status" className="px-4 py-2.5"><TaskStatusBadge status={t.status} /></td>
                   <td data-label="Completed" className="px-4 py-2.5 text-zinc-600 text-xs">{timeAgo(t.completedAt)}</td>
@@ -525,8 +695,8 @@ async function OrchestrationTab({ routing, repo }: { routing: RoutingConfig | nu
 
 /* ── Page ───────────────────────────────────────────────────── */
 
-export default async function WorkPage({ searchParams }: { searchParams: Promise<{ tab?: string; repo?: string }> }) {
-  const { tab: requested, repo: requestedRepo } = await searchParams;
+export default async function WorkPage({ searchParams }: { searchParams: Promise<{ tab?: string; repo?: string; lane?: string }> }) {
+  const { tab: requested, repo: requestedRepo, lane: requestedLane } = await searchParams;
 
   await connectDB();
   const tenantId = await getActiveTenant();
@@ -546,17 +716,32 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
   const repo = repoChips.some((r) => r.repo === requestedRepo) ? requestedRepo : undefined;
   const rf = repoFilter(repo);
 
-  const [pendingCount, reviewCount, workingCount, scheduleCount, planCount, deadLetterCount, routing, blockers] = await Promise.all([
+  // Lane dimension (task-47098709): only claude|agentic-fallback are valid stamps
+  // (task-b1776200) — an unrecognized value is dropped rather than blanking the board.
+  const lane = requestedLane === 'claude' || requestedLane === 'agentic-fallback' ? requestedLane : undefined;
+
+  const [pendingCount, reviewCount, workingCount, scheduleCount, planCount, deadLetterCount, leaseCount, routing, blockers, laneCountRows] = await Promise.all([
     Task.countDocuments({ ...tf, ...rf, status: 'pending' }) as Promise<number>,
     Task.countDocuments({ ...tf, ...rf, status: 'review' }) as Promise<number>,
     Task.countDocuments({ ...tf, ...rf, status: 'working' }) as Promise<number>,
     Schedule.countDocuments({ ...tf, ...rf, enabled: true }) as Promise<number>,
     PlanDay.countDocuments({ ...tf, ...rf }) as Promise<number>,
     Task.countDocuments({ ...tf, ...rf, status: 'dead_letter' }) as Promise<number>,
+    RunnerLease.countDocuments({ ...tf }) as Promise<number>,
     fetchRoutingConfig(),
     readUserBlockers(),
+    // Lane counts for the Needs Review chips — among review-status tasks the
+    // runner actually stamped a lane on (executionLane exists).
+    Task.aggregate([
+      { $match: { ...tf, ...rf, status: 'review', executionLane: { $exists: true } } },
+      { $group: { _id: '$executionLane', count: { $sum: 1 } } },
+    ]) as Promise<Array<{ _id: string; count: number }>>,
   ]);
   const openBlockerCount = blockers.filter((b) => b.status === 'open').length;
+  const laneChips: LaneChip[] = laneCountRows
+    .filter((r): r is { _id: 'claude' | 'agentic-fallback'; count: number } => r._id === 'claude' || r._id === 'agentic-fallback')
+    .map((r) => ({ lane: r._id, count: r.count }))
+    .sort((a, b) => (a.lane === 'claude' ? -1 : 1));
 
   const tabs = [
     { id: 'queue', label: 'Up Next', count: pendingCount },
@@ -565,6 +750,7 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
     { id: 'plans', label: '10-Day Plans', count: planCount },
     { id: 'orchestration', label: 'Orchestration', count: workingCount },
     { id: 'deadletter', label: 'Dead Letter', count: deadLetterCount },
+    { id: 'leases', label: 'Runner Leases', count: leaseCount },
     { id: 'blockers', label: 'Blockers', count: openBlockerCount },
   ];
   const tab = resolveTab(tabs, requested);
@@ -587,14 +773,16 @@ export default async function WorkPage({ searchParams }: { searchParams: Promise
       <TabBar base="/work" tabs={tabs} active={tab} params={{ repo }} />
 
       <RepoChips repos={repoChips} active={repo} tab={tab} />
+      {tab === 'review' && <LaneChips lanes={laneChips} active={lane} tab={tab} repo={repo} />}
 
       <div className="mt-6">
         {tab === 'queue' && <QueueTab routing={routing} repo={repo} />}
-        {tab === 'review' && <ReviewTab repo={repo} />}
+        {tab === 'review' && <ReviewTab repo={repo} lane={lane} />}
         {tab === 'schedules' && <SchedulesTab tenantId={tenantId} repo={repo} />}
         {tab === 'plans' && <PlansTab tenantId={tenantId} repo={repo} />}
         {tab === 'orchestration' && <OrchestrationTab routing={routing} repo={repo} />}
         {tab === 'deadletter' && <DeadLetterTab repo={repo} />}
+        {tab === 'leases' && <LeasesTab tenantId={tenantId} />}
         {tab === 'blockers' && <BlockersTab />}
       </div>
     </div>

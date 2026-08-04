@@ -2,15 +2,15 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { getConfig } from '../shared/config.js';
 import { searchVectors, storeVector, getVectorCount, recallSession } from '../memory/vector-store.js';
-import { indexMasterRepo, indexAllRepos } from '../memory/indexer.js';
+import { indexMasterRepo, indexAllRepos, indexBrainNamespace } from '../memory/indexer.js';
 import { createChildLogger } from '../shared/logger.js';
 import { recordUsage, summarizeUsage } from '../shared/usage-store.js';
 import { randomUUID } from 'node:crypto';
 import { loadAgents, loadSkills } from '../agents/loader.js';
-import { createTask, updateTask, listTasks, nextTask, countTasks, claimTask, failTask } from '../tasks/task-store.js';
+import { createTask, updateTask, listTasks, nextTask, countTasks, claimTask, failTask, reapStaleLeases } from '../tasks/task-store.js';
 import { saveArtifact, listArtifacts } from '../tasks/artifact-store.js';
 import { runInlineCycle, inlineQuotaUsage, INLINE_OPERATIONS } from '../tasks/inline-executor.js';
-import { acquireLease, heartbeatLease, releaseLease, listLeases } from '../tasks/runner-lease-store.js';
+import { acquireLease, heartbeatLease, releaseLease, listLeases, listLeaseHistory } from '../tasks/runner-lease-store.js';
 import { recordHeartbeat, getRunnerLiveness } from '../tasks/runner-heartbeat-store.js';
 import { enterFleetMaintenance, exitFleetMaintenance, getFleetMaintenanceStatus } from '../tasks/fleet-maintenance-store.js';
 import { listRepoPaths, listReposUnified, getRepoStatus, prioritizeRepos, scanDirectory } from '../repos/repo-registry.js';
@@ -20,6 +20,7 @@ import {
   getNeighbors, shortestPath, resolveGraphNode, ALL_EDGE_TYPES,
 } from '../repos/code-graph.js';
 import type { PrTriageInput, EdgeType } from '../repos/code-graph.js';
+import { getBanditStats } from '../repos/bandit-stats.js';
 import { upsertRepoCard, listRepoCards } from '../repos/app-card-store.js';
 import type { RepoCardLevel } from '../repos/app-card-store.js';
 import { createNewApp } from '../repos/new-app.js';
@@ -56,21 +57,29 @@ import { seedDefaultSchedules } from '../scheduler/seed-schedules.js';
 import { runMorningSweep } from '../scheduler/morning-sweep.js';
 import { runEveningSweep } from '../scheduler/evening-sweep.js';
 import { runRetentionPurge } from '../core/data-retention.js';
+import { runMrrSnapshotSweep } from '../analytics/mrr-snapshot-job.js';
+import { runErasureSweep } from '../core/account-erasure.js';
 import { runDispatchCycle } from '../scheduler/dispatch-worker.js';
 import { getBudgetStatus, getBudgetBreakdown } from '../llm/budget-stats.js';
+import { getBudgetCapSuggestions } from '../llm/budget-advisor.js';
 import { route as routeLlm, getRoutingConfig } from '../llm/router.js';
-import { isConnected } from '../shared/db.js';
+// Work-type routing enum (13 rows of plan/MULTI_PROVIDER_ORCHESTRATION.md §3) is
+// inlined literally into the inputSchema enum fields below — scripts/build_docs.mjs
+// evaluates TOOL_DEFINITIONS in an empty VM, so tool defs must be pure literals
+// (no const references). Keep in sync with router.ts's WorkType union.
+import { isConnected, getDbFailoverState } from '../shared/db.js';
 import type { ArtifactKind, IVector, ScheduleKind, ScheduleStatus, TaskPriority, TaskSource, TaskStatus } from '../shared/db.js';
 import { sendNotification, getNotificationHistory } from '../notifications/notifier.js';
 import { runHealthCheck, getLatestHealthCheckResult, getHealthAlertStatus } from '../monitoring/health-alerter.js';
 import { recordContextServed, getContinuityStats, getUserSavings, estimateLegacyBootTokens } from '../monitoring/continuity-metrics.js';
-import { recordActivation, getActivationFunnel, getActivationRollup, getSelfServeConversion } from '../monitoring/activation-funnel.js';
+import { recordActivation, getActivationFunnel, getActivationRollup, getSelfServeConversion, getHostedBrainConversion } from '../monitoring/activation-funnel.js';
 import { recordToolLatency, getPerfStats } from '../monitoring/perf-metrics.js';
 import { getSloAlertStatus, evaluateBreaches } from '../monitoring/slo-alerter.js';
 import { recordSpan, getSpans, getTraceIds, type SpanService, type SpanStatus } from '../tracing/tracer.js';
 import { recordLog, getLogs, type LogService, type LogLevel } from '../monitoring/log-store.js';
 import { performance } from 'node:perf_hooks';
 import { type ToolContext, SYSTEM_CONTEXT, AuthError, stripTenantFromArgs } from '../core/tenant-context.js';
+import { assertToolCapability, assertToolVisibility } from '../core/rbac.js';
 import { verdictFor, tenantRepos, EntitlementError } from '../core/entitlements.js';
 import { auditActorFromCtx } from '../core/audit-log.js';
 import {
@@ -78,7 +87,7 @@ import {
   ideaBranch, isBrainRepo, resolveBrainDir, sessionMerge, sessionStart, writeAtom,
 } from '../core/brain.js';
 import type { AtomKind, BrainSection } from '../core/brain.js';
-import { brainDelta, brainEnvFor, brainManifest, distillAfterMerge, reconcileMain } from '../core/distill.js';
+import { brainDelta, brainEnvFor, brainLookup, brainManifest, distillAfterMerge, reconcileMain } from '../core/distill.js';
 import { computeBrainHealth } from '../core/brain-health.js';
 import { brainEntity, brainTimeline } from '../core/entity.js';
 import type { EntityKind } from '../core/entity.js';
@@ -89,6 +98,7 @@ import {
   grantNamespaceAccess, listNamespaceGrants, readSharedNamespace, revokeNamespaceAccess, writeSharedNamespaceAtom,
 } from '../core/namespace-share.js';
 import type { NamespaceGrantLevel } from '../core/namespace-share.js';
+import { publishSubmission } from '../marketplace/publish.js';
 
 const log = createChildLogger({ module: 'mcp-tools' });
 
@@ -114,7 +124,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       properties: {
         query: { type: 'string', description: 'Natural language search query' },
         repo: { type: 'string', description: 'Filter to a specific repo name (optional)' },
-        source: { type: 'string', enum: ['state', 'handoff', 'commit', 'pr', 'pattern', 'bug', 'code', 'feature', 'archive'], description: 'Filter by source type (optional)' },
+        source: { type: 'string', enum: ['state', 'handoff', 'commit', 'pr', 'pattern', 'bug', 'code', 'feature', 'archive', 'brain'], description: 'Filter by source type (optional)' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags (optional)' },
         limit: { type: 'number', description: 'Max results (default 10)' },
       },
@@ -175,7 +185,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'memory_reindex',
-    description: 'Re-embed and upsert vectors for STATE.md, AI_AGENT_HANDOFF.md, and state/archive/*.md. Call after wrap-up to keep the RAG corpus current. Idempotent via content-hash dedup. Master repo only by default; pass scope=all to also index every managed repo.',
+    description: 'Re-embed and upsert vectors for STATE.md, AI_AGENT_HANDOFF.md, state/archive/*.md, and brain session atoms (repos/<ns>/sessions/*.md in the brain store — recent sessions that have not yet rotated into state/archive/). brain_merge already embeds touched namespaces automatically; this is the full-sweep catch-up. Idempotent via content-hash dedup (plus cross-source session-date dedup between brain and archive). Master repo only by default; pass scope=all to also index every managed repo.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -246,7 +256,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'tasks_update',
-    description: 'Update a task by ID: re-point repo, change status, priority, assigned agent, PR URL, notes, telegram message ID. Automatically sets startedAt when moving to working, completedAt when moving to done/blocked.',
+    description: 'Update a task by ID: re-point repo, change status, priority, assigned agent, PR URL, notes, telegram message ID. Automatically sets startedAt when moving to working, completedAt when moving to done/blocked. BULK-BLOCK GUARD: a pending→blocked transition without supersededBy or operatorAuthorized is only allowed up to a per-repo burst threshold (default 5 per 15min, see bulk-block-guard.ts) — past that it is rejected and an alert fires, so a runaway process cannot silently mass-block a repo\'s curated pending queue.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -259,6 +269,17 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         prUrl: { type: 'string' },
         notes: { type: 'string' },
         telegramMessageId: { type: 'number' },
+        routedProfile: { type: 'string', description: 'Router audit trail: the capacity pool the runner actually routed this task to (e.g. claude-tech, claude-fable), stamped at claim time' },
+        routedModel: { type: 'string', description: 'Router audit trail: the model the runner actually routed this task to (e.g. claude-sonnet-5, claude-opus-4-8), stamped at claim time' },
+        routedComplexity: { type: 'string', description: 'Router audit trail: the route_complexity classification (trivial|standard|complex) used for this task, stamped at claim time' },
+        executionLane: { type: 'string', enum: ['claude', 'agentic-fallback'], description: 'Which backend actually executed this run — the normal Claude CLI chain, or the non-Claude agentic FALLBACK lane (DeepSeek/Kimi, scripts/lib/openai_agent.py). Stamped by the runner at review close-off, once settled.' },
+        executionProvider: { type: 'string', description: 'Vendor label for executionLane (e.g. anthropic, deepseek, kimi), stamped alongside executionLane.' },
+        workType: { type: 'string', enum: ['agentic-interactive', 'agentic-autonomous', 'frontend', 'backend', 'docs', 'chat', 'research', 'code-review', 'architecture', 'database', 'security', 'data-embeddings', 'summarize-extract'], description: 'Work-type routing stamp: the declared work-type hint (plan/MULTI_PROVIDER_ORCHESTRATION.md §3) this task was routed under, stamped at claim time.' },
+        workTypeTier: { type: 'string', description: 'Work-type routing stamp: the primary tier WORK_TYPE_TIER_MAP resolved workType to (e.g. standard, budget, premium), stamped at claim time.' },
+        workTypeFailoverHop: { type: 'string', description: 'Work-type routing stamp: the documented first-hop failover for workType — a model (same-provider hop, router.ts escalateTo) or a provider (cross-provider hop, spliced into the chain) — stamped at claim time.' },
+        supersededBy: { type: 'string', description: 'Explicit supersession record: taskId of the task that replaces this one. Authorizes a pending→blocked transition past the bulk-block guard threshold.' },
+        operatorAuthorized: { type: 'boolean', description: 'Explicit human-consented authorization for a bulk block, in lieu of supersededBy. Never set true from an automated caller.' },
+        routeExhausted: { type: 'boolean', description: 'Set true alongside status:pending by route_task_model\'s exhaustion-defer branch (every pool out of headroom for this claimed task). Tracked as a CONSECUTIVE-defer counter (monitoring/task-defer-alerter.ts) that fires its own starvation alert past a threshold; set false (or omit) on a normal working re-stamp to reset the streak.' },
       },
       required: ['taskId'],
     },
@@ -409,7 +430,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'runner_lease_heartbeat',
-    description: 'Extend a held runner-lease slot (resets leaseUntil to now + leaseSeconds). Only succeeds while the slot still belongs to this holder; {ok:false} means the lease was reclaimed after going stale — the runner must stop claiming new work. Optionally stamps the taskId being worked.',
+    description: 'Extend a held runner-lease slot (resets leaseUntil to now + leaseSeconds). Only succeeds while the slot still belongs to this holder; {ok:false} means the lease was reclaimed after going stale — the runner must stop claiming new work. Optionally stamps the taskId being worked. If `account` is given and differs from the account the slot was acquired with, the slot is released instead of extended (profile drift — see runner_lease_acquire\'s account field) and {ok:false} is returned.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -417,6 +438,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         slot: { type: 'number', description: 'Slot index returned by runner_lease_acquire' },
         leaseSeconds: { type: 'number', description: 'New TTL in seconds from now (default 3600)' },
         taskId: { type: 'string', description: 'Task being worked (optional, visibility)' },
+        account: { type: 'string', description: 'Claude account/profile the caller is currently running under (optional). Validated against the account the slot was acquired with (slice 6).' },
       },
       required: ['holder', 'slot'],
     },
@@ -440,6 +462,18 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       type: 'object',
       properties: {
         slots: { type: 'number', description: 'Slot-pool size for the maxSlots readout (default 2)' },
+      },
+    },
+  },
+  {
+    name: 'runner_lease_history',
+    description: 'Runs log (ADR-011 slice 7): newest-first history of completed runner-lease holds — slot, holder, machine, account, taskId, acquiredAt/releasedAt/durationMs, and why it ended (released | reclaimed | account_mismatch). Written when a slot stops being held, since the live RunnerLease doc (runner_lease_list) is deleted on release. Powers the dashboard runner-leases view — replaces grepping raw Mongo to debug a starved queue or a suspiciously slow account.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max rows to return, newest first (default 50, max 500)' },
+        account: { type: 'string', description: 'Filter to one Claude account/profile, e.g. "claude-tech"' },
+        slot: { type: 'number', description: 'Filter to one slot index' },
       },
     },
   },
@@ -504,7 +538,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'repos_upsert',
-    description: 'ADR-021 Phase 2 — self-register (or refresh) one repo in the caller\'s tenant `repos` DB roster. Used by `myai init` (source: myai-init) and `myai scan --register` (source: scan) so a repo\'s fleet-tracking entry lives under the owning tenant instead of the shared managed_repos.txt.',
+    description: 'ADR-021 Phase 2 — self-register (or refresh) one repo in the caller\'s tenant `repos` DB roster. Used by `myai init` (source: myai-init), `myai scan --register` (source: scan), and `myai new-app <idea>`\'s headless agentFlow pipeline (source: headless-new-app) so a repo\'s fleet-tracking entry lives under the owning tenant instead of the shared managed_repos.txt.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -514,7 +548,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         brainNamespace: { type: 'string', description: 'Brain namespace this repo resolves to' },
         stack: { type: 'array', items: { type: 'string' }, description: 'Detected tech stack tags' },
         group: { type: 'string', description: 'Optional dashboard grouping label' },
-        source: { type: 'string', enum: ['seed', 'myai-init', 'scan', 'manual'], description: 'Provenance of this entry (default manual)' },
+        source: { type: 'string', enum: ['seed', 'myai-init', 'scan', 'manual', 'headless-new-app'], description: 'Provenance of this entry (default manual)' },
         enabled: { type: 'boolean', description: 'Whether this repo is active in the roster (default true)' },
       },
       required: ['name', 'path'],
@@ -692,7 +726,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'context_boot',
-    description: 'Fetch the betaC boot bundle ON DEMAND — the tight, token-budgeted OPERATOR BRIEF a blank agent needs to greet the operator and continue the work. Returns `bundle` (rendered markdown) plus `brief` structured as who / state / handoff / next: WHO you are working with, the STATE (active project), the last HANDOFF summary, and what comes NEXT from the active plan. This is the callable form of the auto-boot the gateway injects on MCP `initialize`: use it from the wrap-it tier (a blank ChatGPT/Ollama via a thin shim that cannot read InitializeResult.instructions) or to RE-fetch a fresh bundle mid-session. CHEAP BY DESIGN: with no `query` it returns only the tight brief and runs NO search. Pass a `query` to LAZILY pull deeper context — one capped semantic search whose short snippet pointers are returned under `deeper` — so depth is opt-in and auto-boot fixes token-burn instead of recreating it. For full depth, follow the returned `lazyRecall` tools (handoff_read / recall_session / memory_search).',
+    description: 'Fetch the betaC boot bundle ON DEMAND — the tight, token-budgeted OPERATOR BRIEF a blank agent needs to greet the operator and continue the work. Returns `bundle` (rendered markdown) plus `brief` structured as who / state / handoff / next: WHO you are working with, the STATE (active project), the last HANDOFF summary, and what comes NEXT from the active plan — plus `manifest`, the compact BRAIN B-2 control-plane TOC (stores + fetch tools, namespace count, active-namespace freshness, freshness SHA) so you know WHERE everything lives without scanning state files. The rendered bundle is B-8 prompt-cache ordered: byte-stable content (identity, recall pointers, store TOC) above the `<!-- B-8 cache boundary -->` marker, volatile content (brain SHA, handoff, next) below — so wakeup-to-wakeup prompt-cache prefix hits survive brain churn. This is the callable form of the auto-boot the gateway injects on MCP `initialize`: use it from the wrap-it tier (a blank ChatGPT/Ollama via a thin shim that cannot read InitializeResult.instructions) or to RE-fetch a fresh bundle mid-session. CHEAP BY DESIGN: with no `query` it returns only the tight brief and runs NO search. Pass a `query` to LAZILY pull deeper context — one capped semantic search whose short snippet pointers are returned under `deeper` — so depth is opt-in and auto-boot fixes token-burn instead of recreating it. For full depth, follow the returned `lazyRecall` tools (handoff_read / recall_session / memory_search).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -726,13 +760,14 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'activation_funnel',
-    description: 'The activation funnel — privacy-respecting product analytics with NO third-party tracker. Returns the tenant\'s own onboarding journey (steps signup → init → first_brain_boot → first_brain_delta → wrapup_merge, which are reached, when, and activation %). Pass `fleet:true` for the operator/product rollup instead: distinct tenants at each step, per-step conversion, and the headline `activationRate` (activated ÷ signed-up). Pass `selfServe:true` for the plain sellable-product view instead: signup → init → first task shipped → retained (2nd task shipped), with the headline `conversionRate` (retained ÷ signed-up) — the self-serve conversion number, distinct from the continuity-aha activation rate. Milestones are stamped first-touch from existing gateway chokepoints (ADR-014 usage-metering write path) and surfaced on the dashboard /analytics page.',
+    description: 'The activation funnel — privacy-respecting product analytics with NO third-party tracker. Returns the tenant\'s own onboarding journey (steps signup → init → first_brain_boot → first_brain_delta → wrapup_merge, which are reached, when, and activation %). Pass `fleet:true` for the operator/product rollup instead: distinct tenants at each step, per-step conversion, and the headline `activationRate` (activated ÷ signed-up). Pass `selfServe:true` for the plain sellable-product view instead: signup → init → first task shipped → retained (2nd task shipped), with the headline `conversionRate` (retained ÷ signed-up) — the self-serve conversion number, distinct from the continuity-aha activation rate. Pass `hostedBrain:true` for the cross-machine-sync conversion KPI (ADR-023 Slice P3): signups vs. distinct tenants who completed their first hosted-brain provision, with the headline `conversionRate`. Milestones are stamped first-touch from existing gateway chokepoints (ADR-014 usage-metering write path) and surfaced on the dashboard /analytics page.',
     inputSchema: {
       type: 'object',
       properties: {
         fleet: { type: 'boolean', description: 'Return the cross-tenant fleet rollup + activation rate instead of this tenant\'s own journey (operator view; default false)' },
         sinceDays: { type: 'number', description: 'For the fleet rollup only — bound to tenants whose milestone occurred in the last N days (optional)' },
         selfServe: { type: 'boolean', description: 'Return the self-serve conversion funnel instead (signup → init → first task shipped → retained); takes precedence over `fleet` (default false)' },
+        hostedBrain: { type: 'boolean', description: 'Return the cross-machine-sync (hosted brain) conversion funnel instead (signup → first hosted-brain provision); takes precedence over `fleet`/`selfServe` (default false)' },
       },
     },
   },
@@ -957,6 +992,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         includeMemoryContext: { type: 'boolean', description: 'Prepend memory_context block to the message (default false). Requires repo.' },
         maxTokens: { type: 'number', description: 'Max output tokens (default 4096)' },
         tier: { type: 'string', enum: ['budget', 'standard', 'premium', 'ultra', 'fable', 'kimi'], description: 'Explicit routing tier override (optional). Default: determined by agent name.' },
+        workType: { type: 'string', enum: ['agentic-interactive', 'agentic-autonomous', 'frontend', 'backend', 'docs', 'chat', 'research', 'code-review', 'architecture', 'database', 'security', 'data-embeddings', 'summarize-extract'], description: 'Declared work-type hint (plan/MULTI_PROVIDER_ORCHESTRATION.md §3) — resolves to the doc\'s intended primary engine + first-hop failover. Below an explicit `tier` override, above agent-name routing (optional).' },
       },
       required: ['agent', 'message'],
     },
@@ -971,6 +1007,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         message: { type: 'string', description: 'Task or question to apply the skill to' },
         maxTokens: { type: 'number', description: 'Max output tokens (default 4096)' },
         tier: { type: 'string', enum: ['budget', 'standard', 'premium', 'ultra', 'fable', 'kimi'], description: 'Explicit routing tier override (optional). Default: determined by skill context.' },
+        workType: { type: 'string', enum: ['agentic-interactive', 'agentic-autonomous', 'frontend', 'backend', 'docs', 'chat', 'research', 'code-review', 'architecture', 'database', 'security', 'data-embeddings', 'summarize-extract'], description: 'Declared work-type hint (plan/MULTI_PROVIDER_ORCHESTRATION.md §3) — resolves to the doc\'s intended primary engine + first-hop failover (optional).' },
       },
       required: ['skill', 'message'],
     },
@@ -1076,6 +1113,16 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       },
     },
   },
+  {
+    name: 'budgets_suggestions',
+    description: 'Learns from historical spend (BudgetUsage audit log) and SUGGESTS adjusted monthly/daily/per-channel caps — never auto-applies anything; caps stay env-driven. Each suggestion carries a recommendation (increase/decrease/keep/insufficient_data) and a rationale. Defaults to a 30-day lookback window; needs at least 7 distinct days of spend history to recommend a change. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lookbackDays: { type: 'number', description: 'How many days of history to analyze. Defaults to 30.' },
+      },
+    },
+  },
   // ── USAGE METER (product events, read-only — ADR-014 S2) ──
   {
     name: 'usage_summary',
@@ -1122,6 +1169,30 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       properties: {},
     },
   },
+  {
+    name: 'mrr_snapshot_sweep',
+    description: 'Nightly MRR-snapshot job: persists one {tenantId, mrr, plan, capturedAt} document per non-deleted tenant for today (UTC), closing the gap where dashboard /revenue and /revenue/nrr could only read a single "now" MRR point per tenant. Idempotent — re-running the same UTC day upserts (overwrites) that day\'s row rather than duplicating it. Designed to run as a daily cron schedule (kind=tool, target=mrr_snapshot_sweep) or on demand.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'erasure_sweep',
+    description: 'GDPR/CCPA self-serve erasure sweep: finds every account-erasure request (core/account-erasure.ts) past its grace window (ERASURE_GRACE_DAYS, default 14) and irreversibly purges the tenant\'s scoped data, scrubbing the tenant row to a PII-free tombstone. Each request is handled independently — one tenant\'s purge failure never blocks the rest. Designed to run as a daily cron schedule (kind=tool, target=erasure_sweep) or on demand.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'task_lease_reap',
+    description: 'Task-lease reaper (tasks/task-store.ts reapStaleLeases): finds every task stuck in status=working whose leaseUntil has passed — the runner that claimed it died or was killed mid-task and nothing ever requeued the TASK itself (runner-lease-store\'s TTL index only reaps the SLOT lease, letting a new runner start, while the task document stays frozen). Releases each through the same failTask path a genuine runner failure uses, so retryCount/backoff/maxRetries→dead_letter semantics are identical. Designed to run as a frequent cron schedule (kind=tool, target=task_lease_reap) or on demand.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
   // ── HEALTH / MONITORING ──────────────────────────────
   {
     name: 'health_status',
@@ -1137,7 +1208,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        provider: { type: 'string', description: 'Optional provider name to filter: api, deepseek, moonshot, ollama, bridge, direct' },
+        provider: { type: 'string', description: 'Optional provider name to filter: api, deepseek, moonshot, gemini, ollama, bridge, direct' },
       },
     },
   },
@@ -1147,7 +1218,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        provider: { type: 'string', description: 'Provider to reset: api, deepseek, moonshot, ollama, bridge, direct' },
+        provider: { type: 'string', description: 'Provider to reset: api, deepseek, moonshot, gemini, ollama, bridge, direct' },
       },
       required: ['provider'],
     },
@@ -1158,7 +1229,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        provider: { type: 'string', enum: ['api', 'deepseek', 'moonshot', 'ollama', 'bridge', 'direct'], description: 'Provider to place into maintenance: api, deepseek, moonshot, ollama, bridge, direct' },
+        provider: { type: 'string', enum: ['api', 'deepseek', 'moonshot', 'gemini', 'ollama', 'bridge', 'direct'], description: 'Provider to place into maintenance: api, deepseek, moonshot, gemini, ollama, bridge, direct' },
         reason: { type: 'string', description: 'Optional operator-supplied reason (e.g. "planned DeepSeek maintenance window")' },
         operator: { type: 'string', description: 'Optional operator identity, for audit' },
       },
@@ -1171,7 +1242,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        provider: { type: 'string', enum: ['api', 'deepseek', 'moonshot', 'ollama', 'bridge', 'direct'], description: 'Provider to resume: api, deepseek, moonshot, ollama, bridge, direct' },
+        provider: { type: 'string', enum: ['api', 'deepseek', 'moonshot', 'gemini', 'ollama', 'bridge', 'direct'], description: 'Provider to resume: api, deepseek, moonshot, gemini, ollama, bridge, direct' },
       },
       required: ['provider'],
     },
@@ -1205,6 +1276,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       type: 'object',
       properties: {
         tier: { type: 'string', enum: ['budget', 'standard', 'premium', 'ultra', 'fable', 'kimi'], description: 'Explicit routing tier (optional)' },
+        workType: { type: 'string', enum: ['agentic-interactive', 'agentic-autonomous', 'frontend', 'backend', 'docs', 'chat', 'research', 'code-review', 'architecture', 'database', 'security', 'data-embeddings', 'summarize-extract'], description: 'Declared work-type hint (plan/MULTI_PROVIDER_ORCHESTRATION.md §3) — takes priority over complexityLevel/tool/agent/channel, below an explicit tier (optional)' },
         agent: { type: 'string', description: 'Agent name — affects tier selection (optional)' },
         channelType: { type: 'string', description: 'Channel type: telegram, scheduler, mcp, websocket (optional)' },
         tool: { type: 'string', description: 'MCP tool name being executed (optional)' },
@@ -1353,6 +1425,11 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'brain_bandit_stats',
+    description: 'Read-only snapshot of the BRAIN B-7 retrieval_bandit\'s current state (bandit_arms table): per query context, which retrieval config (k, rerank on/off) the bandit currently favors (argmax-exploit pick), the per-arm pull counts and mean reward backing that pick, and total pulls. Shells out to `retrieval_bandit.py --summary` against this repo\'s index DB — never mutates bandit_arms, unlike the offline replay_tune() pass. `available:false` when the repo has never been indexed (no state/.repo_index.sqlite3 yet) or the bandit has no recorded pulls.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'brain_explore',
     description: 'Read-only browsable snapshot of the brain for the dashboard /brain explorer: namespaces with per-kind atom counts, a recent slice of the actual atoms (parsed frontmatter, newest first), open stashes with body previews, session/idea branches, recent commits, and the code↔memory provenance recorded on HEAD. Pure inspection — never checks out, merges, or writes.',
     inputSchema: {
@@ -1369,7 +1446,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'brain_commit',
-    description: 'Commit one append-only memory atom to the brain on the current branch. Atoms are immutable — identical re-writes dedup to a no-op; changed content becomes a NEW atom. kind=memory atoms are cross-repo (omit repo); session/handoff atoms live under their repo namespace (auto-created). Pass code_* to stamp code↔memory provenance (BRAIN B5): which code branch/HEAD SHA/commits this atom is about — brain_blame answers both directions from those stamps. kind=session atoms get a non-blocking quality lint (too short, no decision/next-step signal, or near-duplicate of the prior session atom) — the atom still commits; check the returned `lint.warnings` and prompt for enrichment if non-empty. Distinct from any brain health-score composite index.',
+    description: 'Commit one append-only memory atom to the brain on the current branch. Atoms are immutable — identical re-writes dedup to a no-op; changed content becomes a NEW atom. kind=memory atoms are cross-repo (omit repo); session/handoff atoms live under their repo namespace (auto-created). Pass `topic` (ADR-020: a controlled tag — runner-ops, cost-policy, gateway-infra, go-live, continuity, distribution, billing, brain, security, docs — extensible) so the atom is indexed into the GOLD/SILVER topic hierarchy; omitting it defaults to \'general\' and returns a lint warning. Pass `supersedes` (slug or sha8 of a prior atom) to RETIRE that atom from the hot path — the structural fix for ACTION-section bloat (no keep-last-N cap); the superseded atom stays in history (rollup/BRONZE). Pass code_* to stamp code↔memory provenance (BRAIN B5). kind=session atoms also get a non-blocking quality lint — the atom still commits; check `lint.warnings` and prompt for enrichment if non-empty.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1377,6 +1454,8 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         repo: { type: 'string', description: 'Project namespace (required for session/handoff; omit for cross-repo memory)' },
         slug: { type: 'string', description: 'Short human label — slugified into the filename' },
         content: { type: 'string', description: 'The atom body (markdown)' },
+        topic: { type: 'string', description: 'ADR-020 topic tag (controlled set: runner-ops, cost-policy, gateway-infra, go-live, continuity, distribution, billing, brain, security, docs — extensible). Missing → \'general\' + a lint warning.' },
+        supersedes: { type: 'string', description: 'ADR-020: slug or sha8 of a prior atom this one replaces. Retires it from the GOLD/SILVER hot path (stays in rollup/BRONZE history).' },
         code_repo: { type: 'string', description: 'Provenance: code repo name (defaults to `repo`)' },
         code_branch: { type: 'string', description: 'Provenance: code branch the work happened on (e.g. test)' },
         code_sha: { type: 'string', description: 'Provenance: code HEAD SHA at write time' },
@@ -1468,14 +1547,28 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'brain_delta',
-    description: 'Diff-only catch-up: "what changed in the brain since <sha>?" Pass the last-seen brain main SHA (`since`, remembered from a previous boot/delta) to get ONLY the delta — new atoms (content, capped), commits, and which compiled artifacts changed — a ~300-800 token payload instead of a full re-boot. No/unknown `since` degrades to the blank-agent path: the compiled ~150-token boot brief. Remember the returned `sha` as the next anchor. Scope with `repo` to one namespace (+ cross-repo memory/).',
+    description: 'Diff-only catch-up: "what changed in the brain since <sha>?" Pass the last-seen brain main SHA (`since`, remembered from a previous boot/delta) to get ONLY the delta — new atoms (content, capped), commits, and which compiled artifacts changed — a ~300-800 token payload instead of a full re-boot. No/unknown `since` degrades to the blank-agent path: the compiled ~150-token boot brief. Remember the returned `sha` as the next anchor. Scope with `repo` to one namespace (+ cross-repo memory/). Pass `topic` (the session\'s actual working topic, an ADR-020 `BRAIN_TOPICS` slug) to rank returned atoms GOLD/SILVER/BRONZE-then-topic-match before falling back to recency — so an atom on an unrelated topic can\'t crowd a same-topic atom out of the budget.',
     inputSchema: {
       type: 'object',
       properties: {
         since: { type: 'string', description: 'Last-seen brain main SHA (omit for the blank-agent brief path)' },
         repo: { type: 'string', description: 'Scope to one repo namespace + cross-repo memory/ (optional)' },
         budget: { type: 'number', description: 'Char budget for atom contents (default 3200 ≈ 800 tokens)' },
+        topic: { type: 'string', description: 'Session\'s current working topic (ADR-020 slug) — prioritizes topic-matched atoms in the returned order (optional)' },
       },
+    },
+  },
+  {
+    name: 'brain_lookup',
+    description: 'Traverse the ADR-020 topic index instead of scanning it. Reads GOLD (the ~150-tok brief TOC), matches `topic` (exact) or `query` against the namespace\'s topic branches, and returns ONLY the matched SILVER section(s) — never loads branches that didn\'t match (O(1) root + O(1) branch, not O(n) over the whole namespace). No match → GOLD + the `availableTopics` list so you can pick a branch (never blank). `query` matching: when BRAIN_LOOKUP_EMBED=1, scores the query against topic-branch embeddings first (confidence-floored) so a paraphrase with no literal term overlap can still land the right branch; falls back to plain string/tag matching otherwise or when nothing clears the confidence floor. Use this for "what\'s the current X policy" lookups instead of grepping the archive.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'Repo namespace to look up within (required)' },
+        query: { type: 'string', description: 'Free-text query — tag/term matched against topic names and section text' },
+        topic: { type: 'string', description: 'Exact topic branch to descend into (skips query matching)' },
+      },
+      required: ['repo'],
     },
   },
   {
@@ -1650,6 +1743,18 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     description: 'Rotate this tenant\'s hosted brain access token (ADR-017) — mints a fresh token and invalidates the old one (leak response / reissue). Returns the new remote URL + one-time token; update the brain\'s origin URL to match.',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'marketplace_publish',
+    description: 'Submit a marketplace package for review (ADR-019 Implementation checklist #2). Accepts the same `pack()`-shaped `marketplace.manifest.json` body a future `myai-marketplace` CLI would produce (ADR-028 §2) and re-runs its four submission checks SERVER-SIDE, fail-fast in order — schema validity (incl. manifestHash integrity against the submitted artifact bytes), declaredTools ⊆ the marketplace-exposable tool allowlist (ADR-028 §5), semver/immutability rules (ADR-028 §4 — no re-publish of an already-published version), and an injection-pattern scan mirroring the security-integrity agent\'s scan. Any local CLI validation is advisory-fast only; this is the actual security boundary (ADR-028 §3). On a pass, uploads the artifact bytes to the ADR-029 artifact store\'s `staging/` keyspace under a content-addressed key derived from `manifestHash`, re-verifies the round-tripped bytes hash (ADR-029 §4), and creates or refreshes an `in_review` ListingVersion row with that real `artifactUri`, returning it plus any non-blocking scan warnings. On failure (including a failed artifact upload/integrity re-check), returns a structured rejection naming which check failed and why — never throws for an ordinary validation failure.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        manifest: { type: 'object', description: 'The pack()-shaped marketplace.manifest.json body (ADR-028 §2), schema: architecture/schemas/marketplace-package-manifest.schema.json' },
+        artifactContent: { type: 'string', description: 'Raw content of the packaged artifact (agent.md, or the concatenated skill/ tree) — used for the manifestHash integrity check and the injection-pattern scan; never persisted as artifact bytes.' },
+      },
+      required: ['manifest', 'artifactContent'],
+    },
+  },
 ];
 
 // ── Tool Implementations ──────────────────────────────────
@@ -1668,6 +1773,17 @@ export async function executeTool(
     throw new AuthError('no tenant in context', 401, 'NO_TENANT_CONTEXT');
   }
   args = stripTenantFromArgs(args);
+
+  // RBAC v1 slice 2 (ADR-013 §3): the tool→capability inventory applied at this
+  // single dispatch chokepoint — MCP parity with the REST enforceRbac gate.
+  // Loopback/local-trust and system/operator principals pass through unchanged;
+  // everyone else gets shadow-log / 403 semantics identical to REST.
+  assertToolCapability(ctx, name);
+
+  // Per-org MCP tool VISIBILITY (Wave-2 #15): orthogonal to the capability
+  // check above — hides operator-only / org-denylisted tools regardless of
+  // the caller's role. See core/rbac.ts `isToolVisibleForTenant`.
+  assertToolVisibility(ctx, name);
 
   // The tenant every scoped store call is filtered by — server-derived, never
   // from args. Handlers that touch scoped collections take it as a leading param.
@@ -1720,6 +1836,7 @@ async function dispatchTool(
     case 'runner_lease_heartbeat': return handleRunnerLeaseHeartbeat(tenantId, args);
     case 'runner_lease_release': return handleRunnerLeaseRelease(tenantId, args);
     case 'runner_lease_list': return handleRunnerLeaseList(tenantId, args);
+    case 'runner_lease_history': return handleRunnerLeaseHistory(tenantId, args);
     case 'runner_heartbeat': return handleRunnerHeartbeat(tenantId, args);
     case 'runner_liveness': return handleRunnerLiveness(tenantId, args);
     case 'repos_list': return handleReposList(tenantId);
@@ -1771,8 +1888,12 @@ async function dispatchTool(
     case 'morning_sweep': return handleMorningSweep(args);
     case 'evening_sweep': return handleEveningSweep(args);
     case 'data_retention_purge': return handleDataRetentionPurge();
+    case 'mrr_snapshot_sweep': return handleMrrSnapshotSweep();
+    case 'erasure_sweep': return handleErasureSweep();
+    case 'task_lease_reap': return handleTaskLeaseReap();
     case 'budgets_status': return handleBudgetsStatus(tenantId);
     case 'budgets_breakdown': return handleBudgetsBreakdown(tenantId, args);
+    case 'budgets_suggestions': return handleBudgetsSuggestions(tenantId, args);
     case 'usage_summary': return handleUsageSummary(tenantId, args);
     case 'health_status': return handleHealthStatus(tenantId);
     case 'provider_health': return handleProviderHealth(args);
@@ -1796,6 +1917,7 @@ async function dispatchTool(
     case 'brain_status': return handleBrainStatus(tenantId);
     case 'brain_health': return handleBrainHealth(tenantId, args);
     case 'brain_manifest': return handleBrainManifest(tenantId);
+    case 'brain_bandit_stats': return getBanditStats();
     case 'brain_explore': return handleBrainExplore(tenantId, args);
     case 'brain_commit': return handleBrainCommit(tenantId, args);
     case 'brain_stash': return handleBrainStash(tenantId, args);
@@ -1806,6 +1928,7 @@ async function dispatchTool(
     case 'brain_log': return handleBrainLog(tenantId, args);
     case 'brain_diff': return handleBrainDiff(tenantId, args);
     case 'brain_delta': return handleBrainDelta(tenantId, args);
+    case 'brain_lookup': return handleBrainLookup(tenantId, args);
     case 'brain_blame': return handleBrainBlame(tenantId, args);
     case 'brain_entity': return handleBrainEntity(tenantId, args);
     case 'brain_timeline': return handleBrainTimeline(tenantId, args);
@@ -1820,6 +1943,7 @@ async function dispatchTool(
     case 'brain_host_provision': return handleBrainHostProvision(ctx);
     case 'brain_host_status': return handleBrainHostStatus(ctx);
     case 'brain_host_rotate': return handleBrainHostRotate(ctx);
+    case 'marketplace_publish': return handleMarketplacePublish(tenantId, ctx, args);
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -1925,7 +2049,7 @@ async function handleMemoryContext(tenantId: string, args: Record<string, unknow
 
 async function handleMemoryStats(tenantId: string, args: Record<string, unknown>) {
   const repo = args.repo as string | undefined;
-  const sources: IVector['source'][] = ['state', 'handoff', 'commit', 'pr', 'pattern', 'bug', 'code', 'feature', 'archive'];
+  const sources: IVector['source'][] = ['state', 'handoff', 'commit', 'pr', 'pattern', 'bug', 'code', 'feature', 'archive', 'brain'];
 
   const stats: Record<string, number> = {};
   let total = 0;
@@ -2110,6 +2234,17 @@ async function handleTasksUpdate(tenantId: string, args: Record<string, unknown>
     prUrl: args.prUrl as string | undefined,
     notes: args.notes as string | undefined,
     telegramMessageId: args.telegramMessageId as number | undefined,
+    routedProfile: args.routedProfile as string | undefined,
+    routedModel: args.routedModel as string | undefined,
+    routedComplexity: args.routedComplexity as string | undefined,
+    executionLane: args.executionLane as 'claude' | 'agentic-fallback' | undefined,
+    executionProvider: args.executionProvider as string | undefined,
+    workType: args.workType as string | undefined,
+    workTypeTier: args.workTypeTier as string | undefined,
+    workTypeFailoverHop: args.workTypeFailoverHop as string | undefined,
+    supersededBy: args.supersededBy as string | undefined,
+    operatorAuthorized: args.operatorAuthorized as boolean | undefined,
+    routeExhausted: args.routeExhausted as boolean | undefined,
   });
   if (!task) return { error: `Task not found: ${args.taskId}` };
   return task;
@@ -2277,6 +2412,7 @@ async function handleRunnerLeaseHeartbeat(tenantId: string, args: Record<string,
     slot: args.slot,
     leaseSeconds: args.leaseSeconds as number | undefined,
     taskId: args.taskId as string | undefined,
+    account: args.account as string | undefined,
   });
 }
 
@@ -2289,6 +2425,14 @@ async function handleRunnerLeaseRelease(tenantId: string, args: Record<string, u
 
 async function handleRunnerLeaseList(tenantId: string, args: Record<string, unknown>) {
   return listLeases(tenantId, args.slots as number | undefined);
+}
+
+async function handleRunnerLeaseHistory(tenantId: string, args: Record<string, unknown>) {
+  return { history: await listLeaseHistory(tenantId, {
+    limit: args.limit as number | undefined,
+    account: args.account as string | undefined,
+    slot: args.slot as number | undefined,
+  }) };
 }
 
 async function handleRunnerHeartbeat(tenantId: string, args: Record<string, unknown>) {
@@ -2446,6 +2590,9 @@ async function handleUserSavings(tenantId: string, args: Record<string, unknown>
 async function handleActivationFunnel(tenantId: string, args: Record<string, unknown>) {
   if (args.selfServe === true) {
     return getSelfServeConversion();
+  }
+  if (args.hostedBrain === true) {
+    return getHostedBrainConversion();
   }
   if (args.fleet === true) {
     const days = typeof args.sinceDays === 'number' && args.sinceDays > 0 ? args.sinceDays : undefined;
@@ -2662,7 +2809,7 @@ async function handleReposUpsert(tenantId: string, args: Record<string, unknown>
     brainNamespace: args.brainNamespace as string | undefined,
     stack: args.stack as string[] | undefined,
     group: args.group as string | undefined,
-    source: args.source as 'seed' | 'myai-init' | 'scan' | 'manual' | undefined,
+    source: args.source as 'seed' | 'myai-init' | 'scan' | 'manual' | 'headless-new-app' | undefined,
     enabled: args.enabled as boolean | undefined,
     lastSeenAt: new Date(),
   });
@@ -2848,6 +2995,7 @@ async function handleAgentsInvoke(tenantId: string, args: Record<string, unknown
     routingContext: {
       agent: agentName,
       ...(args.tier ? { tier: args.tier as any } : {}),
+      ...(args.workType ? { workType: args.workType as any } : {}),
     },
   });
   const elapsedMs = Date.now() - start;
@@ -2899,6 +3047,7 @@ async function handleSkillsInvoke(args: Record<string, unknown>) {
     maxTokens,
     routingContext: {
       tier: (args.tier as any) || undefined,
+      workType: (args.workType as any) || undefined,
     },
   });
   const elapsedMs = Date.now() - start;
@@ -3150,6 +3299,36 @@ async function handleDataRetentionPurge() {
   return runRetentionPurge();
 }
 
+async function handleMrrSnapshotSweep() {
+  return runMrrSnapshotSweep();
+}
+
+async function handleErasureSweep() {
+  const result = await runErasureSweep();
+  // Return .content so the schedule dispatcher's summary extraction (kind=tool)
+  // surfaces a readable last-run line in the dashboard instead of raw JSON.
+  return {
+    content: `Erasure sweep: purged ${result.purged.length}, failed ${result.failed.length}`,
+    purgedCount: result.purged.length,
+    failedCount: result.failed.length,
+    purged: result.purged,
+    failed: result.failed,
+  };
+}
+
+async function handleTaskLeaseReap() {
+  const result = await reapStaleLeases();
+  // Return .content so the schedule dispatcher's summary extraction (kind=tool)
+  // surfaces a readable last-run line in the dashboard instead of raw JSON.
+  return {
+    content: `Task-lease reap: requeued ${result.requeued.length}, dead-lettered ${result.deadLettered.length}`,
+    requeuedCount: result.requeued.length,
+    deadLetteredCount: result.deadLettered.length,
+    requeued: result.requeued,
+    deadLettered: result.deadLettered,
+  };
+}
+
 // ── BUDGET handlers (read-only) ───────────────────────────
 
 async function handleBudgetsStatus(tenantId: string) {
@@ -3174,6 +3353,15 @@ async function handleBudgetsBreakdown(tenantId: string, args: Record<string, unk
   }
 
   return getBudgetBreakdown(tenantId, { from, to });
+}
+
+async function handleBudgetsSuggestions(tenantId: string, args: Record<string, unknown>) {
+  const lookbackRaw = args.lookbackDays;
+  let lookbackDays: number | undefined;
+  if (typeof lookbackRaw === 'number' && Number.isFinite(lookbackRaw) && lookbackRaw > 0) {
+    lookbackDays = lookbackRaw;
+  }
+  return getBudgetCapSuggestions(tenantId, { lookbackDays });
 }
 
 async function handleUsageSummary(tenantId: string, args: Record<string, unknown>) {
@@ -3261,6 +3449,9 @@ async function handleHealthStatus(tenantId: string) {
     },
     mongodb: {
       connected: mongoConnected,
+      // Read-side failover (MYAI_DB_FAILOVER=local) — when active the gateway
+      // serves READS from the local mirror, writes rejected. Dashboard banner.
+      failover: getDbFailoverState(),
     },
     vectors: {
       totalCount: vectorCount,
@@ -3349,6 +3540,7 @@ function handleRoutingInfo(args: Record<string, unknown>) {
   const complexity = complexityRaw !== undefined && !Number.isNaN(complexityRaw) ? complexityRaw : undefined;
   const decision = routeLlm({
     tier: typeof args.tier === 'string' ? (args.tier as any) : undefined,
+    workType: typeof args.workType === 'string' ? (args.workType as any) : undefined,
     agent: args.agent as string | undefined,
     channelType: args.channelType as string | undefined,
     tool: args.tool as string | undefined,
@@ -3700,6 +3892,17 @@ function handleBrainManifest(tenantId: string) {
   return brainManifest(brainEnvFor(tenantId));
 }
 
+async function handleBrainLookup(tenantId: string, args: Record<string, unknown>) {
+  return brainLookup(
+    {
+      repo: args.repo as string,
+      query: args.query as string | undefined,
+      topic: args.topic as string | undefined,
+    },
+    brainEnvFor(tenantId),
+  );
+}
+
 function handleBrainExplore(tenantId: string, args: Record<string, unknown>) {
   const sections = Array.isArray(args.sections)
     ? (args.sections.filter((s): s is BrainSection => s === 'atoms' || s === 'stashes' || s === 'provenance'))
@@ -3714,6 +3917,8 @@ function handleBrainCommit(tenantId: string, args: Record<string, unknown>) {
     repo: args.repo as string | undefined,
     slug: args.slug as string,
     content: args.content as string,
+    topic: args.topic as string | undefined,
+    supersedes: args.supersedes as string | undefined,
     code: hasProvenance ? {
       repo: args.code_repo as string | undefined,
       branch: args.code_branch as string | undefined,
@@ -3769,6 +3974,20 @@ function handleBrainMerge(tenantId: string, args: Record<string, unknown>) {
   // folded into the brain, closing the loop the product sells. First one stamps
   // the terminal activation milestone. Idempotent, fire-and-forget.
   void recordActivation(tenantId, 'wrapup_merge', { repo: args.repo as string | undefined });
+  // RAG catch-up (task-48b73bd1): embed the session atoms this merge just
+  // brought into main for every namespace it touched, so recall_session /
+  // memory_search can surface this session immediately — instead of waiting
+  // for its STATE.md block to rotate into state/archive/ and the next
+  // memory_reindex. Best-effort and fire-and-forget: a RAG hiccup must never
+  // fail the merge itself (the atoms are already safely committed to brain
+  // main either way).
+  try {
+    const brainDir = resolveBrainDir(env);
+    void Promise.all(distilled.map(d => indexBrainNamespace(tenantId, brainDir, d.namespace)))
+      .catch(err => log.warn({ err, namespaces: distilled.map(d => d.namespace) }, 'brain_merge: RAG reindex of touched namespaces failed — continuing'));
+  } catch (err) {
+    log.warn({ err }, 'brain_merge: RAG reindex kickoff failed — continuing');
+  }
   return {
     merged,
     into: 'main',
@@ -3929,15 +4148,31 @@ function handleBrainNamespaceWrite(tenantId: string, args: Record<string, unknow
 // and any non-entitled plan.
 
 function handleBrainHostProvision(ctx: ToolContext) {
-  return provisionHostedBrain(ctx.tenantId, ctx.plan ?? 'free');
+  const result = provisionHostedBrain(ctx.tenantId, ctx.plan ?? 'free');
+  // Activation funnel (ADR-023 Slice P3): the tenant's FIRST successful
+  // hosted-brain provision is the concrete, countable "cross-machine sync"
+  // conversion event — distinct from generic signup. `created` is already
+  // exact-once (false on re-adopt, see provisionHostedBrain), so this fires
+  // once per genuine upgrade. Fire-and-forget, same posture as every other
+  // activation chokepoint (context_boot, brain_delta, wrap-up merge).
+  if (result.created) {
+    void recordActivation(ctx.tenantId, 'first_hosted_brain', { source: 'gateway' });
+  }
+  return result;
 }
 
 function handleBrainHostStatus(ctx: ToolContext) {
-  return hostedBrainInfo(ctx.tenantId);
+  const info = hostedBrainInfo(ctx.tenantId);
+  // Surface the tenant's current plan even when not yet provisioned — the
+  // dashboard onboarding upsell (ADR-023 Slice P2) needs it to gate correctly
+  // (only un-entitled tenants should see the "upgrade to unlock" nudge; an
+  // already-entitled tenant who simply hasn't provisioned yet is a different
+  // moment, not this one).
+  return info.provisioned ? info : { ...info, plan: ctx.plan };
 }
 
 function handleBrainHostRotate(ctx: ToolContext) {
-  return rotateHostedToken(ctx.tenantId);
+  return rotateHostedToken(ctx.tenantId, ctx.plan ?? 'free');
 }
 
 function handleBrainDelta(tenantId: string, args: Record<string, unknown>) {
@@ -3945,6 +4180,7 @@ function handleBrainDelta(tenantId: string, args: Record<string, unknown>) {
     since: args.since as string | undefined,
     repo: args.repo as string | undefined,
     budget: args.budget as number | undefined,
+    topic: args.topic as string | undefined,
   }, brainEnvFor(tenantId));
   // Continuity meter: a delta catch-up replaces a full legacy session-start
   // re-read, same as context_boot. Fire-and-forget.
@@ -3959,4 +4195,17 @@ function handleBrainDelta(tenantId: string, args: Record<string, unknown>) {
   // delta" — a returning session got the cheap diff. Idempotent, fire-and-forget.
   void recordActivation(tenantId, 'first_brain_delta', { repo: args.repo as string | undefined });
   return result;
+}
+
+// ── MARKETPLACE handlers (ADR-019 checklist #2, ADR-028 §3) ────────────────
+
+function handleMarketplacePublish(tenantId: string, ctx: ToolContext, args: Record<string, unknown>) {
+  return publishSubmission(tenantId, {
+    manifest: args.manifest,
+    artifactContent: args.artifactContent as string,
+    // ADR-029 §6's quota gate is skipped for the local single-operator
+    // tenant, same "never gated" posture billing.ts/entitlements.ts already
+    // apply for that context.
+    plan: ctx.local ? undefined : (ctx.plan ?? 'free'),
+  });
 }

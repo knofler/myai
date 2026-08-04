@@ -5,6 +5,7 @@ import { createChildLogger } from '../shared/logger.js';
 import { authenticate } from './auth.js';
 import { tenantQuota } from './tenant-quota.js';
 import { regionGuard } from './region-guard.js';
+import { tenantDbGuard } from '../shared/tenant-db-registry.js';
 import { getConfig } from '../shared/config.js';
 import { captureException } from '../monitoring/sentry.js';
 import { recordLog } from '../monitoring/log-store.js';
@@ -428,6 +429,12 @@ export function applyMiddleware(app: Express): {
   //     resolved; rejects a tenant pinned to a different region than this
   //     gateway serves. Inert unless GATEWAY_REGION + REGION_ENFORCE are set.
   app.use(regionGuard(() => getConfig().region));
+
+  // 7c. Physical DB isolation chokepoint (ADR-030 §2) — after auth so
+  //     req.tenant is resolved, before any store call. Inert no-op for the
+  //     shared-tier majority (every tenant today); only rejects a
+  //     dedicated-tier tenant with no provisioned binding yet.
+  app.use(tenantDbGuard());
 
   // 8. Session revocation guard — after tenant auth, before routes. A no-op
   //    for requests without a myai_token cookie/Bearer JWT (API-key traffic).

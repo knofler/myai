@@ -53,6 +53,7 @@ export const CHAT_MODE_TOOL_WHITELIST: ReadonlyArray<string> = Object.freeze([
   // Budgets — Phase 5b — read-only spend visibility. Mutators excluded by design (caps are env-driven).
   'budgets_status',
   'budgets_breakdown',
+  'budgets_suggestions',
 ]);
 
 /** Anthropic tool-spec format. Mirrors the SDK's expected shape. */

@@ -28,15 +28,20 @@ import { spawnSync } from 'node:child_process';
 import { brainRemoteUrl, brainSyncPull, isBrainRepo, myaiHome, resolveBrainDir, slugify } from './brain.js';
 import type { BrainLogEntry } from './brain.js';
 import { SYSTEM_CONTEXT } from './tenant-context.js';
+import { getEmbeddingProvider } from '../memory/embeddings.js';
+import { cosineSimilarity } from '../memory/vector-index.js';
+import { createChildLogger } from '../shared/logger.js';
+
+const log = createChildLogger({ module: 'brain-lookup' });
 
 // ── char budgets (~4 chars/token) ────────────────────────────────────────────
 
-/** brief.md — ~150 tokens. */
+/** brief.md — ~150 tokens (GOLD: current-status one-liner + topic TOC). */
 const BRIEF_CHARS = 600;
-/** working.md — ~2k tokens. */
+/** GOLD current-status one-liner cap (the "current branch/blockers" line). */
+const BRIEF_ONELINE_CHARS = 280;
+/** working.md — ~2k tokens (SILVER: latest handoff + per-topic sections). */
 const WORKING_CHARS = 8000;
-/** Recent session atoms folded verbatim into working.md. */
-const WORKING_RECENT_SESSIONS = 5;
 /** brainDelta default total budget — ~800 tokens (plan target 300–800). */
 const DELTA_BUDGET_CHARS = 3200;
 /** Per-atom cap inside a delta so one giant atom can't eat the whole budget. */
@@ -94,6 +99,12 @@ interface Atom {
   slug: string;
   /** Body with the frontmatter stripped. */
   body: string;
+  /** ADR-020 topic tag (frontmatter `topic:`; 'general' when absent). */
+  topic: string;
+  /** ADR-020 supersession target — slug/sha8 of the atom this one retires. */
+  supersedes?: string;
+  /** Content sha8 (the filename's trailing -<sha8>.md) — a supersession handle. */
+  sha8: string;
 }
 
 function stripFrontmatter(raw: string): string {
@@ -119,13 +130,72 @@ function readAtoms(dir: string, relDir: string): Atom[] {
     .map((file) => {
       const raw = readFileSync(join(abs, file), 'utf8');
       const slugLine = raw.match(/^slug: (.+)$/m);
+      const topicLine = raw.match(/^topic: (.+)$/m);
+      const supLine = raw.match(/^supersedes: (.+)$/m);
       return {
         file,
         ts: file.slice(0, 16),
         slug: slugLine ? slugLine[1].trim() : file.replace(/\.md$/, ''),
         body: stripFrontmatter(raw),
+        // Atoms written before ADR-020 carry no topic → treated as 'general'.
+        topic: topicLine ? topicLine[1].trim() : 'general',
+        supersedes: supLine ? supLine[1].trim() : undefined,
+        sha8: file.match(/-([0-9a-f]{8})\.md$/)?.[1] ?? '',
       };
     });
+}
+
+// ── ADR-020 supersession + topic grouping (extractive, deterministic) ─────────
+
+/**
+ * Partition atoms into the LIVE hot-path set and the RETIRED set: an atom is
+ * retired when a LATER atom's `supersedes` names its slug or its content sha8.
+ * This is the structural fix for the ACTION-section-bloat failure mode — a
+ * supersession pointer retires the old item automatically, no keep-last-N cap.
+ * Retired atoms remain in history (BRONZE/rollup) — only the hot path shrinks.
+ */
+const SHA8_RE = /^[0-9a-f]{8}$/;
+
+function pruneSuperseded(atoms: Atom[]): { live: Atom[]; retired: Atom[] } {
+  // A `supersedes` ref is the CANONICAL sha8 of the target atom (ADR-020:
+  // "the atom-id/SHA this replaces") — exact, unambiguous, and immune to the
+  // second-resolution timestamp collision that makes filename ordering
+  // unreliable within the same second. A slug ref is a convenience: it retires
+  // any STRICTLY-OLDER (by filename) same-slug atom, best-effort.
+  const shaTargets = new Set<string>();
+  const slugTargets: Array<{ slug: string; byFile: string }> = [];
+  for (const a of atoms) {
+    if (!a.supersedes) continue;
+    if (SHA8_RE.test(a.supersedes)) shaTargets.add(a.supersedes);
+    else slugTargets.push({ slug: slugify(a.supersedes), byFile: a.file });
+  }
+  const isRetired = (b: Atom) =>
+    (b.sha8 !== '' && shaTargets.has(b.sha8)) ||
+    slugTargets.some((s) => s.slug === b.slug && s.byFile > b.file);
+  const live: Atom[] = [];
+  const retired: Atom[] = [];
+  for (const a of atoms) (isRetired(a) ? retired : live).push(a);
+  return { live, retired };
+}
+
+/** Group atoms by topic, preserving newest-first order within each topic. */
+function groupByTopic(atoms: Atom[]): Map<string, Atom[]> {
+  const groups = new Map<string, Atom[]>();
+  for (const a of atoms) {
+    const list = groups.get(a.topic) ?? [];
+    list.push(a);
+    groups.set(a.topic, list);
+  }
+  return groups;
+}
+
+/** Topics ordered by most-recent activity (newest atom first) for stable TOCs. */
+function topicsByRecency(groups: Map<string, Atom[]>): string[] {
+  return [...groups.keys()].sort((a, b) => {
+    const ta = groups.get(a)![0]?.ts ?? '';
+    const tb = groups.get(b)![0]?.ts ?? '';
+    return tb.localeCompare(ta);
+  });
 }
 
 // ── the distiller ────────────────────────────────────────────────────────────
@@ -137,7 +207,13 @@ export interface DistillResult {
   files: string[];
 }
 
-/** Render brief.md — the ~150-token boot brief a blank agent starts from. */
+/**
+ * Render brief.md — GOLD: the ~150-token index a blank agent boots from. A
+ * current-status one-liner (latest handoff/session) followed by a topic TOC:
+ * one line per LIVE topic branch {topic, atom count, newest 1-line summary}.
+ * NEVER a growing prose blob — the topic index is what makes "never blank"
+ * cheap and keeps GOLD hard-capped (ADR-020).
+ */
 function renderBrief(ns: string, handoffs: Atom[], sessions: Atom[]): string {
   const latest = handoffs[0] ?? sessions[0];
   const lines = [
@@ -146,28 +222,59 @@ function renderBrief(ns: string, handoffs: Atom[], sessions: Atom[]): string {
     `_${sessions.length} sessions · ${handoffs.length} handoffs · distilled from atoms on main._`,
     '',
   ];
-  if (latest) {
-    lines.push(tightenText(latest.body, BRIEF_CHARS - lines.join('\n').length - 40));
-  } else {
+  if (!latest) {
     lines.push('_No atoms yet — commit session/handoff atoms and merge to fill this._');
+    return lines.join('\n') + '\n';
   }
-  return lines.join('\n') + '\n';
+  // Current-status one-liner (the ADR "current branch/blockers" line).
+  lines.push(tightenText(latest.body, BRIEF_ONELINE_CHARS));
+
+  // Topic index — one line per LIVE branch, most-recently-active first.
+  const { live } = pruneSuperseded([...handoffs, ...sessions]);
+  const groups = groupByTopic(live);
+  const topicOrder = topicsByRecency(groups);
+  if (topicOrder.length) {
+    lines.push('', '## topics');
+    for (const topic of topicOrder) {
+      const draft = lines.join('\n');
+      if (draft.length >= BRIEF_CHARS) break;
+      const list = groups.get(topic)!;
+      const summary = tightenText(list[0].body, Math.min(90, Math.max(0, BRIEF_CHARS - draft.length)));
+      lines.push(`- ${topic} (${list.length}) — ${summary}`);
+    }
+  }
+  const out = lines.join('\n');
+  return (out.length > BRIEF_CHARS ? out.slice(0, BRIEF_CHARS).trimEnd() + '…' : out).trimEnd() + '\n';
 }
 
-/** Render working.md — latest handoff + recent sessions, capped at ~2k tokens. */
+/**
+ * Render working.md — SILVER: latest handoff, then one section per LIVE topic
+ * branch, each item {ts, slug, summary, supersedes?}. Superseded atoms drop out
+ * of the hot path (they remain in rollup.md/BRONZE) — this is the structural
+ * replacement for the blunt keep-last-N cap. Capped at ~2k tokens.
+ */
 function renderWorking(ns: string, handoffs: Atom[], sessions: Atom[]): string {
   const parts = [`# ${ns} — working context`, ''];
   if (handoffs[0]) {
     parts.push('## Latest handoff', '', handoffs[0].body.trim(), '');
   }
-  const recent = sessions.slice(0, WORKING_RECENT_SESSIONS);
-  if (recent.length) {
-    parts.push('## Recent sessions (newest first)', '');
-    for (const s of recent) {
-      const draft = parts.join('\n');
-      if (draft.length >= WORKING_CHARS) break;
-      parts.push(`### ${s.ts} ${s.slug}`, '', tightenText(s.body, Math.min(1200, WORKING_CHARS - draft.length)), '');
+  const { live, retired } = pruneSuperseded([...handoffs, ...sessions]);
+  const groups = groupByTopic(live);
+  for (const topic of topicsByRecency(groups)) {
+    const draft = parts.join('\n');
+    if (draft.length >= WORKING_CHARS) break;
+    const list = groups.get(topic)!;
+    parts.push(`## ${topic} (${list.length})`, '');
+    for (const a of list) {
+      const d = parts.join('\n');
+      if (d.length >= WORKING_CHARS) break;
+      const sup = a.supersedes ? ` _(supersedes ${a.supersedes})_` : '';
+      parts.push(`- ${a.ts} **${a.slug}**${sup} — ${tightenText(a.body, Math.min(400, Math.max(0, WORKING_CHARS - d.length)))}`);
     }
+    parts.push('');
+  }
+  if (retired.length) {
+    parts.push(`_${retired.length} atom(s) retired via supersession — full history in rollup.md (BRONZE)._`, '');
   }
   if (!handoffs.length && !sessions.length) {
     parts.push('_No atoms yet — commit session/handoff atoms and merge to fill this._', '');
@@ -176,9 +283,12 @@ function renderWorking(ns: string, handoffs: Atom[], sessions: Atom[]): string {
   return (out.length > WORKING_CHARS ? out.slice(0, WORKING_CHARS).trimEnd() + '\n…' : out).trimEnd() + '\n';
 }
 
-/** Render rollup.md — one line per atom, the namespace's full index. */
+/** Render rollup.md — BRONZE: one line per atom (topic-tagged), the namespace's
+ *  full history INCLUDING superseded atoms (the hot path prunes them; BRONZE
+ *  keeps everything). */
 function renderRollup(ns: string, handoffs: Atom[], sessions: Atom[]): string {
-  const line = (kind: string, a: Atom) => `- ${a.ts} ${kind} ${a.slug} — ${tightenText(a.body, 120)}`;
+  const line = (kind: string, a: Atom) =>
+    `- ${a.ts} [${a.topic}] ${kind} ${a.slug} — ${tightenText(a.body, 120)}`;
   return [
     `# ${ns} — rollup`,
     '',
@@ -291,6 +401,174 @@ export function readCompiledWorking(repo: string, env: NodeJS.ProcessEnv = proce
   const content = res.stdout.trim();
   if (!content || content.includes(PLACEHOLDER_MARK)) return undefined;
   return content;
+}
+
+// ── brainLookup — root→branch topic traversal (ADR-020) ──────────────────────
+//
+// The "traverse, not scan" retrieval path: read GOLD (brief.md, ~150 tok),
+// tag-match the query/topic against the topic branches, and descend into ONLY
+// the matching SILVER branch(es) (working.md sections) — never load branches
+// that didn't match. Cost is O(1) root + O(1) matched branch instead of O(n)
+// over the whole namespace. v1 is plain string/tag matching; embedding
+// similarity (reusing the `vectors` collection) is the deferred v2.
+
+export interface BrainLookupResult {
+  repo: string;
+  query?: string;
+  topic?: string;
+  /** GOLD index (brief.md) — the always-loaded root, when compiled. */
+  gold?: string;
+  /** Every topic branch present in SILVER (working.md). */
+  availableTopics: string[];
+  /** Topic branches the query/topic filter selected. */
+  matchedTopics: string[];
+  /** The matched SILVER section text — the descend result (only matched branches). */
+  silver?: string;
+  /** Approx token cost of the payload (~4 chars/token). */
+  tokenEstimate: number;
+  /**
+   * Which path selected `matchedTopics`: 'topic' (exact topic arg), 'embedding'
+   * (ADR-020 v2, BRAIN_LOOKUP_EMBED=1) or 'string' (v1 tag/term match). Absent
+   * when nothing matched.
+   */
+  matchMethod?: 'topic' | 'embedding' | 'string';
+}
+
+/** ADR-020 v2 gate — off by default so a vector-less install is unchanged. */
+function embedLookupEnabled(env: NodeJS.ProcessEnv): boolean {
+  const v = (env.BRAIN_LOOKUP_EMBED || '').trim().toLowerCase();
+  return v === '1' || v === 'true';
+}
+
+/** Minimum cosine similarity for an embedding match to be trusted over falling back to string/tag matching. */
+const EMBED_CONFIDENCE_FLOOR = Number(process.env.BRAIN_LOOKUP_EMBED_FLOOR) || 0.35;
+
+/**
+ * ADR-020 v2 (deferred, now unblocked by the vector-store retrieval fix):
+ * score `query` against each topic branch's SILVER section text via the
+ * embedding provider (the same one `memory_search`/`recall_session` use — no
+ * new infra), and return the topics whose cosine similarity clears
+ * EMBED_CONFIDENCE_FLOOR, best match first. Any failure (no model available,
+ * no network, embedding provider misconfigured) degrades to an empty result
+ * so the caller falls back to plain string/tag matching — this path is a
+ * confidence-gated upgrade, never a hard dependency.
+ */
+async function embeddingMatchTopics(
+  query: string,
+  availableTopics: string[],
+  sections: Map<string, string>,
+): Promise<string[]> {
+  if (availableTopics.length === 0) return [];
+  try {
+    const provider = getEmbeddingProvider();
+    const texts = availableTopics.map((tp) => `${tp}\n${sections.get(tp) || ''}`);
+    const [queryEmbedding, topicEmbeddings] = await Promise.all([
+      provider.embed(query),
+      provider.embedBatch(texts),
+    ]);
+    // LocalEmbeddingProvider degrades to a non-semantic hash fallback when the
+    // real model can't load (no network / first-run download failed) instead
+    // of throwing — its cosine scores are noise, not similarity, so a random
+    // topic could clear EMBED_CONFIDENCE_FLOOR by chance. Trust it exactly as
+    // little as the "no model available" case the ADR-020 v2 contract already
+    // falls back on.
+    if (provider.degraded) {
+      log.warn('brain_lookup embedding provider degraded (hash fallback) — falling back to string/tag match');
+      return [];
+    }
+    return availableTopics
+      .map((tp, i) => ({ tp, score: cosineSimilarity(queryEmbedding, topicEmbeddings[i]) }))
+      .filter((s) => s.score >= EMBED_CONFIDENCE_FLOOR)
+      .sort((a, b) => b.score - a.score)
+      .map((s) => s.tp);
+  } catch (err) {
+    log.warn({ err }, 'brain_lookup embedding match failed — falling back to string/tag match');
+    return [];
+  }
+}
+
+/**
+ * Split a compiled working.md (SILVER) into a {topic → section text} map by its
+ * `## <topic> (n)` headers. The "Latest handoff" preamble is keyed 'handoff'.
+ */
+function parseTopicSections(working: string): Map<string, string> {
+  const sections = new Map<string, string>();
+  let current: string | null = null;
+  let buf: string[] = [];
+  const flush = () => {
+    if (current) sections.set(current, buf.join('\n').trim());
+    buf = [];
+  };
+  for (const line of working.split('\n')) {
+    const m = line.match(/^##\s+(.+?)(?:\s+\(\d+\))?\s*$/);
+    if (m) {
+      flush();
+      const heading = m[1].trim().toLowerCase();
+      current = heading === 'latest handoff' ? 'handoff' : heading;
+      buf.push(line);
+    } else if (current) {
+      buf.push(line);
+    }
+  }
+  flush();
+  return sections;
+}
+
+/**
+ * Root→branch→leaf lookup over the compiled topic index (ADR-020). Reads GOLD,
+ * matches `topic` (exact) or `query` (tag/term match) against the SILVER topic
+ * branches, and returns ONLY the matched branch text. No match → GOLD + the
+ * available-topics list so the caller can pick a branch (never blank).
+ */
+export async function brainLookup(
+  opts: { query?: string; topic?: string; repo: string },
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<BrainLookupResult> {
+  const ns = slugify(opts.repo);
+  const gold = ns ? readCompiledBrief(ns, env) : undefined;
+  const working = ns ? readCompiledWorking(ns, env) : undefined;
+  const sections = working ? parseTopicSections(working) : new Map<string, string>();
+  const availableTopics = [...sections.keys()];
+
+  let matched: string[] = [];
+  let matchMethod: BrainLookupResult['matchMethod'];
+  if (opts.topic && opts.topic.trim()) {
+    const t = slugify(opts.topic);
+    matched = availableTopics.filter((tp) => tp === t);
+    if (matched.length) matchMethod = 'topic';
+  } else if (opts.query && opts.query.trim()) {
+    if (embedLookupEnabled(env)) {
+      matched = await embeddingMatchTopics(opts.query, availableTopics, sections);
+      if (matched.length) matchMethod = 'embedding';
+    }
+    if (matched.length === 0) {
+      const q = opts.query.toLowerCase();
+      const terms = q.split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+      matched = availableTopics.filter(
+        (tp) =>
+          q.includes(tp) ||
+          tp.split('-').some((w) => w.length >= 3 && q.includes(w)) ||
+          terms.some((term) => (sections.get(tp) || '').toLowerCase().includes(term)),
+      );
+      if (matched.length) matchMethod = 'string';
+    }
+  }
+
+  const silver = matched.length ? matched.map((tp) => sections.get(tp)!).join('\n\n') : undefined;
+
+  const result: BrainLookupResult = {
+    repo: ns,
+    query: opts.query,
+    topic: opts.topic,
+    gold,
+    availableTopics,
+    matchedTopics: matched,
+    silver,
+    tokenEstimate: 0,
+    matchMethod,
+  };
+  result.tokenEstimate = Math.ceil(JSON.stringify(result).length / 4);
+  return result;
 }
 
 // ── brainManifest — control-plane boot manifest (BRAIN B2) ───────────────────
@@ -409,7 +687,15 @@ export interface BrainDeltaResult {
   /** Compiled boot brief (only on the full path, ~150 tok). */
   brief?: string;
   commits?: BrainLogEntry[];
-  /** New atoms since `since`, newest last, contents capped to the budget. */
+  /**
+   * New atoms since `since`, contents capped to the budget. Default order is
+   * oldest→newest (chronological). When `opts.topic` is supplied, order
+   * becomes ADR-020 tier-then-topic-match: GOLD (live atoms matching the
+   * requested topic) first, then SILVER (live atoms on any other topic), then
+   * BRONZE (superseded atoms) — recency is the tiebreak within each tier. This
+   * keeps a same-topic atom from being crowded out of the budget by an
+   * unrelated-topic atom that merely sorts earlier/later chronologically.
+   */
   atoms?: Array<{ path: string; content: string }>;
   /** Compiled artifacts that changed since `since` (re-read via brief/working). */
   compiledChanged?: string[];
@@ -432,9 +718,12 @@ export interface BrainDeltaResult {
  * "What changed in the brain since <sha>?" — the ~300–800 token catch-up.
  * Scope with `repo` to one namespace (+ cross-repo memory/). Unknown or absent
  * `since` degrades to the blank-agent path: the ~150-token compiled brief.
+ * Pass `topic` (the session's actual working topic, ADR-020 `BRAIN_TOPICS`
+ * slug) to apply GOLD/SILVER/BRONZE tier-then-topic-match atom ordering
+ * instead of plain chronological order — see `BrainDeltaResult.atoms`.
  */
 export function brainDelta(
-  opts: { since?: string; repo?: string; budget?: number } = {},
+  opts: { since?: string; repo?: string; budget?: number; topic?: string } = {},
   env: NodeJS.ProcessEnv = process.env,
 ): BrainDeltaResult {
   const dir = requireBrain(env);
@@ -502,15 +791,55 @@ export function brainDelta(
     .map((f) => f.path)
     .sort();
 
+  // Read each candidate once — its raw content is needed either way (to build
+  // the returned atom, and, when `topic` is scoped, to rank it first).
+  const rawByPath = new Map(atomPaths.map((path) => [path, git(dir, 'show', `${sha}:${path}`)]));
+
+  // ADR-020 tier-then-topic-match ordering (B-8 follow-on, task-82e5416b): the
+  // prior plain chronological order let an atom on an unrelated topic crowd a
+  // same-topic atom out of the budget purely by sorting earlier/later. When
+  // the caller passes `topic`, rank candidates into three tiers — GOLD (live,
+  // matches the requested topic — the most relevant atoms, mirroring brief.md's
+  // topic-indexed TOC), SILVER (live, any other topic), BRONZE (superseded via
+  // ADR-020 `supersedes`, retired to history-only like rollup.md) — with
+  // recency (the existing sort order) as the tiebreak within each tier. No
+  // `topic` → unchanged chronological order.
+  const requestedTopic = opts.topic?.trim() ? slugify(opts.topic) : undefined;
+  let orderedPaths = atomPaths;
+  if (requestedTopic) {
+    const candidates = atomPaths.map((path) => {
+      const raw = rawByPath.get(path)!;
+      const topicLine = raw.match(/^topic: (.+)$/m);
+      const supLine = raw.match(/^supersedes: (.+)$/m);
+      return {
+        path,
+        topic: topicLine ? topicLine[1].trim() : 'general',
+        sha8: path.split('/').pop()?.match(/-([0-9a-f]{8})\.md$/)?.[1] ?? '',
+        supersedes: supLine ? supLine[1].trim() : undefined,
+      };
+    });
+    const supersededSha8 = new Set(
+      candidates.map((c) => c.supersedes).filter((s): s is string => !!s && SHA8_RE.test(s)),
+    );
+    const tierOf = (c: (typeof candidates)[number]): number => {
+      if (c.sha8 && supersededSha8.has(c.sha8)) return 2; // BRONZE — superseded, history only
+      return c.topic === requestedTopic ? 0 : 1; // GOLD (topic match) / SILVER (other)
+    };
+    orderedPaths = candidates
+      .map((c, i) => ({ c, i })) // stable sort: preserve chronological order within a tier
+      .sort((a, b) => tierOf(a.c) - tierOf(b.c) || a.i - b.i)
+      .map(({ c }) => c.path);
+  }
+
   const atoms: Array<{ path: string; content: string }> = [];
   let spent = 0;
   let truncated = false;
-  for (const path of atomPaths) {
+  for (const path of orderedPaths) {
     if (spent >= budget) {
       truncated = true;
       break;
     }
-    const raw = git(dir, 'show', `${sha}:${path}`);
+    const raw = rawByPath.get(path)!;
     const content = tightenText(stripFrontmatter(raw), Math.min(DELTA_ATOM_CHARS, budget - spent));
     if (content.endsWith('…')) truncated = true;
     atoms.push({ path, content });

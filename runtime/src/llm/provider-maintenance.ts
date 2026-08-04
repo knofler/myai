@@ -74,7 +74,7 @@ export class ProviderMaintenanceError extends Error {
  * (types.ts). A typo'd provider string would otherwise silently create a
  * maintenance entry for a provider nothing ever calls `guardMaintenance` for.
  */
-export const KNOWN_LLM_PROVIDERS = ['api', 'deepseek', 'moonshot', 'ollama', 'bridge', 'direct'] as const;
+export const KNOWN_LLM_PROVIDERS = ['api', 'deepseek', 'moonshot', 'gemini', 'ollama', 'bridge', 'direct'] as const;
 
 export type KnownLlmProvider = (typeof KNOWN_LLM_PROVIDERS)[number];
 

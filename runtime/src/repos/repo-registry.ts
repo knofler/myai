@@ -5,6 +5,7 @@ import { getConfig } from '../shared/config.js';
 import { createChildLogger } from '../shared/logger.js';
 import { countTasks } from '../tasks/task-store.js';
 import { listRepos, upsertRepo } from './repo-store.js';
+import { listRepoCards } from './app-card-store.js';
 
 const log = createChildLogger({ module: 'repo-registry' });
 
@@ -140,6 +141,59 @@ export async function seedReposFromManagedFile(tenantId: string): Promise<{ seed
     }
   }
   if (seeded > 0) log.info({ seeded, tenantId }, 'seeded repos roster from managed_repos.txt');
+  return { seeded, existing: existing.size };
+}
+
+/**
+ * ADR-021 Phase 2 tail — idempotent seed: INSERT repocards-only rows (repos that
+ * only exist as a `repocards` document — e.g. EXO — with no counterpart in
+ * managed_repos.txt or the DB roster) into the tenant's `repos` roster, source
+ * 'repocard'. Insert-only, mirroring seedReposFromManagedFile: a name already
+ * present in the roster (whether seeded from the txt, self-registered, or from
+ * a prior run of this function) is skipped outright, so this never calls
+ * upsertRepo for an existing row — the $set/$setOnInsert path conflict in
+ * repo-store.upsertRepo (source is $setOnInsert-only; see its comment) can only
+ * be hit by a genuine update, which insert-only seeding never performs.
+ * Card-only repos have no known local checkout for this tenant, so `path` is a
+ * synthetic `/repocard/<name>` placeholder — repoInfoFromPath derives `name` via
+ * `basename(path)`, so the placeholder MUST end in `/<name>` for listReposUnified
+ * to show the right name (a bare `repocard:<name>` with no slash would make
+ * basename() return the whole placeholder as the name). Resolves to exists:false
+ * until a real `myai init`/`scan` supplies an actual path.
+ */
+export async function seedReposFromRepoCards(tenantId: string): Promise<{ seeded: number; existing: number }> {
+  let cards: Awaited<ReturnType<typeof listRepoCards>>;
+  try {
+    cards = await listRepoCards(tenantId);
+  } catch (err) {
+    log.warn({ err: (err as Error).message }, 'repocards unavailable — skipping repocard seed');
+    return { seeded: 0, existing: 0 };
+  }
+  if (cards.length === 0) return { seeded: 0, existing: 0 };
+
+  let existing: Set<string>;
+  try {
+    existing = new Set((await listRepos(tenantId, { enabledOnly: false })).map(r => r.name));
+  } catch {
+    return { seeded: 0, existing: 0 }; // DB unavailable — skip silently, repocards still serve via repos_card_list
+  }
+
+  let seeded = 0;
+  for (const card of cards) {
+    if (existing.has(card.repoName)) continue;
+    try {
+      await upsertRepo(tenantId, {
+        name: card.repoName,
+        path: `/repocard/${card.repoName}`,
+        source: 'repocard',
+        group: card.group,
+      });
+      seeded++;
+    } catch (err) {
+      log.warn({ err: (err as Error).message, repo: card.repoName }, 'repocard seed upsert failed');
+    }
+  }
+  if (seeded > 0) log.info({ seeded, tenantId }, 'seeded repos roster from repocards (card-only repos)');
   return { seeded, existing: existing.size };
 }
 

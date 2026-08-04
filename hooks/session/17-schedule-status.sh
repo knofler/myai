@@ -90,6 +90,63 @@ print("\n".join(out))
 
 [ -z "$body" ] && exit 0   # gateway down — stay silent
 
+# ── runner-backlog WELL health (task-618ccbe7 / task-d8a33c2f) — `myai doctor`
+# already reports {total, consumed, remaining} and warns when the well runs
+# low, but that only surfaces when someone remembers to run doctor by hand.
+# Mirror the same counting queue_topup.sh + doctor use here (TOTAL = non-blank/
+# non-comment lines in the backlog file, CONSUMED = the cursor file's digits)
+# so a low well shows up on every session start, not just on-demand.
+BACKLOG="${MYAI_RUNNER_BACKLOG:-$ROOT/config/runner_backlog.jsonl}"
+CURSOR="${MYAI_RUNNER_BACKLOG_CURSOR:-$ROOT/config/.runner_backlog.cursor}"
+well_line=""
+if [ -f "$BACKLOG" ]; then
+    total=$(grep -cvE '^[[:space:]]*(#|$)' "$BACKLOG" 2>/dev/null || echo 0)
+    consumed=$(cat "$CURSOR" 2>/dev/null | tr -cd '0-9'); [ -z "$consumed" ] && consumed=0
+    remaining=$(( total - consumed ))
+    [ "$remaining" -lt 0 ] && remaining=0
+    backlog_min="${RUNNER_BACKLOG_MIN:-6}"
+    if [ "$remaining" -lt "$backlog_min" ] 2>/dev/null; then
+        well_line="  ${Y}⚠ WELL LOW${R}  ${D}${remaining} remaining / ${total} total backlog items (< ${backlog_min}) — queue_topup.sh will enqueue a PLANNER task${R}"
+    fi
+fi
+
+# ── pricing-staleness warning (task-7ff72a04) — openai_agent.py's
+# pricing_staleness_warning() / --check-pricing only reaches an operator
+# inside a real agentic run's log or when someone remembers to run
+# `openai_agent.py --check-pricing` by hand (agentic_fallback.sh's
+# agentic_pricing_stale_warning wraps it for that lane). Same doctor-only-
+# visibility problem the WELL LOW check above was promoted out of in commit
+# 244f9b4 — mirror that precedent: run the same check here so a drifted
+# $/token table (PRICES_PER_M, gating AGENTIC_FALLBACK_DAILY_USD_CAP) shows
+# on every session start, not only when the agentic lane happens to fire.
+pricing_line=""
+for _oa in "$ROOT/scripts/lib/openai_agent.py" "$ROOT/AI/scripts/lib/openai_agent.py"; do
+    if [ -f "$_oa" ]; then
+        pricing_out=$(/usr/bin/python3 "$_oa" --check-pricing 2>/dev/null)
+        pricing_rc=$?
+        if [ "$pricing_rc" -ne 0 ] && [ -n "$pricing_out" ]; then
+            pricing_msg="${pricing_out#\[openai-agent\] }"
+            pricing_line="  ${Y}⚠ PRICING STALE${R}  ${D}${pricing_msg}${R}"
+        fi
+        break
+    fi
+done
+
+# ── planner drift (task-5a79bd74) — queue_topup.sh --report already computes
+# whether CONSUMED backlog items actually shipped (done) vs are still in-flight
+# vs are genuinely stale (silent enqueue failure, later-pruned task, etc), but
+# it only surfaces when an operator remembers to run it by hand. Mirror the
+# WELL LOW / PRICING STALE precedent: run the compact --summary mode here so
+# planner effectiveness is visible on every session start.
+drift_line=""
+for _qt in "$ROOT/scripts/queue_topup.sh" "$ROOT/AI/scripts/queue_topup.sh"; do
+    if [ -f "$_qt" ]; then
+        drift_out=$(bash "$_qt" --summary 2>/dev/null)
+        [ -n "$drift_out" ] && drift_line="  ${C}◆ DRIFT${R}  ${D}${drift_out}${R}"
+        break
+    fi
+done
+
 # ── runner cadence (read real interval from plist) + last session ──
 runner_line="${D}not installed on this machine${R}"
 if launchctl list "$RUNNER_LABEL" >/dev/null 2>&1; then
@@ -120,6 +177,9 @@ else
 fi
 printf '%s\n' "${B}╠${bar}╣${R}"
 printf '%s\n' "  ${B}runner:${R} $runner_line"
+[ -n "$well_line" ] && printf '%s\n' "$well_line"
+[ -n "$drift_line" ] && printf '%s\n' "$drift_line"
+[ -n "$pricing_line" ] && printf '%s\n' "$pricing_line"
 printf '%s\n' "  ${D}dashboard: http://localhost:3210/schedule${R}"
 printf '%s\n' "${B}╚${bar}╝${R}"
 exit 0

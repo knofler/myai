@@ -9,7 +9,7 @@ import { scopedFind, scopedFindOne, scopedFindOneAndUpdate, scopedDeleteOne, ten
 
 const log = createChildLogger({ module: 'repo-store' });
 
-export type RepoSource = 'seed' | 'myai-init' | 'scan' | 'manual';
+export type RepoSource = 'seed' | 'myai-init' | 'scan' | 'manual' | 'repocard' | 'headless-new-app';
 
 export interface UpsertRepoInput {
   name: string;

@@ -47,3 +47,27 @@ When a real recall miss shows up, add the session block to `corpus` and a query
 row naming its id to `queries` in `recall-dataset.ts`, then re-run `eval:recall`
 to refresh the baseline. Keep the set small and curated — it is a regression
 fixture, not the production corpus.
+
+## Enforcement (merge gate)
+
+`npm run eval:recall:check` is a CLI convenience — nothing ran it automatically
+until `tests/unit/recall-eval-gate.test.ts` was added. That test runs the same
+`compareToBaseline` comparison against the committed `recall-baseline.json` as
+a normal vitest case, so it rides the existing runtime test run: `npm test`,
+`npm run test:coverage`, `scripts/local-ci.sh`'s `check_runtime_coverage` gate,
+and `.github/workflows/tenant-isolation.yml`'s `coverage-gate` job (PR → main)
+all execute it. A precision/recall/MRR/MAP/hit-rate drop past the 2-point
+tolerance now fails the merge gate instead of silently passing.
+
+### Refreshing the baseline
+
+Refresh only when a metric drop is *expected* (e.g. a deliberate chunking or
+threshold change), never to paper over a real regression:
+
+```bash
+npm run eval:recall   # regenerates recall-report.md + recall-baseline.json
+```
+
+Review the diff in `recall-baseline.json` before committing — every drop
+should be explainable by the change that caused it. Commit both files
+together with the change that motivated the refresh.

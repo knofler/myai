@@ -9,7 +9,7 @@
 // Server component reading the Mongo Tenant mirror + the pure revenue engine
 // (src/lib/revenue.ts, mirrored from runtime/src/analytics/revenue.ts).
 
-import { connectDB, Tenant } from '@/lib/db';
+import { connectDB, Tenant, MrrSnapshot } from '@/lib/db';
 import { fmtUsd } from '@/lib/format';
 import {
   computeMrr,
@@ -21,6 +21,7 @@ import {
   type TenantBillingSnapshot,
   type BillingInterval,
 } from '@/lib/revenue';
+import { historicalMrrAsOf, type MrrSnapshotPoint } from '@/lib/mrr-snapshots';
 import type { TenantPlan, SubscriptionStatus } from '@/lib/billing';
 import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
@@ -83,12 +84,24 @@ export default async function RevenuePage() {
   const summary = computeMrr(snapshots);
 
   // ── Retention cohort (trailing 30d) ────────────────────────────
-  // We don't persist historical MRR snapshots yet, so the starting cohort is
-  // reconstructed: tenants that existed before the window AND were paying at its
-  // start (still active now, OR churned/lapsed DURING the window). This is an
-  // approximation of true point-in-time NRR — it becomes exact once a nightly
-  // MRR-snapshot job lands (noted on the page).
+  // Prefer the real starting MRR from the nightly mrr_snapshot_sweep job
+  // (MrrSnapshot collection) when a tenant has at least 2 persisted daily
+  // points reaching back to the window start. Tenants with fewer snapshots
+  // (job hasn't run long enough for them yet) fall back to the reconstructed
+  // proxy: tenants that existed before the window AND were paying at its
+  // start (still active now, OR churned/lapsed DURING the window) — an
+  // approximation of true point-in-time NRR.
   const windowStart = new Date(Date.now() - WINDOW_DAYS * 24 * 3600 * 1000);
+  const snapshotDocs = (await MrrSnapshot.find(
+    { tenantId: { $in: tenants.map((t) => t.tenantId) } },
+    { tenantId: 1, mrr: 1, capturedAt: 1 },
+  ).lean()) as unknown as Array<{ tenantId: string; mrr: number; capturedAt: Date }>;
+  const snapshotsByTenant = new Map<string, MrrSnapshotPoint[]>();
+  for (const s of snapshotDocs) {
+    const list = snapshotsByTenant.get(s.tenantId) ?? [];
+    list.push({ mrr: s.mrr, capturedAt: new Date(s.capturedAt) });
+    snapshotsByTenant.set(s.tenantId, list);
+  }
   const byId = new Map(tenants.map((t) => [t.tenantId, t]));
   const activeNow = new Set(snapshots.filter((s) => mrrForSnapshot(s) > 0).map((s) => s.tenantId));
 
@@ -116,11 +129,14 @@ export default async function RevenuePage() {
     // Started the window as a paying account?
     const startedPaying = (isActive && createdAt && createdAt < windowStart) || churnedInWindow;
     if (startedPaying) {
-      // Starting MRR: what they paid at window start. Active-now → their MRR;
-      // churned → the MRR their (last) plan would bill (best-effort).
-      const startMrr = isActive
+      // Starting MRR: what they paid at window start. Prefer the real
+      // persisted snapshot closest to (at or before) windowStart; fall back
+      // to the proxy (active-now → current MRR; churned → what the last
+      // plan would bill) for tenants with fewer than 2 snapshots.
+      const historical = historicalMrrAsOf(snapshotsByTenant.get(s.tenantId) ?? [], windowStart);
+      const startMrr = historical ?? (isActive
         ? currentMrr
-        : mrrForSnapshot({ tenantId: s.tenantId, plan: s.plan, subscriptionStatus: 'active', billingInterval: s.billingInterval });
+        : mrrForSnapshot({ tenantId: s.tenantId, plan: s.plan, subscriptionStatus: 'active', billingInterval: s.billingInterval }));
       startingActive.push({ tenantId: s.tenantId, mrr: startMrr });
       currentMrrById[s.tenantId] = currentMrr;
       if (!isActive) churnedLogos += 1;
@@ -222,7 +238,7 @@ export default async function RevenuePage() {
             <p><span className="text-zinc-300">NRR &amp; churn</span> compare the paying cohort at the start of the {WINDOW_DAYS}-day window against where those same accounts are now (expansion, contraction, and churn included).</p>
             <p><span className="text-zinc-300">Blended LTV</span> = ARPA ÷ monthly logo-churn rate.</p>
             <p className="text-zinc-600 pt-1 border-t border-zinc-800">
-              The starting cohort is reconstructed from current subscription state (no historical MRR snapshots persisted yet), so NRR/churn are best-effort — they become exact once a nightly MRR-snapshot job lands. Pricing defaults come from the roadmap and are overridable via <code className="text-zinc-400">MYAI_PRICE_*</code> env vars.
+              Starting MRR prefers the real snapshot from the nightly MRR-snapshot job closest to the window start; tenants with fewer than 2 persisted snapshots fall back to a reconstruction from current subscription state. Pricing defaults come from the roadmap and are overridable via <code className="text-zinc-400">MYAI_PRICE_*</code> env vars.
             </p>
           </div>
         </Card>

@@ -94,6 +94,35 @@ fi
 for _envf in "$PROJECT_DIR/.env" "$PROJECT_DIR/AI/.env"; do
     [ -f "$_envf" ] && { set -a; . "$_envf" 2>/dev/null || true; set +a; }
 done
+
+# ── first-boot credential bootstrap (SECURITY task-7f8b20a3) ─────────────────
+# docker-compose.yml/.mcp.json/templates ship NO fallback for GATEWAY_LOCAL_TOKEN
+# (the old literal 'myai-local-bridge-dev' default is public knowledge — it's in
+# the npm package). Generate a real random one into the project's .env the first
+# time `myai up` runs so the stack never boots on a publicly-known bridge token.
+# Idempotent: a real token already present (env or .env) is left untouched.
+DEFAULT_LOCAL_TOKEN="myai-local-bridge-dev"
+ensure_local_token() {
+    if [ -n "${GATEWAY_LOCAL_TOKEN:-}" ] && [ "$GATEWAY_LOCAL_TOKEN" != "$DEFAULT_LOCAL_TOKEN" ]; then
+        return 0
+    fi
+    local env_file="$PROJECT_DIR/.env" tmp new_token
+    if command -v openssl >/dev/null 2>&1; then
+        new_token="$(openssl rand -hex 32)"
+    elif command -v python3 >/dev/null 2>&1; then
+        new_token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    else
+        c_warn "neither openssl nor python3 found — cannot generate GATEWAY_LOCAL_TOKEN, leaving it unset"
+        return 0
+    fi
+    tmp="$(mktemp "${env_file}.XXXXXX")"
+    [ -f "$env_file" ] && grep -v '^GATEWAY_LOCAL_TOKEN=' "$env_file" > "$tmp" 2>/dev/null || true
+    printf 'GATEWAY_LOCAL_TOKEN=%s\n' "$new_token" >> "$tmp"
+    mv "$tmp" "$env_file"
+    export GATEWAY_LOCAL_TOKEN="$new_token"
+    c_ok "generated a random GATEWAY_LOCAL_TOKEN into $(basename "$PROJECT_DIR")/.env (first boot — was unset/published default)"
+}
+ensure_local_token
 # Default MYAI_HOME (framework install) AFTER sourcing — the project's .env may
 # carry an EMPTY MYAI_HOME= placeholder, which must not clobber the default.
 [ -n "${MYAI_HOME:-}" ] || MYAI_HOME="$REPO_ROOT"

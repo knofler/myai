@@ -1,10 +1,30 @@
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { homedir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import type { GatewayConfig } from './types.js';
+
+/**
+ * The GATEWAY_LOCAL_TOKEN fallback baked into docker-compose.yml and
+ * .mcp.json (`${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}`) — both files
+ * ship in the npm package and the public mirror, so this value is PUBLIC
+ * KNOWLEDGE, not a secret. loadConfig() refuses to treat it as a valid local
+ * credential when tenancy.enforce=true (see below); it must never be
+ * accepted as-is on a deployment reachable beyond loopback.
+ */
+export const KNOWN_DEFAULT_LOCAL_TOKEN = 'myai-local-bridge-dev';
 
 const DEFAULTS: GatewayConfig = {
   server: { httpPort: 3200, wsPort: 3201, host: '0.0.0.0' },
-  database: { uri: 'mongodb://admin:password@localhost:27017/myai?authSource=admin', name: 'myai' },
+  database: {
+    uri: 'mongodb://admin:password@localhost:27017/myai?authSource=admin',
+    name: 'myai',
+    // Read-side failover to the local `myai mirror` copy (MONGO_MIRROR.md).
+    // Off by default — never an automatic/silent swap (2026-07-04 split-brain
+    // lesson). Opt in with MYAI_DB_FAILOVER=local.
+    failover: 'none' as 'none' | 'local',
+    failoverUri: undefined,
+  },
   aiRoot: resolve(process.cwd(), '..'),
   sessions: { compactionThreshold: 50, compactionKeepRecent: 10, idleTimeoutMinutes: 1440, maxConcurrentSessions: 100 },
   memory: {
@@ -23,6 +43,12 @@ const DEFAULTS: GatewayConfig = {
     deepseekModel: 'deepseek-chat',
     moonshotApiKey: undefined,
     moonshotModel: 'kimi-k2.6',
+    moonshotBaseUrl: undefined,
+    openrouterApiKey: undefined,
+    openrouterModel: 'moonshotai/kimi-k2:free',
+    openrouterBaseUrl: undefined,
+    geminiApiKey: undefined,
+    geminiModel: 'gemini-2.0-flash',
     ollamaBaseUrl: 'http://host.docker.internal:11434/v1',
     ollamaModel: 'kimi-k2.6:cloud',
     promptCacheEnabled: true,
@@ -101,7 +127,14 @@ export function loadConfig(configPath?: string): GatewayConfig {
     }
   }
 
-  const config: GatewayConfig = deepMerge(DEFAULTS, fileConfig);
+  // Deep-clone DEFAULTS before merging: deepMerge only recurses into keys
+  // fileConfig actually overrides, so any nested object fileConfig doesn't
+  // touch (the common case — no gateway.config.json — is ALL of them) comes
+  // back as the SAME reference as the module-level DEFAULTS constant. Several
+  // call sites below (env overrides, the GATEWAY_LOCAL_TOKEN refusal) mutate
+  // `config.tenancy` in place, which would otherwise permanently corrupt
+  // DEFAULTS.tenancy for every later loadConfig() call in this process.
+  const config: GatewayConfig = deepMerge(structuredClone(DEFAULTS), fileConfig);
 
   // Environment variable overrides
   if (process.env.GATEWAY_HTTP_PORT) config.server.httpPort = Number(process.env.GATEWAY_HTTP_PORT);
@@ -109,17 +142,34 @@ export function loadConfig(configPath?: string): GatewayConfig {
   if (process.env.GATEWAY_HOST) config.server.host = process.env.GATEWAY_HOST;
   if (process.env.MONGODB_URI) config.database.uri = process.env.MONGODB_URI;
   if (process.env.MONGODB_NAME) config.database.name = process.env.MONGODB_NAME;
+  // Read-side local-first failover (MONGO_MIRROR.md follow-up). Explicit
+  // opt-in only: MYAI_DB_FAILOVER=local makes connectDB() fall back to the
+  // local mirror in a logged, READ-ONLY degraded mode when the primary
+  // (Atlas) is unreachable at boot. Any other value keeps it off.
+  if (process.env.MYAI_DB_FAILOVER === 'local') config.database.failover = 'local';
+  if (process.env.MYAI_DB_FAILOVER === 'none' || process.env.MYAI_DB_FAILOVER === 'false' || process.env.MYAI_DB_FAILOVER === '0') {
+    config.database.failover = 'none';
+  }
+  if (process.env.MYAI_DB_FAILOVER_URI) config.database.failoverUri = process.env.MYAI_DB_FAILOVER_URI;
   if (process.env.AI_ROOT) config.aiRoot = process.env.AI_ROOT;
   if (process.env.LOG_LEVEL) config.logging.level = process.env.LOG_LEVEL;
   if (process.env.EMBEDDING_PROVIDER) config.memory.embedding.provider = process.env.EMBEDDING_PROVIDER as 'local' | 'openai';
   if (process.env.LLM_ENABLED === 'true' || process.env.LLM_ENABLED === '1') config.llm.enabled = true;
-  if (process.env.LLM_MODE) config.llm.mode = process.env.LLM_MODE as 'bridge' | 'direct' | 'api' | 'deepseek' | 'moonshot' | 'ollama';
+  if (process.env.LLM_MODE) config.llm.mode = process.env.LLM_MODE as 'bridge' | 'direct' | 'api' | 'deepseek' | 'moonshot' | 'gemini' | 'ollama';
   if (process.env.ANTHROPIC_API_KEY) { config.llm.apiKey = process.env.ANTHROPIC_API_KEY; if (!process.env.LLM_MODE) config.llm.mode = 'api'; }
   if (process.env.LLM_MODEL) config.llm.model = process.env.LLM_MODEL;
   if (process.env.DEEPSEEK_API_KEY) { config.llm.deepseekApiKey = process.env.DEEPSEEK_API_KEY; if (!process.env.LLM_MODE && !process.env.ANTHROPIC_API_KEY) config.llm.mode = 'deepseek'; }
   if (process.env.DEEPSEEK_MODEL) config.llm.deepseekModel = process.env.DEEPSEEK_MODEL;
   if (process.env.MOONSHOT_API_KEY) { config.llm.moonshotApiKey = process.env.MOONSHOT_API_KEY; if (!process.env.LLM_MODE && !process.env.ANTHROPIC_API_KEY && !process.env.DEEPSEEK_API_KEY) config.llm.mode = 'moonshot'; }
   if (process.env.MOONSHOT_MODEL) config.llm.moonshotModel = process.env.MOONSHOT_MODEL;
+  if (process.env.MOONSHOT_BASE_URL) config.llm.moonshotBaseUrl = process.env.MOONSHOT_BASE_URL;
+  // OpenRouter backend for the Kimi lane — free K2 slug without a paid
+  // Moonshot key. Becomes the default mode only when it is the sole key.
+  if (process.env.OPENROUTER_API_KEY) { config.llm.openrouterApiKey = process.env.OPENROUTER_API_KEY; if (!process.env.LLM_MODE && !process.env.ANTHROPIC_API_KEY && !process.env.DEEPSEEK_API_KEY && !process.env.MOONSHOT_API_KEY) config.llm.mode = 'moonshot'; }
+  if (process.env.OPENROUTER_MODEL) config.llm.openrouterModel = process.env.OPENROUTER_MODEL;
+  if (process.env.OPENROUTER_BASE_URL) config.llm.openrouterBaseUrl = process.env.OPENROUTER_BASE_URL;
+  if (process.env.GEMINI_API_KEY) { config.llm.geminiApiKey = process.env.GEMINI_API_KEY; if (!process.env.LLM_MODE && !process.env.ANTHROPIC_API_KEY && !process.env.DEEPSEEK_API_KEY && !process.env.MOONSHOT_API_KEY && !process.env.OPENROUTER_API_KEY) config.llm.mode = 'gemini'; }
+  if (process.env.GEMINI_MODEL) config.llm.geminiModel = process.env.GEMINI_MODEL;
   if (process.env.OLLAMA_BASE_URL) config.llm.ollamaBaseUrl = process.env.OLLAMA_BASE_URL;
   if (process.env.OLLAMA_MODEL) config.llm.ollamaModel = process.env.OLLAMA_MODEL;
   if (process.env.LLM_BRIDGE_URL) config.llm.bridgeUrl = process.env.LLM_BRIDGE_URL;
@@ -211,6 +261,39 @@ export function loadConfig(configPath?: string): GatewayConfig {
     const ms = Number(process.env.GATEWAY_LOCAL_TOKEN_PREVIOUS_EXPIRES_AT);
     if (Number.isFinite(ms)) config.tenancy.previousLocalTokenExpiresAt = ms;
   }
+  // SECURITY: never let the published fallback become the ACTUAL running
+  // credential. Under enforce=true it would otherwise grant a non-loopback
+  // caller (Docker bridge, LAN when the port is published) the default
+  // tenant at plan 'scale' — refuse it outright rather than silently
+  // trusting a value anyone can read in the npm package. Under
+  // enforce=false the no-key branch already grants every caller the
+  // default tenant regardless of token (MVP single-operator fallback), so
+  // refusing would change nothing but the operator still deserves a loud
+  // heads-up that their bridge token is publicly known.
+  if (config.tenancy.localToken === KNOWN_DEFAULT_LOCAL_TOKEN) {
+    if (config.tenancy.enforce) {
+      // eslint-disable-next-line no-console
+      console.error(
+        '\n' + '='.repeat(78) + '\n' +
+        'SECURITY: GATEWAY_LOCAL_TOKEN is the published default value\n' +
+        `("${KNOWN_DEFAULT_LOCAL_TOKEN}") — this ships in the public npm package\n` +
+        'and mirror, so it is not a secret. Refusing to accept it as a valid\n' +
+        'local-bridge credential while tenancy.enforce=true; non-loopback\n' +
+        'callers (Docker bridge, LAN) presenting it will get 401.\n' +
+        'Fix: run `myai rotate-keys local` (or set a real random\n' +
+        'GATEWAY_LOCAL_TOKEN in .env) to generate a private token.\n' +
+        '='.repeat(78) + '\n',
+      );
+      config.tenancy.localToken = undefined;
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `SECURITY WARNING: GATEWAY_LOCAL_TOKEN is the published default ("${KNOWN_DEFAULT_LOCAL_TOKEN}") ` +
+        '— this is public knowledge, not a secret. Run `myai rotate-keys local` to generate a real one ' +
+        'before exposing this gateway beyond localhost.',
+      );
+    }
+  }
 
   // Data-residency / region pinning (ADR-023).
   if (process.env.GATEWAY_REGION === 'us' || process.env.GATEWAY_REGION === 'eu' || process.env.GATEWAY_REGION === 'au') {
@@ -271,20 +354,120 @@ export interface BrainObfuscationConfig {
   /** Master switch. Env: BRAIN_OBFUSCATE_REMOTE (`true`/`1`). Default false. */
   obfuscateRemote: boolean;
   /** Per-install HMAC salt. Stable within an install (so query and corpus tokens
-   *  match) but should differ across installs (so descriptors are unlinkable).
-   *  Prefers BRAIN_OBFUSCATE_SALT, falls back to the per-install GATEWAY_LOCAL_TOKEN,
-   *  then a fixed default — operators enabling the flag should set an explicit salt. */
+   *  match) but MUST differ across installs (so descriptors are unlinkable).
+   *  Resolved by `resolveObfuscationSalt()`: an explicit BRAIN_OBFUSCATE_SALT, else
+   *  a *non-default* GATEWAY_LOCAL_TOKEN, else a random per-install salt minted and
+   *  persisted to LOCAL disk on first enable. Never a fixed shared literal — that
+   *  made every install produce identical tokens, defeating unlinkability (B-9's
+   *  whole point). Empty string only when obfuscation is OFF or could not be
+   *  enabled safely (in which case `obfuscateRemote` is false). */
   salt: string;
 }
 
+/**
+ * Where the auto-generated per-install obfuscation salt is persisted when the
+ * operator enables BRAIN_OBFUSCATE_REMOTE without supplying an explicit
+ * BRAIN_OBFUSCATE_SALT (and without a distinct GATEWAY_LOCAL_TOKEN). Kept on
+ * LOCAL disk only, under the same `~/.myai` root the brain store + obf-map-store
+ * already use (mirror of `myaiHome()` in `core/brain.ts`, inlined here to keep
+ * this low-level config module free of the heavier brain.ts import graph).
+ */
+function myaiHomeDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.MYAI_HOME || join(homedir(), '.myai');
+}
+
+function obfuscateSaltPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(myaiHomeDir(env), 'brain', 'obfuscate-salt');
+}
+
+/**
+ * Resolve (and if necessary mint + persist) the per-install obfuscation salt for
+ * an enabled BRAIN_OBFUSCATE_REMOTE. Priority:
+ *   1. BRAIN_OBFUSCATE_SALT — an explicit, operator-chosen per-install salt.
+ *   2. GATEWAY_LOCAL_TOKEN — the per-install bridge token, but ONLY when it is a
+ *      real random token, never the published KNOWN_DEFAULT_LOCAL_TOKEN (that
+ *      value ships in the npm package + mirror, so every install that left it at
+ *      the default would share it — exactly the cross-install linkability this
+ *      guards against).
+ *   3. A random 32-byte salt generated ONCE and persisted to LOCAL disk (0600),
+ *      stable across restarts but unique per install.
+ *
+ * This deliberately NO LONGER falls back to a fixed literal default: a shared
+ * constant salt made every such install produce byte-identical descriptor
+ * tokens, defeating B-9's cross-install unlinkability guarantee — a false sense
+ * of privacy. Returns '' only when no per-install salt is resolvable AND the
+ * auto-salt could not be persisted; the caller then refuses to enable
+ * obfuscation rather than fall open to a shared/ephemeral salt.
+ */
+function resolveObfuscationSalt(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = (env.BRAIN_OBFUSCATE_SALT || '').trim();
+  if (explicit) return explicit;
+
+  const localToken = (env.GATEWAY_LOCAL_TOKEN || '').trim();
+  if (localToken && localToken !== KNOWN_DEFAULT_LOCAL_TOKEN) return localToken;
+
+  // No per-install salt supplied — reuse the persisted auto-salt, or mint one.
+  const path = obfuscateSaltPath(env);
+  if (existsSync(path)) {
+    try {
+      const saved = readFileSync(path, 'utf8').trim();
+      if (saved) return saved;
+    } catch {
+      // fall through to (re)generate
+    }
+  }
+
+  const generated = randomBytes(32).toString('hex');
+  try {
+    const dir = join(myaiHomeDir(env), 'brain');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    // 0o600 — the salt is a per-install secret; anyone who reads it can
+    // recompute this install's obfuscation tokens.
+    writeFileSync(path, generated, { mode: 0o600 });
+    // Warns exactly once per install (the next call finds the file and is
+    // silent) — a loud heads-up that no explicit salt was set, without spamming.
+    // eslint-disable-next-line no-console
+    console.warn(
+      'SECURITY: BRAIN_OBFUSCATE_REMOTE is enabled without an explicit ' +
+      'BRAIN_OBFUSCATE_SALT (and no distinct GATEWAY_LOCAL_TOKEN). Generated a ' +
+      `random per-install salt and persisted it to ${path}. Set an explicit ` +
+      'BRAIN_OBFUSCATE_SALT in .env if the salt must survive a home-dir reset or ' +
+      'be shared across replicas of THIS install.',
+    );
+    return generated;
+  } catch (err) {
+    // Persisting failed (e.g. read-only home). Fail LOUD and refuse rather than
+    // obfuscate with a value we cannot make stable+per-install — an ephemeral
+    // salt breaks recall on restart, and the old fixed default was shared.
+    // eslint-disable-next-line no-console
+    console.error(
+      '\n' + '='.repeat(78) + '\n' +
+      'SECURITY: BRAIN_OBFUSCATE_REMOTE is enabled but no per-install salt is\n' +
+      'resolvable and the auto-generated salt could not be persisted\n' +
+      `(${(err as Error).message}). Refusing to obfuscate with a shared or\n` +
+      'ephemeral salt — that would ship a FALSE sense of privacy (linkable\n' +
+      'descriptors across installs). Remote obfuscation is DISABLED for this\n' +
+      'process. Fix: set an explicit BRAIN_OBFUSCATE_SALT in .env.\n' +
+      '='.repeat(78) + '\n',
+    );
+    return '';
+  }
+}
+
 export function getBrainObfuscation(): BrainObfuscationConfig {
-  const obfuscateRemote =
+  const wantRemote =
     process.env.BRAIN_OBFUSCATE_REMOTE === 'true' || process.env.BRAIN_OBFUSCATE_REMOTE === '1';
-  const salt =
-    process.env.BRAIN_OBFUSCATE_SALT ||
-    process.env.GATEWAY_LOCAL_TOKEN ||
-    'myai-brain-obfuscate-v1';
-  return { obfuscateRemote, salt };
+  // DEFAULT OFF — salt is unused by callers on this path, so keep it out of the
+  // filesystem entirely: the off-path stays byte-for-byte the pre-B-9 behaviour.
+  if (!wantRemote) return { obfuscateRemote: false, salt: '' };
+
+  const salt = resolveObfuscationSalt();
+  // Fail-loud, fail-SAFE: resolveObfuscationSalt() returns '' (and logs loudly)
+  // only when no per-install salt could be resolved or persisted. Do NOT enable
+  // obfuscation with an empty/shared salt — leaving it "on" would be a false
+  // sense of privacy. Disable instead.
+  if (!salt) return { obfuscateRemote: false, salt: '' };
+  return { obfuscateRemote: true, salt };
 }
 
 export function setConfig(config: GatewayConfig): void {

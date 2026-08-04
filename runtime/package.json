@@ -16,6 +16,7 @@
     "cli": "tsx src/cli/main.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage --exclude tests/unit/fleet-overview.test.ts --exclude tests/unit/obfuscate.test.ts --exclude tests/unit/recall-session.test.ts --exclude tests/unit/totp-mfa.test.ts",
     "eval:recall": "tsx src/eval/run-recall-eval.ts",
     "eval:recall:check": "tsx src/eval/run-recall-eval.ts --check",
     "lint": "tsc --noEmit",
@@ -60,6 +61,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.4",
     "@types/bcryptjs": "^2.4.6",
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",

@@ -298,3 +298,41 @@ export async function getSelfServeConversion(): Promise<SelfServeConversion> {
     return empty;
   }
 }
+
+export interface HostedBrainConversion {
+  signups: number;
+  /** Distinct tenants who ever completed a first hosted-brain provision. */
+  converted: number;
+  /** converted / signups, 0-100 — the headline cross-machine-sync conversion number. */
+  conversionRate: number;
+}
+
+/**
+ * The cross-machine-sync (hosted brain) conversion KPI (ADR-023 Slice P3): of
+ * the tenants that signed up, how many completed their first hosted-brain
+ * provision? This is the countable numerator GO_LIVE_PLAN §6 needs now that
+ * "Pro" reads as "Solo" — "cross-machine sync converted N of your M
+ * customers." Reuses the same idempotent first-wins ActivationEvent rows as
+ * getActivationRollup/getSelfServeConversion; 'first_hosted_brain' is stamped
+ * once per tenant at handleBrainHostProvision's first successful call.
+ */
+export async function getHostedBrainConversion(): Promise<HostedBrainConversion> {
+  const empty: HostedBrainConversion = { signups: 0, converted: 0, conversionRate: 0 };
+  try {
+    if (!isConnected()) return empty;
+    // tenant-ok: cross-tenant BY DESIGN — operator/product KPI (counts distinct
+    // tenants per step, never surfaces any tenant's content).
+    const rows = await ActivationEventModel.aggregate<{ _id: ActivationStep; tenants: number }>([
+      { $match: { step: { $in: ['signup', 'first_hosted_brain'] } } },
+      { $group: { _id: { step: '$step', tenantId: '$tenantId' } } },
+      { $group: { _id: '$_id.step', tenants: { $sum: 1 } } },
+    ]);
+    const byStep = new Map(rows.map((r) => [r._id, r.tenants]));
+    const signups = byStep.get('signup') ?? 0;
+    const converted = byStep.get('first_hosted_brain') ?? 0;
+    return { signups, converted, conversionRate: signups > 0 ? Math.round((converted / signups) * 100) : 0 };
+  } catch (err) {
+    log.debug({ err }, 'hosted-brain conversion unavailable — returning empty');
+    return empty;
+  }
+}

@@ -12,6 +12,8 @@ import CostsView from '@/views/costs';
 import UsageView from '@/views/usage';
 import ApiHealthView from '@/views/api-health';
 import RunnerHealthView from '@/views/runner-health';
+import McpToolsView from '@/views/mcp-tools';
+import GiftCodesView from '@/views/gift-codes';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,6 +25,8 @@ const TABS = [
   { id: 'usage', label: 'Usage' },
   { id: 'api', label: 'API Health' },
   { id: 'runner', label: 'Runner Health' },
+  { id: 'mcp-tools', label: 'MCP Tools' },
+  { id: 'gift-codes', label: 'Gift Codes' },
 ];
 
 const SUBTITLES: Record<string, string> = {
@@ -33,6 +37,8 @@ const SUBTITLES: Record<string, string> = {
   usage: 'Product-usage meter — billable units (tasks, off-hours minutes, apps, agents) by tool, member, and day.',
   api: 'LLM provider resilience — circuit breakers, rate limiters, managed repos, schedules.',
   runner: 'CLI task-runner pulse — last fire, last RESULT per repo, queue depth, and the zero-work stall flag.',
+  'mcp-tools': "Admin-only — per-org MCP tool visibility override (OPERATOR_ONLY_TOOLS allow/deny exceptions).",
+  'gift-codes': 'Admin-only — mint/list/revoke platform-wide gift/redeemable subscription codes.',
 };
 
 export default async function SystemPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
@@ -52,6 +58,8 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
         {tab === 'usage' && <UsageView />}
         {tab === 'api' && <ApiHealthView />}
         {tab === 'runner' && <RunnerHealthView />}
+        {tab === 'mcp-tools' && <McpToolsView />}
+        {tab === 'gift-codes' && <GiftCodesView />}
       </div>
     </div>
   );

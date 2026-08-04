@@ -65,13 +65,24 @@ async function checkGateway(): Promise<{ gateway: Component; mongo: Component }>
     const latencyMs = Date.now() - start;
     const body = (await res.json()) as {
       status?: string;
-      checks?: { mongodb?: { status?: string } };
+      checks?: {
+        mongodb?: {
+          status?: string;
+          details?: { failover?: { active?: boolean; failoverUriHost?: string } };
+        };
+      };
     };
     const gwStatus: CompStatus =
       body.status === 'healthy' ? 'operational' : body.status === 'degraded' ? 'degraded' : 'down';
     const mongoRaw = body.checks?.mongodb?.status;
+    // Read-side failover (MYAI_DB_FAILOVER=local): the gateway is serving
+    // READS from the local mirror — show why mongo is degraded, not just that it is.
+    const failover = body.checks?.mongodb?.details?.failover;
     const mongo: Component = {
       status: mongoRaw === 'up' ? 'operational' : mongoRaw === 'degraded' ? 'degraded' : 'down',
+      ...(failover?.active
+        ? { detail: `READ-ONLY failover to local mirror (${failover.failoverUriHost ?? 'local'}) — primary unreachable` }
+        : {}),
     };
     return { gateway: { status: gwStatus, latencyMs }, mongo };
   } catch {

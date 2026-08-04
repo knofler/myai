@@ -5,12 +5,22 @@
 // task counts), a unified cross-repo pending queue, and the bulk levers —
 // fan-out dispatch + drag-to-reprioritize (client console). Reads the same
 // tenant-scoped collections as /work and /apps; writes go through /api/projects.
+//
+// Fleet Overview v0 (plan/MULTI_REPO_ORCHESTRATION_UI_SPEC.md) fields are
+// layered onto the per-repo rows below: in-flight agent + elapsed, last-ship
+// status/time/unshipped-commits, and a fleet-wide runner-liveness badge. That
+// spec assumed this route was unbuilt (grep run against `main`, where neither
+// this page nor its ADR-015 predecessor had landed yet) — on `test` the full
+// ADR-015 board (commit c1e690e) already shipped three weeks earlier, so
+// rather than a competing v0-only page, its remaining fields extend this one.
 
 import { connectDB, Task, RepoCard, Tenant } from '@/lib/db';
 import { getActiveTenant, tenantFilter } from '@/lib/tenant';
+import { getRunnerLiveness } from '@/lib/runner-health';
 import { PageHeader } from '@/components/page-header';
 import { Card, StatCard, EmptyState } from '@/components/ui/card';
 import { LevelDot } from '@/components/ui/badge';
+import { timeAgo, formatDuration } from '@/lib/format';
 import AutoRefresh from '@/components/auto-refresh';
 import {
   buildProjectRollups,
@@ -19,6 +29,12 @@ import {
   type TaskStatus,
   type Priority,
 } from '@/lib/projects';
+import {
+  buildInFlightByRepo,
+  buildLastShipByRepo,
+  fleetSummary,
+  type FleetTaskLike,
+} from '@/lib/fleet-overview';
 import { ProjectsConsole, type ConsoleRepo, type PendingTask } from './projects-console';
 
 export const dynamic = 'force-dynamic';
@@ -27,6 +43,27 @@ interface RepoCardDoc {
   repoName?: string;
   group?: string;
   lastStatusLevel?: 'ok' | 'warn' | 'error' | 'unknown';
+  lastStatus?: string;
+  updatedAt?: string | Date;
+  commitsAhead?: number;
+}
+
+/** Fleet-wide runner-liveness badge — green "alive Nm ago" / red "down". */
+function RunnerBadge({ liveness }: { liveness: Awaited<ReturnType<typeof getRunnerLiveness>> }) {
+  if (!liveness.alive) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-500/15 border border-red-500/40 text-xs font-medium text-red-300">
+        <span className="w-2 h-2 rounded-full bg-red-400" />
+        Runner: down{liveness.lastMachine ? ` · last ${liveness.lastMachine} ${timeAgo(liveness.lastHeartbeatAt)}` : ''}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-xs font-medium text-emerald-300">
+      <span className="w-2 h-2 rounded-full bg-emerald-400" />
+      Runner: alive {timeAgo(liveness.lastHeartbeatAt)}
+    </span>
+  );
 }
 
 export default async function ProjectsPage() {
@@ -34,14 +71,20 @@ export default async function ProjectsPage() {
   const tenantId = await getActiveTenant();
   const tf = tenantFilter(tenantId);
 
-  const [cards, statusAgg, pendingDocs, tenantDoc] = await Promise.all([
-    RepoCard.find(tf).select('repoName group lastStatusLevel').lean() as unknown as Promise<RepoCardDoc[]>,
+  const [cards, statusAgg, pendingDocs, tenantDoc, rawTasks, liveness] = await Promise.all([
+    RepoCard.find(tf).select('repoName group lastStatusLevel lastStatus updatedAt commitsAhead').lean() as unknown as Promise<RepoCardDoc[]>,
     Task.aggregate([
       { $match: tf },
       { $group: { _id: { repo: '$repo', status: '$status' }, count: { $sum: 1 } } },
     ]) as Promise<Array<{ _id: { repo: string; status: TaskStatus }; count: number }>>,
     Task.find({ ...tf, status: 'pending' }).select('taskId repo title priority').sort({ priority: 1, createdAt: 1 }).limit(120).lean() as unknown as Promise<Array<{ taskId: string; repo: string; title: string; priority: Priority }>>,
     Tenant.findOne({ tenantId }).select('metadata').lean() as Promise<{ metadata?: { projects?: Record<string, ProjectMeta> } } | null>,
+    // Fleet Overview v0 — one unfiltered tasks_list-shape call (raised limit
+    // per the spec's aggregation caveat), grouped client-side below instead of
+    // a dedicated tasks_summary aggregation tool (not needed at Team's 15-repo
+    // cap; see plan/MULTI_REPO_ORCHESTRATION_UI_SPEC.md §"Aggregation caveat").
+    Task.find(tf).select('repo status assignedAgent startedAt').limit(500).lean() as unknown as Promise<FleetTaskLike[]>,
+    getRunnerLiveness(),
   ]);
 
   // Fold the (repo, status) aggregation into per-repo count maps.
@@ -56,8 +99,9 @@ export default async function ProjectsPage() {
   const projects = buildProjectRollups(cards, taskCounts, projectMeta);
 
   const totalRepos = projects.reduce((n, p) => n + p.repoCount, 0);
-  const totalOpen = projects.reduce((n, p) => n + p.open, 0);
-  const totalBlocked = projects.reduce((n, p) => n + p.counts.blocked, 0);
+  const inFlightByRepo = buildInFlightByRepo(rawTasks);
+  const lastShipByRepo = buildLastShipByRepo(cards);
+  const summary = fleetSummary(rawTasks, totalRepos);
 
   // Console inputs: every known repo (for the fan-out picker) + the pending queue.
   const consoleRepos: ConsoleRepo[] = projects
@@ -73,7 +117,9 @@ export default async function ProjectsPage() {
   return (
     <div className="max-w-7xl mx-auto">
       <AutoRefresh seconds={20} />
-      <PageHeader title="Projects" subtitle="Multi-repo orchestration — the view and the lever across every repo at once." />
+      <PageHeader title="Projects" subtitle="Multi-repo orchestration — the view and the lever across every repo at once.">
+        <RunnerBadge liveness={liveness} />
+      </PageHeader>
 
       {projects.length === 0 ? (
         <Card title="No repos yet">
@@ -85,11 +131,12 @@ export default async function ProjectsPage() {
         </Card>
       ) : (
         <div className="space-y-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
             <StatCard label="Projects" value={projects.length} />
             <StatCard label="Repos" value={totalRepos} />
-            <StatCard label="Open tasks" value={totalOpen} sub="pending + working" accent={totalOpen > 0 ? 'blue' : 'gray'} />
-            <StatCard label="Blocked" value={totalBlocked} accent={totalBlocked > 0 ? 'red' : 'gray'} />
+            <StatCard label="Queue depth" value={summary.queueDepth} sub="pending + working" accent={summary.queueDepth > 0 ? 'blue' : 'gray'} />
+            <StatCard label="In-flight" value={summary.inFlight} accent={summary.inFlight > 0 ? 'blue' : 'gray'} />
+            <StatCard label="Needs attention" value={summary.needsAttention} sub="blocked + dead-lettered" accent={summary.needsAttention > 0 ? 'red' : 'gray'} />
           </div>
 
           {/* Per-project rollup grid */}
@@ -116,23 +163,49 @@ export default async function ProjectsPage() {
                         <th className="px-2 py-2 font-medium text-right">Working</th>
                         <th className="px-2 py-2 font-medium text-right">Review</th>
                         <th className="px-2 py-2 font-medium text-right">Blocked</th>
+                        <th className="px-2 py-2 font-medium">In-flight</th>
+                        <th className="px-2 py-2 font-medium">Last ship</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800/50">
-                      {p.repos.map((r) => (
-                        <tr key={r.repo} className="hover:bg-zinc-800/30">
-                          <td className="px-2 py-2">
-                            <a href={`/work?repo=${encodeURIComponent(r.repo)}`} className="inline-flex items-center gap-2 text-zinc-200 hover:text-teal-300">
-                              <LevelDot level={r.level} className="w-2 h-2" />
-                              <span className="font-mono text-xs">{r.repo}</span>
-                            </a>
-                          </td>
-                          <td className="px-2 py-2 text-right text-zinc-300 tabular-nums">{r.counts.pending || <span className="text-zinc-700">·</span>}</td>
-                          <td className="px-2 py-2 text-right text-blue-400 tabular-nums">{r.counts.working || <span className="text-zinc-700">·</span>}</td>
-                          <td className="px-2 py-2 text-right text-purple-400 tabular-nums">{r.counts.review || <span className="text-zinc-700">·</span>}</td>
-                          <td className="px-2 py-2 text-right text-red-400 tabular-nums">{r.counts.blocked || <span className="text-zinc-700">·</span>}</td>
-                        </tr>
-                      ))}
+                      {p.repos.map((r) => {
+                        const inFlight = inFlightByRepo[r.repo];
+                        const lastShip = lastShipByRepo[r.repo];
+                        return (
+                          <tr key={r.repo} className="hover:bg-zinc-800/30">
+                            <td className="px-2 py-2">
+                              <a href={`/work?repo=${encodeURIComponent(r.repo)}`} className="inline-flex items-center gap-2 text-zinc-200 hover:text-teal-300">
+                                <LevelDot level={r.level} className="w-2 h-2" />
+                                <span className="font-mono text-xs">{r.repo}</span>
+                              </a>
+                            </td>
+                            <td className="px-2 py-2 text-right text-zinc-300 tabular-nums">{r.counts.pending || <span className="text-zinc-700">·</span>}</td>
+                            <td className="px-2 py-2 text-right text-blue-400 tabular-nums">{r.counts.working || <span className="text-zinc-700">·</span>}</td>
+                            <td className="px-2 py-2 text-right text-purple-400 tabular-nums">{r.counts.review || <span className="text-zinc-700">·</span>}</td>
+                            <td className="px-2 py-2 text-right text-red-400 tabular-nums">{r.counts.blocked || <span className="text-zinc-700">·</span>}</td>
+                            <td className="px-2 py-2 text-xs text-zinc-400 whitespace-nowrap">
+                              {inFlight
+                                ? <>{inFlight.assignedAgent ?? 'agent —'} <span className="text-zinc-600">· {formatDuration(inFlight.startedAt)}</span></>
+                                : <span className="text-zinc-700">—</span>}
+                            </td>
+                            <td className="px-2 py-2 text-xs text-zinc-400 whitespace-nowrap">
+                              {lastShip
+                                ? (
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <span className="truncate max-w-[10rem]" title={lastShip.status}>{lastShip.status || '—'}</span>
+                                    <span className="text-zinc-600">· {timeAgo(lastShip.at)}</span>
+                                    {!!lastShip.commitsAhead && lastShip.commitsAhead > 0 && (
+                                      <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px]">
+                                        {lastShip.commitsAhead} unshipped
+                                      </span>
+                                    )}
+                                  </span>
+                                )
+                                : <span className="text-zinc-700">no card yet</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

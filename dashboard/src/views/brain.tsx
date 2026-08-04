@@ -8,8 +8,8 @@ import { StatCard, Card, EmptyState, THead } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { GATEWAY_URL } from '@/lib/gateway';
 import {
-  fetchBrainExplore, fetchBrainHealth, formatBrainStamp,
-  type BrainAtomMeta, type BrainHealth, type BrainSection,
+  fetchBrainExplore, fetchBrainHealth, fetchBanditStats, formatBrainStamp,
+  type BrainAtomMeta, type BrainHealth, type BrainSection, type BanditStats,
 } from '@/lib/brain';
 import {
   fetchHostedBrainInfo,
@@ -18,10 +18,13 @@ import {
   formatBytes,
   capLabel,
   planLabel,
+  shouldShowSyncUpsell,
+  syncUpsellCopy,
   type HostedBrainInfo,
   type QuotaLevel,
 } from '@/lib/hosted-brain';
 import { HostedBrainUpgrade } from '@/components/hosted-brain-upgrade';
+import { HostedBrainProvision } from '@/components/hosted-brain-provision';
 import BrainSearch from '@/views/brain-search';
 
 export const dynamic = 'force-dynamic';
@@ -115,6 +118,68 @@ function HealthCard({ health }: { health: BrainHealth }) {
   );
 }
 
+// ── Retrieval strategy (BRAIN B-7 follow-up, task-49fda69b) ─────────────────
+// scripts/brain_route.py threads retrieval_bandit.py's recommended retrieval
+// config (k, rerank on/off) into the live retrieval loop per query context
+// (commit 49a99aa) — but that wiring was CLI/scripts-only, with no way for an
+// operator to see which strategy the bandit currently favors without reading
+// raw bandit_arms rows. This card surfaces the gateway's read-only snapshot
+// (brain_bandit_stats -> retrieval_bandit.py --summary).
+
+function formatArm(arm: { k: number; rerank_on: boolean } | null): string {
+  if (!arm) return 'no data yet';
+  return `k=${arm.k}, rerank ${arm.rerank_on ? 'on' : 'off'}`;
+}
+
+export function RetrievalStrategyCard({ stats }: { stats: BanditStats }) {
+  if (!stats.available || stats.contexts.length === 0) {
+    return (
+      <Card title="Retrieval strategy" meta="bandit-tuned config">
+        <EmptyState>
+          No bandit data yet. Populated by <code>retrieval_bandit.py</code> replaying
+          harvested traces, then read live by <code>brain_route.py</code>.
+        </EmptyState>
+      </Card>
+    );
+  }
+
+  return (
+    <Card
+      title="Retrieval strategy"
+      meta={`${stats.totalPulls} recorded pull${stats.totalPulls !== 1 ? 's' : ''} across ${stats.contexts.length} context${stats.contexts.length !== 1 ? 's' : ''}`}
+      accent="blue"
+    >
+      <table className="card-table w-full text-sm">
+        <THead cols={[
+          { label: 'Context' },
+          { label: 'Favored config' },
+          { label: 'Mean reward', align: 'right' },
+          { label: 'Pulls', align: 'right' },
+        ]} />
+        <tbody className="divide-y divide-zinc-800/50">
+          {stats.contexts.map((c) => {
+            const favoredMean = c.arms.find(
+              (a) => c.favoredArm && a.k === c.favoredArm.k && a.rerankOn === c.favoredArm.rerank_on,
+            )?.meanReward;
+            return (
+              <tr key={c.context} className="hover:bg-zinc-800/30 transition-colors">
+                <td className="px-4 py-2.5 font-mono text-xs text-zinc-300">{c.context}</td>
+                <td className="px-4 py-2.5 text-zinc-300">
+                  <Badge className={KIND_BADGE.session}>{formatArm(c.favoredArm)}</Badge>
+                </td>
+                <td className="px-4 py-2.5 text-right font-mono text-zinc-400">
+                  {favoredMean === undefined ? '—' : favoredMean.toFixed(3)}
+                </td>
+                <td className="px-4 py-2.5 text-right font-mono text-zinc-400">{c.pullsTotal}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
 // The compose-internal default only resolves inside the local docker-compose
 // network — a remote deployment (Vercel) left on this default can never reach
 // any gateway, which is the "brain not visible" symptom this card explains.
@@ -185,9 +250,11 @@ const QUOTA_ACCENT: Record<QuotaLevel, 'emerald' | 'amber' | 'red' | 'blue'> = {
   unlimited: 'blue',
 };
 
-function HostedBrainCard({ info }: { info: HostedBrainInfo }) {
+function HostedBrainCard({ info, hasBrainActivity }: { info: HostedBrainInfo; hasBrainActivity: boolean }) {
   // Not provisioned — describe the opt-in upsell; self-host stays the default.
   if (!info.provisioned) {
+    const showUpsell = shouldShowSyncUpsell({ plan: info.plan, hasBrainActivity });
+    const upsell = showUpsell ? syncUpsellCopy() : null;
     return (
       <Card title="Hosted brain" meta="not provisioned">
         <div className="p-6 text-sm text-zinc-400 space-y-2">
@@ -201,6 +268,19 @@ function HostedBrainCard({ info }: { info: HostedBrainInfo }) {
             every tier). Provision it with <code className="text-zinc-400">brain host provision</code> once your
             plan includes it.
           </p>
+          {upsell && (
+            <div
+              data-testid="hosted-brain-sync-upsell"
+              className="mt-3 rounded-lg border border-teal-500/40 bg-teal-500/10 px-3.5 py-3 flex flex-col sm:flex-row sm:items-center gap-3"
+            >
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-teal-200">{upsell.headline}</p>
+                <p className="text-xs mt-0.5 text-teal-300/70">{upsell.body}</p>
+              </div>
+              <HostedBrainUpgrade nextPlan="solo" over={false} />
+            </div>
+          )}
+          <HostedBrainProvision provisioned={false} />
         </div>
       </Card>
     );
@@ -281,6 +361,8 @@ function HostedBrainCard({ info }: { info: HostedBrainInfo }) {
             <dd className="text-zinc-300">{info.rotatedAt ? new Date(info.rotatedAt).toLocaleDateString() : '—'}</dd>
           </div>
         </dl>
+
+        <HostedBrainProvision provisioned={true} />
       </div>
     </Card>
   );
@@ -298,10 +380,11 @@ const TAB_SECTIONS: Record<string, BrainSection[]> = {
 };
 
 export default async function BrainView({ tab }: { tab: string }) {
-  const [brain, hosted, health] = await Promise.all([
+  const [brain, hosted, health, bandit] = await Promise.all([
     fetchBrainExplore(TAB_SECTIONS[tab] ?? []),
     fetchHostedBrainInfo(),
     tab === 'overview' ? fetchBrainHealth() : Promise.resolve(null),
+    tab === 'overview' ? fetchBanditStats() : Promise.resolve(null),
   ]);
   if (!brain) return <GatewayDown />;
   if (!brain.initialized) return <NotInitialized />;
@@ -339,7 +422,13 @@ export default async function BrainView({ tab }: { tab: string }) {
       {tab === 'overview' && (
         <>
           {health && <HealthCard health={health} />}
-          {hosted && <HostedBrainCard info={hosted} />}
+          {bandit && <RetrievalStrategyCard stats={bandit} />}
+          {hosted && (
+            <HostedBrainCard
+              info={hosted}
+              hasBrainActivity={brain.totals.sessions > 0 || brain.totals.namespaces > 0}
+            />
+          )}
           <OverviewTab brain={brain} />
         </>
       )}

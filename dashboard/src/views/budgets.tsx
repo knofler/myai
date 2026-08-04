@@ -1,5 +1,7 @@
-import { connectDB, BudgetUsage, User } from '@/lib/db';
+import { connectDB, BudgetUsage, User, BudgetCapOverride } from '@/lib/db';
 import { getActiveTenant, tenantFilter } from '@/lib/tenant';
+import { getBudgetCapSuggestions } from '@/lib/budget-suggestions';
+import { BudgetSuggestionsPanel } from '@/components/budget-suggestions-panel';
 
 export const dynamic = 'force-dynamic';
 
@@ -110,7 +112,10 @@ export default async function BudgetsPage() {
   type AggOne = { _id: null; total: number };
   type AggGrouped = { _id: string | null; cost: number; calls: number };
 
-  const [mtdAgg, todayAgg, byProvider, byModel, byChannel, recentDocs, topExpensive, tenantMembers] = await Promise.all([
+  type CapOverrideDoc = { monthlyHardCapUsd?: number; dailyCapUsd?: number; perChannelCapUsd?: number };
+
+  const [override, mtdAgg, todayAgg, byProvider, byModel, byChannel, recentDocs, topExpensive, tenantMembers] = await Promise.all([
+    BudgetCapOverride.findOne({ tenantId }).lean() as Promise<CapOverrideDoc | null>,
     BudgetUsage.aggregate<AggOne>([
       { $match: { ...tf, createdAt: { $gte: monthStart } } },
       { $group: { _id: null, total: { $sum: '$costUsd' } } },
@@ -139,6 +144,19 @@ export default async function BudgetsPage() {
     User.find({ ...tf }).select('userId email displayName').lean() as Promise<Array<{ userId?: string; email?: string; displayName?: string }>>,
   ]);
 
+  // Operator-applied overrides (Phase 5b §8 follow-up — "Apply suggestion" on
+  // the adaptive cap panel) take precedence over the env-var default. A field
+  // left unset in the override document falls back to its env var.
+  const monthlyHardCapUsd = override?.monthlyHardCapUsd ?? env.monthlyHardCapUsd;
+  const dailyCapUsd = override?.dailyCapUsd ?? env.monthlyDailyCapUsd;
+  const perChannelCapUsd = override?.perChannelCapUsd ?? env.perChannelMonthlyCapUsd;
+
+  const suggestions = await getBudgetCapSuggestions(tenantId, {
+    monthlyHardCapUsd,
+    monthlyDailyCapUsd: dailyCapUsd,
+    perChannelMonthlyCapUsd: perChannelCapUsd ?? 0,
+  }, { enabled: env.enabled });
+
   // Per-member breakdown (M2 Team tier) — only rendered when the tenant has
   // more than one user. Rows without userId (system/agent traffic, pre-M2
   // rows) group under "(unattributed)".
@@ -162,7 +180,7 @@ export default async function BudgetsPage() {
 
   const numFmt = new Intl.NumberFormat('en-US');
 
-  const perChannelEntries = env.perChannelMonthlyCapUsd != null
+  const perChannelEntries = perChannelCapUsd != null
     ? byChannel.filter(c => c._id != null) as Array<AggGrouped & { _id: string }>
     : [];
 
@@ -188,11 +206,11 @@ export default async function BudgetsPage() {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <Gauge label="Today (UTC)" value={today} cap={env.monthlyDailyCapUsd} />
+        <Gauge label="Today (UTC)" value={today} cap={dailyCapUsd} />
         <Gauge
           label="Month-to-date"
           value={mtd}
-          cap={env.monthlyHardCapUsd}
+          cap={monthlyHardCapUsd}
           thresholds={[env.downgradeOpusThreshold, env.downgradeSonnetThreshold]}
         />
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
@@ -207,17 +225,17 @@ export default async function BudgetsPage() {
         </div>
       </div>
 
-      {env.perChannelMonthlyCapUsd != null && perChannelEntries.length > 0 && (
+      {perChannelCapUsd != null && perChannelEntries.length > 0 && (
         <div className="mb-8">
           <h2 className="text-lg font-semibold mb-3">Per-channel spend</h2>
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
             {perChannelEntries.map(c => {
-              const p = pct(c.cost, env.perChannelMonthlyCapUsd!);
+              const p = pct(c.cost, perChannelCapUsd!);
               return (
                 <div key={c._id}>
                   <div className="flex justify-between text-xs mb-1">
                     <span className="font-mono text-zinc-300">{c._id}</span>
-                    <span className="text-zinc-500">{fmtUsd(c.cost)} / {fmtUsd(env.perChannelMonthlyCapUsd!)}</span>
+                    <span className="text-zinc-500">{fmtUsd(c.cost)} / {fmtUsd(perChannelCapUsd!)}</span>
                   </div>
                   <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                     <div
@@ -231,6 +249,8 @@ export default async function BudgetsPage() {
           </div>
         </div>
       )}
+
+      <BudgetSuggestionsPanel suggestions={suggestions} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
         <BreakdownTable title="By provider" rows={byProvider} totalCost={totalCostThisMonth} />
