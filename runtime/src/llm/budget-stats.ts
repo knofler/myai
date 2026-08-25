@@ -20,10 +20,11 @@
  * All time math is UTC, matching `budget-guard.ts`'s month/day boundaries.
  */
 
+import type { Connection, PipelineStage } from 'mongoose';
 import { BudgetUsageModel, isConnected } from '../shared/db.js';
 import { getConfig } from '../shared/config.js';
 import { createChildLogger } from '../shared/logger.js';
-import { tenantScope } from '../shared/scoped-query.js';
+import { tenantScope, resolveScopedModel } from '../shared/scoped-query.js';
 
 const log = createChildLogger({ module: 'budget-stats' });
 
@@ -138,7 +139,7 @@ function emptyBreakdown(from: Date): BudgetBreakdown {
 
 // ── getBudgetStatus ──────────────────────────────────────
 
-export async function getBudgetStatus(tenantId: string): Promise<BudgetStatus> {
+export async function getBudgetStatus(tenantId: string, connection?: Connection): Promise<BudgetStatus> {
   const base = emptyStatus();
 
   if (!isConnected() || !BudgetUsageModel) {
@@ -151,14 +152,15 @@ export async function getBudgetStatus(tenantId: string): Promise<BudgetStatus> {
   const t = tenantScope(tenantId);
   const monthStart = new Date(base.monthStart);
   const dayStart = new Date(base.dayStart);
+  const model = resolveScopedModel(BudgetUsageModel, connection);
 
   try {
     const [mtdResult, todayResult] = await Promise.all([
-      BudgetUsageModel.aggregate<{ _id: null; total: number }>([
+      model.aggregate<{ _id: null; total: number }>([
         { $match: { ...t, createdAt: { $gte: monthStart } } },
         { $group: { _id: null, total: { $sum: '$costUsd' } } },
       ]),
-      BudgetUsageModel.aggregate<{ _id: null; total: number }>([
+      model.aggregate<{ _id: null; total: number }>([
         { $match: { ...t, createdAt: { $gte: dayStart } } },
         { $group: { _id: null, total: { $sum: '$costUsd' } } },
       ]),
@@ -168,7 +170,7 @@ export async function getBudgetStatus(tenantId: string): Promise<BudgetStatus> {
     base.today = todayResult[0]?.total ?? 0;
 
     if (typeof base.perChannelMonthlyCapUsd === 'number') {
-      const perChannelResult = await BudgetUsageModel.aggregate<{ _id: string | null; total: number }>([
+      const perChannelResult = await model.aggregate<{ _id: string | null; total: number }>([
         { $match: { ...t, createdAt: { $gte: monthStart }, channelId: { $ne: null } } },
         { $group: { _id: '$channelId', total: { $sum: '$costUsd' } } },
         { $sort: { total: -1 } },
@@ -187,7 +189,7 @@ export async function getBudgetStatus(tenantId: string): Promise<BudgetStatus> {
 
 // ── getBudgetBreakdown ───────────────────────────────────
 
-export async function getBudgetBreakdown(tenantId: string, opts: { from?: Date; to?: Date } = {}): Promise<BudgetBreakdown> {
+export async function getBudgetBreakdown(tenantId: string, opts: { from?: Date; to?: Date } = {}, connection?: Connection): Promise<BudgetBreakdown> {
   const from = opts.from ?? startOfMonthUTC();
   const to = opts.to;
 
@@ -200,25 +202,26 @@ export async function getBudgetBreakdown(tenantId: string, opts: { from?: Date; 
   if (to) {
     (match.createdAt as Record<string, Date>).$lte = to;
   }
+  const model = resolveScopedModel(BudgetUsageModel, connection);
 
   try {
     const [byProvider, byModel, byChannel, byUser] = await Promise.all([
-      BudgetUsageModel.aggregate<{ _id: string | null; cost: number; calls: number }>([
+      model.aggregate<{ _id: string | null; cost: number; calls: number }>([
         { $match: match },
         { $group: { _id: '$provider', cost: { $sum: '$costUsd' }, calls: { $sum: 1 } } },
         { $sort: { cost: -1 } },
       ]),
-      BudgetUsageModel.aggregate<{ _id: string | null; cost: number; calls: number }>([
+      model.aggregate<{ _id: string | null; cost: number; calls: number }>([
         { $match: match },
         { $group: { _id: '$model', cost: { $sum: '$costUsd' }, calls: { $sum: 1 } } },
         { $sort: { cost: -1 } },
       ]),
-      BudgetUsageModel.aggregate<{ _id: string | null; cost: number; calls: number }>([
+      model.aggregate<{ _id: string | null; cost: number; calls: number }>([
         { $match: match },
         { $group: { _id: '$channelId', cost: { $sum: '$costUsd' }, calls: { $sum: 1 } } },
         { $sort: { cost: -1 } },
       ]),
-      BudgetUsageModel.aggregate<{ _id: string | null; cost: number; calls: number }>([
+      model.aggregate<{ _id: string | null; cost: number; calls: number }>([
         { $match: match },
         { $group: { _id: '$userId', cost: { $sum: '$costUsd' }, calls: { $sum: 1 } } },
         { $sort: { cost: -1 } },
@@ -238,6 +241,91 @@ export async function getBudgetBreakdown(tenantId: string, opts: { from?: Date; 
   }
 }
 
+// ── getCostAttribution (per-tenant $ breakdown by repo/model/task-type/lane) ─
+//
+// The itemised cost-attribution read the `/analytics` dashboard's cost panel
+// and the overage-invoicing substrate consume: "how much did this tenant
+// spend, sliced by repo / model / task-type / premium-vs-standard lane".
+// Distinct from `getBudgetBreakdown` (provider/model/channel/user, driven by
+// the interactive-chat call sites) — this slices by the dimensions the
+// pricing page actually bills on. Mirrors `getUsageBreakdown` in
+// `usage-store.ts` (the parallel PRODUCT-meter rollup) but sums `costUsd`
+// (the $ meter) instead of `quantity`. Rows missing a dimension (interactive
+// chat calls never carry `repo`/`taskType`) group under 'unattributed'.
+
+export interface CostAttributionGroup {
+  key: string;      // dimension value ('unattributed' when the field was absent)
+  cost: number;      // summed costUsd
+  calls: number;      // row count
+}
+
+export interface CostAttribution {
+  from: string;       // ISO — window start actually queried
+  to?: string;         // ISO — window end (exclusive) when bounded
+  byRepo: CostAttributionGroup[];
+  byModel: CostAttributionGroup[];
+  byTaskType: CostAttributionGroup[];
+  /** Two buckets: 'premium' (runner-claimed autonomous session) vs
+   *  'standard' (gateway-inline interactive lane). */
+  byLane: CostAttributionGroup[];
+}
+
+function emptyCostAttribution(from: Date, to?: Date): CostAttribution {
+  return { from: from.toISOString(), to: to?.toISOString(), byRepo: [], byModel: [], byTaskType: [], byLane: [] };
+}
+
+export async function getCostAttribution(
+  tenantId: string,
+  opts: { from?: Date; to?: Date } = {},
+  connection?: Connection,
+): Promise<CostAttribution> {
+  const from = opts.from ?? startOfMonthUTC();
+  const to = opts.to;
+
+  if (!isConnected() || !BudgetUsageModel) {
+    log.debug('getCostAttribution: MongoDB not connected — returning empty breakdown');
+    return emptyCostAttribution(from, to);
+  }
+
+  const match: Record<string, unknown> = { ...tenantScope(tenantId), createdAt: { $gte: from } };
+  if (to) {
+    (match.createdAt as Record<string, Date>).$lte = to;
+  }
+  const model = resolveScopedModel(BudgetUsageModel, connection);
+
+  const grouped = (keyExpr: unknown): PipelineStage[] => [
+    { $match: match },
+    { $group: { _id: keyExpr, cost: { $sum: '$costUsd' }, calls: { $sum: 1 } } },
+    { $sort: { cost: -1 } },
+  ];
+
+  try {
+    const [byRepo, byModel, byTaskType, byLane] = await Promise.all([
+      model.aggregate<{ _id: string | null; cost: number; calls: number }>(grouped('$repo')),
+      model.aggregate<{ _id: string | null; cost: number; calls: number }>(grouped('$model')),
+      model.aggregate<{ _id: string | null; cost: number; calls: number }>(grouped('$taskType')),
+      model.aggregate<{ _id: boolean | null; cost: number; calls: number }>(
+        grouped({ $cond: [{ $eq: ['$premium', true] }, 'premium', 'standard'] }),
+      ),
+    ]);
+
+    const toGroups = (rows: Array<{ _id: unknown; cost: number; calls: number }>): CostAttributionGroup[] =>
+      rows.map(r => ({ key: r._id == null || r._id === '' ? 'unattributed' : String(r._id), cost: r.cost, calls: r.calls }));
+
+    return {
+      from: from.toISOString(),
+      to: to?.toISOString(),
+      byRepo: toGroups(byRepo),
+      byModel: toGroups(byModel),
+      byTaskType: toGroups(byTaskType),
+      byLane: toGroups(byLane),
+    };
+  } catch (err) {
+    log.warn({ err }, 'getCostAttribution: aggregation failed — returning empty breakdown');
+    return emptyCostAttribution(from, to);
+  }
+}
+
 // ── getBudgetUsage (paginated raw rows) ──────────────────
 
 const DEFAULT_USAGE_LIMIT = 50;
@@ -246,6 +334,7 @@ const MAX_USAGE_LIMIT = 500;
 export async function getBudgetUsage(
   tenantId: string,
   q: BudgetUsageQuery = {},
+  connection?: Connection,
 ): Promise<{ rows: BudgetUsageRow[]; nextCursor?: string }> {
   const limitRaw = typeof q.limit === 'number' && Number.isFinite(q.limit) ? q.limit : DEFAULT_USAGE_LIMIT;
   const limit = Math.min(Math.max(1, Math.floor(limitRaw)), MAX_USAGE_LIMIT);
@@ -275,7 +364,7 @@ export async function getBudgetUsage(
   if (q.userId) match.userId = q.userId;
 
   try {
-    const docs = await BudgetUsageModel.find(match)
+    const docs = await resolveScopedModel(BudgetUsageModel, connection).find(match)
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean();

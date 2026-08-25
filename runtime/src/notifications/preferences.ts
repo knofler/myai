@@ -29,6 +29,12 @@ export interface NotificationPrefs {
   push: boolean;
   /** Email delivery of background events. Opt-in — off unless the tenant enables it. */
   email: boolean;
+  /** Slack delivery of background events (per-tenant Incoming Webhook). Opt-in —
+   *  off unless the tenant both enables it AND has a webhook URL configured. */
+  slack: boolean;
+  /** Tenant's Slack Incoming Webhook URL. Undefined means Slack can't deliver
+   *  even if `slack` is true. */
+  slackWebhookUrl?: string;
   /** Event-family toggles; a family absent from the map defaults to enabled. */
   events: Record<string, boolean>;
   /** Quiet window "HH:MM" (24h, server-local). Both set → window active. */
@@ -46,6 +52,7 @@ export const DEFAULT_PREFS: NotificationPrefs = {
   inApp: true,
   push: true,
   email: false, // opt-in — per-event email is heavier than push, off by default
+  slack: false, // opt-in — requires a tenant-configured webhook URL to actually deliver
   events: { task: true, plan: true, runner: true, dispatch: true, message: true, other: true },
 };
 
@@ -95,10 +102,20 @@ export function sanitizePrefsPatch(input: unknown): Partial<NotificationPrefs> {
   const raw = input as Record<string, unknown>;
   const patch: Partial<NotificationPrefs> = {};
 
-  for (const key of ['inApp', 'push', 'email'] as const) {
+  for (const key of ['inApp', 'push', 'email', 'slack'] as const) {
     if (raw[key] !== undefined) {
       if (typeof raw[key] !== 'boolean') throw new Error(`${key} must be a boolean`);
       patch[key] = raw[key];
+    }
+  }
+
+  if (raw.slackWebhookUrl !== undefined) {
+    if (raw.slackWebhookUrl === null || raw.slackWebhookUrl === '') {
+      patch.slackWebhookUrl = undefined; // explicit clear
+    } else if (typeof raw.slackWebhookUrl === 'string' && /^https:\/\/hooks\.slack\.com\/services\//.test(raw.slackWebhookUrl)) {
+      patch.slackWebhookUrl = raw.slackWebhookUrl;
+    } else {
+      throw new Error('slackWebhookUrl must be a valid https://hooks.slack.com/services/... URL, or empty to clear');
     }
   }
 
@@ -146,6 +163,8 @@ function mergeWithDefaults(doc: Partial<NotificationPrefs> | null | undefined): 
     inApp: doc?.inApp ?? DEFAULT_PREFS.inApp,
     push: doc?.push ?? DEFAULT_PREFS.push,
     email: doc?.email ?? DEFAULT_PREFS.email,
+    slack: doc?.slack ?? DEFAULT_PREFS.slack,
+    slackWebhookUrl: doc?.slackWebhookUrl,
     events: { ...DEFAULT_PREFS.events, ...(doc?.events ?? {}) },
     quietStart: doc?.quietStart,
     quietEnd: doc?.quietEnd,
@@ -187,10 +206,10 @@ export async function updatePreferences(tenantId: string, patch: Partial<Notific
 
   const set: Record<string, unknown> = {};
   const unset: Record<string, 1> = {};
-  for (const key of ['inApp', 'push', 'email', 'events'] as const) {
+  for (const key of ['inApp', 'push', 'email', 'slack', 'events'] as const) {
     if (patch[key] !== undefined) set[key] = patch[key];
   }
-  for (const key of ['quietStart', 'quietEnd'] as const) {
+  for (const key of ['quietStart', 'quietEnd', 'slackWebhookUrl'] as const) {
     if (key in patch) {
       if (patch[key] === undefined) unset[key] = 1;
       else set[key] = patch[key];

@@ -1,5 +1,12 @@
 # myai backup / myai restore — snapshot & restore the brain + config
 
+> **Scope note:** this doc covers **one operator's own local brain** — a
+> self-service tool you run by hand. If you're looking for backup/replication
+> of the **hosted-brain server store** instead (ADR-017's per-tenant bare repos
+> on the gateway host — a different, unattended, multi-tenant problem), see
+> [`architecture/ADR-036-hosted-brain-backup-replication.md`](../architecture/ADR-036-hosted-brain-backup-replication.md)
+> and `scripts/hosted_brain_backup.sh`.
+
 `myai backup` and `myai restore` are the disaster-recovery and machine-migration
 pair for your local myAI state. They snapshot the two things that live outside
 any code repo and can't be regenerated:

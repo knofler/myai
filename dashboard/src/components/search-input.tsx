@@ -15,7 +15,7 @@ export function SearchInput({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-md px-4 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50 transition-colors"
+      className="w-full max-w-md bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-md px-4 py-2 text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50 transition-colors"
     />
   );
 }

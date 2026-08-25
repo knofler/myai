@@ -8,6 +8,7 @@
  * Per-collection windows (env-configurable, days):
  *   - Task      (terminal states only: done/dead_letter) — TASK_RETENTION_DAYS, default 90
  *   - PlanDay   (terminal state only: done)              — PLAN_RETENTION_DAYS, default 180
+ *   - TrashEntry (soft-deleted tasks/plans, trash-bin.ts) — TRASH_RETENTION_DAYS, default 30
  *   - Audit log (day-files, audit-log.ts)                — AUDIT_RETENTION_DAYS, default 400
  *
  * Legal hold: a tenant flagged `Tenant.legalHold=true` (support/operator
@@ -31,6 +32,7 @@ import { join } from 'node:path';
 
 import { PlanDayModel, TaskModel, TenantModel } from '../shared/db.js';
 import { auditDir } from './audit-log.js';
+import { purgeExpiredTrash } from './trash-bin.js';
 import { createChildLogger } from '../shared/logger.js';
 
 const log = createChildLogger({ module: 'data-retention' });
@@ -45,6 +47,9 @@ export interface RetentionPurgeResult {
   ranAt: Date;
   tasksDeleted: number;
   planDaysDeleted: number;
+  /** Trash-bin entries (soft-deleted tasks/plans, core/trash-bin.ts) past
+   *  TRASH_RETENTION_DAYS — the deferred hard delete of the recoverable window. */
+  trashEntriesDeleted: number;
   auditFilesDeleted: number;
   auditLinesRedacted: number;
   heldTenants: string[];
@@ -82,6 +87,10 @@ export async function runRetentionPurge(
     updatedAt: { $lt: planCutoff },
   });
 
+  // Trash bin (soft-deleted tasks/plans): entries past TRASH_RETENTION_DAYS
+  // lose their recoverable window here — same legal-hold exclusion.
+  const trashDeleted = await purgeExpiredTrash(now, held);
+
   const auditCutoff = new Date(now.getTime() - AUDIT_RETENTION_DAYS * DAY_MS);
   const audit = purgeAuditLog(auditCutoff, held, env);
 
@@ -89,6 +98,7 @@ export async function runRetentionPurge(
     ranAt: now,
     tasksDeleted: taskRes.deletedCount ?? 0,
     planDaysDeleted: planRes.deletedCount ?? 0,
+    trashEntriesDeleted: trashDeleted,
     auditFilesDeleted: audit.filesDeleted,
     auditLinesRedacted: audit.linesRedacted,
     heldTenants: held,

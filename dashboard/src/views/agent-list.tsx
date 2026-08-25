@@ -45,7 +45,7 @@ export function AgentList({ agents, categories }: { agents: AgentItem[]; categor
         <div className="flex flex-wrap gap-1.5">
           <button
             onClick={() => setCategory(null)}
-            className={`px-2.5 py-1 text-xs rounded-md transition-colors ${!category ? 'gel-badge bg-teal-500/20 text-teal-300' : 'bg-zinc-800 text-zinc-500 hover:text-zinc-300'}`}
+            className={`px-2.5 py-1 text-xs rounded-md transition-colors ${!category ? 'gel-badge bg-teal-500/20 text-teal-300' : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))]'}`}
           >
             All
           </button>
@@ -53,7 +53,7 @@ export function AgentList({ agents, categories }: { agents: AgentItem[]; categor
             <button
               key={c}
               onClick={() => setCategory(category === c ? null : c)}
-              className={`px-2.5 py-1 text-xs rounded-md transition-colors ${category === c ? 'gel-badge bg-teal-500/20 text-teal-300' : 'bg-zinc-800 text-zinc-500 hover:text-zinc-300'}`}
+              className={`px-2.5 py-1 text-xs rounded-md transition-colors ${category === c ? 'gel-badge bg-teal-500/20 text-teal-300' : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))]'}`}
             >
               {c}
             </button>
@@ -68,16 +68,16 @@ export function AgentList({ agents, categories }: { agents: AgentItem[]; categor
           <button
             key={a._id}
             onClick={() => openDetail(a)}
-            className="gel-surface tap-press text-left bg-zinc-900 border border-zinc-800 rounded-lg p-4 hover:border-teal-500/40 active:border-teal-500/60"
+            className="gel-surface tap-press text-left bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-4 hover:border-teal-500/40 active:border-teal-500/60"
           >
             <div className="flex items-start justify-between gap-2 mb-2">
-              <p className="font-medium text-sm text-zinc-200">{a.name}</p>
+              <p className="font-medium text-sm text-[rgb(var(--text-primary))]">{a.name}</p>
               <CategoryBadge category={a.category} />
             </div>
-            <p className="text-xs text-zinc-500 line-clamp-2">{a.description}</p>
+            <p className="text-xs text-[rgb(var(--text-muted))] line-clamp-2">{a.description}</p>
             <div className="flex flex-wrap gap-1 mt-3">
               {a.tools.slice(0, 5).map(t => (
-                <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">{t}</span>
+                <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-[rgb(var(--text-secondary))]">{t}</span>
               ))}
               {a.tools.length > 5 && (
                 <span className="text-[10px] text-zinc-600">+{a.tools.length - 5}</span>
@@ -98,20 +98,20 @@ export function AgentList({ agents, categories }: { agents: AgentItem[]; categor
               <CategoryBadge category={selected.category} />
             </div>
             <div>
-              <p className="text-xs text-zinc-500 uppercase mb-1">Description</p>
-              <p className="text-sm text-zinc-300">{selected.description}</p>
+              <p className="text-xs text-[rgb(var(--text-muted))] uppercase mb-1">Description</p>
+              <p className="text-sm text-[rgb(var(--text-primary))]">{selected.description}</p>
             </div>
             <div>
-              <p className="text-xs text-zinc-500 uppercase mb-1">Tools</p>
+              <p className="text-xs text-[rgb(var(--text-muted))] uppercase mb-1">Tools</p>
               <div className="flex flex-wrap gap-1.5">
                 {selected.tools.map(t => (
-                  <span key={t} className="text-xs font-mono px-2 py-0.5 bg-zinc-800 rounded text-zinc-300">{t}</span>
+                  <span key={t} className="text-xs font-mono px-2 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-[rgb(var(--text-primary))]">{t}</span>
                 ))}
               </div>
             </div>
             <div>
-              <p className="text-xs text-zinc-500 uppercase mb-1">Instructions</p>
-              <pre className="text-xs text-zinc-400 bg-zinc-950 border border-zinc-800 rounded-md p-4 overflow-x-auto whitespace-pre-wrap max-h-[60vh]">
+              <p className="text-xs text-[rgb(var(--text-muted))] uppercase mb-1">Instructions</p>
+              <pre className="text-xs text-[rgb(var(--text-secondary))] bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded-md p-4 overflow-x-auto whitespace-pre-wrap max-h-[60vh]">
                 {detail?.instructions || 'Loading...'}
               </pre>
             </div>

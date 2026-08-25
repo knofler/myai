@@ -33,3 +33,57 @@ if [ -z "${GATEWAY_LOCAL_TOKEN:-}" ]; then
 fi
 GATEWAY_LOCAL_TOKEN="${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}"
 export GATEWAY_LOCAL_TOKEN
+
+# ─────────────────────────────────────────────────────────────────────────
+# 401-vs-empty helpers (task-07010faf, 2026-08-06): reconcile_review_tasks.sh,
+# archive_runner_backlog.sh, and queue_topup.sh all wrap their gateway reads in
+# a `curl -sf ... || echo {}` pattern. `-f` makes curl discard the body AND
+# exit non-zero on ANY non-2xx response, so a 401/403 (e.g. a machine still
+# holding this file's own default GATEWAY_LOCAL_TOKEN — the exact fleet-wide
+# incident from the 2026-08-02 handoff note) collapses to the same empty
+# string as a genuinely-empty queue/backlog or a plain unreachable gateway.
+# The caller then silently no-ops with zero signal that auth, not data, was
+# the reason. These helpers are called ONLY on that already-failed path (the
+# primary `curl -sf` call is untouched, so its shape/behavior — and every
+# existing test stub for the success path — stays exactly as before) to tell
+# the three cases apart:
+#   - auth-fail    (HTTP 401/403)         → loud, distinct warning
+#   - unreachable  (HTTP "000" / no code) → the existing quiet log line
+#   - a real empty 200 body is never routed through here at all — it never
+#     hit the `-z "$raw"` branch in the first place.
+# ─────────────────────────────────────────────────────────────────────────
+
+# gw_probe_status <url> [timeout-seconds] → echoes the HTTP status code for a
+# throwaway POST to <url> ("000" if the connection itself failed: DNS/refused/
+# timeout). Never used on the hot path — only to diagnose a `curl -sf` call
+# to the same URL that has already come back empty.
+gw_probe_status() {
+  curl -s -o /dev/null -w '%{http_code}' -m "${2:-8}" -X POST "$1" \
+    -H 'content-type: application/json' \
+    -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
+    -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"ping","arguments":{}},"id":0}' \
+    2>/dev/null
+}
+
+# gw_classify_failure <url> [timeout-seconds] → "auth-fail" | "unreachable"
+gw_classify_failure() {
+  case "$(gw_probe_status "$1" "${2:-8}")" in
+    401|403) echo "auth-fail" ;;
+    *)       echo "unreachable" ;;
+  esac
+}
+
+# gw_warn_auth_fail <context-label> → loud, distinct warning on stderr for a
+# confirmed 401/403 — never call this for a plain-unreachable or genuinely-
+# empty result.
+gw_warn_auth_fail() {
+  {
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "  GATEWAY AUTH FAILURE (401/403) — ${1:-gateway call}"
+    echo "  GATEWAY_LOCAL_TOKEN looks wrong/stale on this machine (still the"
+    echo "  default vs. the gateway's real token?). This is NOT a genuinely"
+    echo "  empty result — do not trust any 'nothing to do' from this run"
+    echo "  until the token is fixed. See scripts/lib/gateway.sh."
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+  } >&2
+}

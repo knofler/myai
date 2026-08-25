@@ -38,15 +38,15 @@ export function DetailPanel({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="panel-enter fixed top-0 right-0 h-screen w-full sm:w-[600px] sm:max-w-[90vw] bg-zinc-900 border-l border-zinc-800 z-50 overflow-y-auto pb-[env(safe-area-inset-bottom)]"
+        className="panel-enter fixed top-0 right-0 h-screen w-full sm:w-[600px] sm:max-w-[90vw] bg-[rgb(var(--bg-surface))] border-l border-[rgb(var(--border-subtle))] z-50 overflow-y-auto pb-[env(safe-area-inset-bottom)]"
       >
-        <div className="sticky top-0 bg-zinc-900 border-b border-zinc-800 px-6 py-4 pt-[calc(1rem+env(safe-area-inset-top))] flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-zinc-100 truncate">{title}</h2>
+        <div className="sticky top-0 bg-[rgb(var(--bg-surface))] border-b border-[rgb(var(--border-subtle))] px-6 py-4 pt-[calc(1rem+env(safe-area-inset-top))] flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))] truncate">{title}</h2>
           <button
             ref={closeRef}
             onClick={onClose}
             aria-label="Close panel"
-            className="tap-press shrink-0 flex items-center justify-center w-9 h-9 -mr-2 rounded-lg text-zinc-400 hover:text-zinc-200 active:bg-zinc-800 text-xl leading-none"
+            className="tap-press shrink-0 flex items-center justify-center w-9 h-9 -mr-2 rounded-lg text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] active:bg-[rgb(var(--bg-hover))] text-xl leading-none"
           >
             ×
           </button>

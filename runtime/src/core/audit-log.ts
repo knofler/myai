@@ -14,6 +14,12 @@
  * record of who exported what. Still signal, not noise: one line per login,
  * one per bulk export, same order of magnitude as `session.revoke`.
  *
+ * `account.locked` (core/user-auth.ts brute-force lockout): fired ONCE per
+ * lockout event, not per failed attempt — the failed attempts themselves are
+ * noise, but "this account just got locked out" is exactly the kind of
+ * privileged-surface signal this trail exists for, same posture as
+ * `session.revoke`.
+ *
  * One more addition (`marketplace/artifact-integrity.ts`): `marketplace.
  * artifact_hash_mismatch` records a fetch-time SHA-256 recheck failure against
  * `ListingVersion.manifestHash` (ADR-029 §4/checklist #5, any consumption
@@ -21,6 +27,16 @@
  * loader). A mismatch is either an infra fault or an active tampering
  * attempt, so it is logged the same way ADR-027's Repudiation row logs a
  * denied tool call — signal, one line per abort.
+ *
+ * Two more additions (`marketplace/malware-scan.ts`, ADR-035 §6): `marketplace.
+ * scan_verdict` records EVERY malware/static-analysis scan verdict at the
+ * ADR-029 §3 `approved → published` promotion step — `clean`, `flagged`,
+ * `blocked`, and a scanner-unreachable fail-closed event — keyed by
+ * `{listingId, version, manifestHash}` so "what did the scan find on this
+ * artifact" is answerable after the fact. `marketplace.scan_override`
+ * records a reviewer's override of a `flagged` verdict, carrying the reviewer
+ * identity and mandatory justification text (ADR-035 §4/§6) — `blocked`
+ * verdicts never produce this event, they have no override path.
  *
  * Persistence: append-only JSONL under `auditDir()` (env `MYAI_AUDIT_DIR`,
  * default `<cwd>/data/audit`), one file per UTC day (`audit-YYYY-MM-DD.jsonl`).
@@ -46,7 +62,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { CtxRole, ToolContext } from './tenant-context.js';
@@ -64,12 +80,18 @@ export type AuditVia = 'jwt' | 'api-key' | 'system' | 'operator' | 'local';
 export const AUDIT_ACTIONS = [
   'role.change',
   'member.remove',
+  // Team-tier per-member budget scoping (task-82854b12) — owner/admin sets
+  // or clears an individual member's $ / off-hours-minutes cap.
+  'member.budget_cap_set',
   'invite.create',
   'invite.revoke',
   'apikey.create',
   'apikey.rotate',
   'apikey.revoke',
   'tenantkey.rotate',
+  // Master KMS key rotation (ADR-010 §3.7, envelope encryption) — re-wraps
+  // every tenant's DEK; tenantId is 'system' since this is a cross-tenant op.
+  'masterkey.rotate',
   'rbac.denied',
   'billing.update',
   'connector.change',
@@ -78,17 +100,52 @@ export const AUDIT_ACTIONS = [
   'account.erasure_request',
   'account.erasure_cancel',
   'account.erasure_purge',
+  // Operator-side single-tenant create (`POST /api/tenants`, `myai tenant create`)
+  // — distinct from `tenant.cancellation_purge` etc below, and from the
+  // per-row bulk-import path (tenant-bulk-import.ts), which does not audit-log.
+  'tenant.create',
+  'tenant.suspend',
+  'tenant.reactivate',
+  'tenant.cancellation_scheduled',
+  'tenant.cancellation_reversed',
+  'tenant.cancellation_purge',
   'giftcode.mint',
   'giftcode.redeem',
   'giftcode.revoke',
+  'referral.signup_credited',
   'totp.enable',
   'totp.disable',
   'totp.policy_change',
   'session.revoke',
   'session.revoke_all',
   'session.login',
+  // Operator support-login-as-tenant (core/impersonation.ts) — start/end of a
+  // time-boxed support session, plus EVERY request made under one (`action`)
+  // and every write a read-only session attempted (`denied_write`). All four
+  // land in the TARGET tenant's chain so the tenant's own audit trail shows
+  // exactly what support saw and did.
+  'impersonation.start',
+  'impersonation.end',
+  'impersonation.action',
+  'impersonation.denied_write',
+  'account.locked',
   'data.export',
+  // Trash-bin soft delete + restore (core/trash-bin.ts) — a task or a repo's
+  // plan moved into the recoverable TrashEntry collection, and the reverse.
+  // Every surface (MCP tool, plan_set replace) routes through the store, which
+  // records these itself so no caller can delete un-audited.
+  'task.trash',
+  'task.restore',
+  'plan.trash',
+  'plan.restore',
   'marketplace.artifact_hash_mismatch',
+  'marketplace.scan_verdict',
+  'marketplace.scan_override',
+  // Tenant MCP tool plugins (mcp/plugin-tools.ts, env-gated) — registry
+  // changes (register/update/remove; handler URLs never recorded — they embed
+  // tokens) and every proxied invocation (name, ok/error, latency).
+  'plugintool.change',
+  'plugintool.invoke',
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -194,6 +251,60 @@ function dayFile(dir: string, iso: string): string {
 
 function isDayFile(name: string): boolean {
   return name.startsWith('audit-') && name.endsWith('.jsonl');
+}
+
+/**
+ * Irreversibly remove every event for ONE tenant across all day-files —
+ * the audit-trail leg of `tenant-lifecycle.ts`'s cancellation-purge sweep
+ * (ADR §7.3 tenant lifecycle DoD explicitly lists "audit" among the
+ * collections purged on cancel). Distinct from `data-retention.ts`'s
+ * `purgeAuditLog`, which reaps by AGE across every tenant; this reaps by
+ * TENANT regardless of age, because the whole account is being torn down.
+ * A day-file with no other tenants' lines left is deleted outright; one that
+ * still has other tenants' events is rewritten keeping only those — the same
+ * "keep the other tenant's lines" shape `purgeAuditLog` already uses, just
+ * inverted (exclude this tenant instead of include a held one). A corrupt
+ * line is kept rather than guessed at, same tolerance as every other reader
+ * in this file.
+ */
+export function purgeTenantAuditTrail(
+  tenantId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { filesDeleted: number; linesRemoved: number } {
+  const dir = auditDir(env);
+  let filesDeleted = 0;
+  let linesRemoved = 0;
+  if (!existsSync(dir)) return { filesDeleted, linesRemoved };
+
+  for (const name of readdirSync(dir)) {
+    if (!isDayFile(name)) continue;
+    const path = join(dir, name);
+    const raw = readFileSync(path, 'utf8');
+    const lines = raw.split('\n').filter((l) => l.trim());
+    const kept: string[] = [];
+    for (const line of lines) {
+      let lineTenantId: string | undefined;
+      try {
+        lineTenantId = (JSON.parse(line) as { tenantId?: string }).tenantId;
+      } catch {
+        kept.push(line); // corrupt line — never guess, keep it
+        continue;
+      }
+      if (lineTenantId === tenantId) {
+        linesRemoved++;
+      } else {
+        kept.push(line);
+      }
+    }
+    if (kept.length === 0) {
+      unlinkSync(path);
+      filesDeleted++;
+    } else if (kept.length !== lines.length) {
+      writeFileSync(path, `${kept.join('\n')}\n`, 'utf8');
+    }
+  }
+
+  return { filesDeleted, linesRemoved };
 }
 
 /** Chain genesis — the `prevHash` of a tenant's first-ever event. */

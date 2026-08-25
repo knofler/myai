@@ -43,11 +43,11 @@ export function IdleTimeoutSettings() {
   };
 
   return (
-    <div className="rounded-lg border border-zinc-800 p-4">
+    <div className="rounded-lg border border-[rgb(var(--border-subtle))] p-4">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <p className="text-sm text-zinc-200">Auto sign-out after inactivity</p>
-          <p className="mt-1 text-xs text-zinc-500">
+          <p className="text-sm text-[rgb(var(--text-primary))]">Auto sign-out after inactivity</p>
+          <p className="mt-1 text-xs text-[rgb(var(--text-muted))]">
             Shows a warning before signing this device out automatically — useful on a shared machine.
           </p>
         </div>
@@ -56,7 +56,7 @@ export function IdleTimeoutSettings() {
           <select
             value={minutes}
             onChange={(e) => onChange(Number(e.target.value) as IdleTimeoutMinutes)}
-            className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200"
+            className="rounded border border-zinc-700 bg-[rgb(var(--bg-surface))] px-2 py-1.5 text-xs text-[rgb(var(--text-primary))]"
           >
             {IDLE_TIMEOUT_OPTIONS.map((opt) => (
               <option key={opt} value={opt}>

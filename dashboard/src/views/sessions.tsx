@@ -128,32 +128,32 @@ export default async function SessionsPage() {
       {totalVectors > 0 && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8">
           {/* By source */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-            <div className="px-4 py-3 border-b border-zinc-800">
+          <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+            <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))]">
               <h2 className="text-lg font-semibold">Vectors by source</h2>
             </div>
             <table className="card-table w-full text-sm">
               <thead>
-                <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+                <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
                   <th className="px-4 py-2">Source</th>
                   <th className="px-4 py-2 text-right">Count</th>
                   <th className="px-4 py-2 text-right">% of total</th>
                   <th className="px-4 py-2 text-right">Latest</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                 {bySource.map((s) => (
-                  <tr key={s._id ?? '(none)'} className="hover:bg-zinc-800/30 transition-colors">
+                  <tr key={s._id ?? '(none)'} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
                     <td className="px-4 py-2">
                       <SourceBadge source={s._id || '(none)'} />
                     </td>
-                    <td className="px-4 py-2 text-right text-zinc-300 font-mono">
+                    <td className="px-4 py-2 text-right text-[rgb(var(--text-primary))] font-mono">
                       {numFmt.format(s.count)}
                     </td>
-                    <td className="px-4 py-2 text-right text-xs text-zinc-500 font-mono">
+                    <td className="px-4 py-2 text-right text-xs text-[rgb(var(--text-muted))] font-mono">
                       {totalVectors > 0 ? ((s.count / totalVectors) * 100).toFixed(1) : 0}%
                     </td>
-                    <td className="px-4 py-2 text-right text-xs text-zinc-500">
+                    <td className="px-4 py-2 text-right text-xs text-[rgb(var(--text-muted))]">
                       {s.latestAt ? new Date(s.latestAt).toLocaleDateString() : '-'}
                     </td>
                   </tr>
@@ -163,31 +163,31 @@ export default async function SessionsPage() {
           </div>
 
           {/* By repo */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-            <div className="px-4 py-3 border-b border-zinc-800">
+          <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+            <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))]">
               <h2 className="text-lg font-semibold">Vectors by repo</h2>
             </div>
             {byRepo.length === 0 ? (
-              <div className="p-8 text-center text-sm text-zinc-500">No repo data.</div>
+              <div className="p-8 text-center text-sm text-[rgb(var(--text-muted))]">No repo data.</div>
             ) : (
               <table className="card-table w-full text-sm">
                 <thead>
-                  <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+                  <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
                     <th className="px-4 py-2">Repo</th>
                     <th className="px-4 py-2 text-right">Vectors</th>
                     <th className="px-4 py-2 text-right">% of total</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800/50">
+                <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                   {byRepo.map((r) => (
-                    <tr key={r._id ?? '(unknown)'} className="hover:bg-zinc-800/30 transition-colors">
-                      <td className="px-4 py-2 text-zinc-300 font-mono text-xs">
+                    <tr key={r._id ?? '(unknown)'} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                      <td className="px-4 py-2 text-[rgb(var(--text-primary))] font-mono text-xs">
                         {r._id || '(unknown)'}
                       </td>
-                      <td className="px-4 py-2 text-right text-zinc-300 font-mono">
+                      <td className="px-4 py-2 text-right text-[rgb(var(--text-primary))] font-mono">
                         {numFmt.format(r.count)}
                       </td>
-                      <td className="px-4 py-2 text-right text-xs text-zinc-500 font-mono">
+                      <td className="px-4 py-2 text-right text-xs text-[rgb(var(--text-muted))] font-mono">
                         {totalVectors > 0 ? ((r.count / totalVectors) * 100).toFixed(1) : 0}%
                       </td>
                     </tr>
@@ -211,25 +211,25 @@ export default async function SessionsPage() {
       </div>
 
       {/* ── Gateway Sessions Section (existing) ────────────── */}
-      <div className="mb-3 border-t border-zinc-800 pt-6">
+      <div className="mb-3 border-t border-[rgb(var(--border-subtle))] pt-6">
         <h2 className="text-lg font-semibold">Gateway sessions</h2>
-        <p className="text-sm text-zinc-500 mt-1">
+        <p className="text-sm text-[rgb(var(--text-muted))] mt-1">
           {serialized.length} sessions ({active.length} active, {closed.length} closed)
         </p>
       </div>
 
       {serialized.length === 0 ? (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-8 text-center">
-          <p className="text-zinc-400">No sessions yet</p>
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-8 text-center">
+          <p className="text-[rgb(var(--text-secondary))]">No sessions yet</p>
           <p className="text-xs text-zinc-600 mt-1">
             Create one via WebSocket (:3201) or POST /api/sessions
           </p>
         </div>
       ) : (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
           <table className="card-table w-full text-sm">
             <thead>
-              <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+              <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
                 <th className="px-4 py-3">Session ID</th>
                 <th className="px-4 py-3">Agent</th>
                 <th className="px-4 py-3 text-center">Messages</th>
@@ -238,31 +238,31 @@ export default async function SessionsPage() {
                 <th className="px-4 py-3">Last Activity</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800/50">
+            <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
               {serialized.map((s) => (
-                <tr key={s._id} className="hover:bg-zinc-800/30 transition-colors">
-                  <td className="px-4 py-2.5 font-mono text-xs text-zinc-400">
+                <tr key={s._id} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                  <td className="px-4 py-2.5 font-mono text-xs text-[rgb(var(--text-secondary))]">
                     {s.sessionId.slice(0, 8)}...
                   </td>
-                  <td className="px-4 py-2.5 text-zinc-300">{s.agentName}</td>
-                  <td className="px-4 py-2.5 text-center text-zinc-400">{s.messageCount}</td>
+                  <td className="px-4 py-2.5 text-[rgb(var(--text-primary))]">{s.agentName}</td>
+                  <td className="px-4 py-2.5 text-center text-[rgb(var(--text-secondary))]">{s.messageCount}</td>
                   <td className="px-4 py-2.5 text-center">
                     <span
                       className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
                         s.status === 'active'
                           ? 'bg-emerald-500/10 text-emerald-400'
                           : s.status === 'closed'
-                            ? 'bg-zinc-700/50 text-zinc-500'
+                            ? 'bg-zinc-700/50 text-[rgb(var(--text-muted))]'
                             : 'bg-yellow-500/10 text-yellow-400'
                       }`}
                     >
                       {s.status}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 text-xs text-zinc-500">
+                  <td className="px-4 py-2.5 text-xs text-[rgb(var(--text-muted))]">
                     {s.createdAt ? new Date(s.createdAt).toLocaleString() : '-'}
                   </td>
-                  <td className="px-4 py-2.5 text-xs text-zinc-500">
+                  <td className="px-4 py-2.5 text-xs text-[rgb(var(--text-muted))]">
                     {s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '-'}
                   </td>
                 </tr>

@@ -89,7 +89,12 @@ report_mode() {
     -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
     -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"limit":1000}},"id":1}' 2>/dev/null)
   if [ -z "$TASKS_JSON" ]; then
-    [ "$SUMMARY" = true ] || log "report: gateway unreachable — cannot diff consumed backlog against the task log"
+    if [ "$(gw_classify_failure "http://localhost:3100/mcp" 15)" = "auth-fail" ]; then
+      gw_warn_auth_fail "queue_topup --report tasks_list"
+      [ "$SUMMARY" = true ] || log "report: GATEWAY AUTH FAILURE (401/403) — cannot diff consumed backlog; NOT a genuine empty task log, fix GATEWAY_LOCAL_TOKEN"
+    else
+      [ "$SUMMARY" = true ] || log "report: gateway unreachable — cannot diff consumed backlog against the task log"
+    fi
     return 0
   fi
 
@@ -159,18 +164,27 @@ if [ "$REPORT" = true ]; then
 fi
 
 # ── pending count across all repos (gateway; fail-safe to 0 = assume empty) ──
-PENDING=$(curl -sf -m 8 -X POST http://localhost:3100/mcp \
+PENDING_RAW=$(curl -sf -m 8 -X POST http://localhost:3100/mcp \
   -H 'content-type: application/json' \
   -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
-  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"status":"pending","limit":500}},"id":1}' 2>/dev/null \
-  | /usr/bin/python3 -c 'import sys,json
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"status":"pending","limit":500}},"id":1}' 2>/dev/null)
+if [ -z "$PENDING_RAW" ]; then
+  if [ "$(gw_classify_failure "http://localhost:3100/mcp" 8)" = "auth-fail" ]; then
+    gw_warn_auth_fail "queue_topup tasks_list(status=pending)"
+    log "gateway AUTH FAILURE (401/403) — skipping top-up; this is NOT a genuinely empty queue, fix GATEWAY_LOCAL_TOKEN"
+  else
+    log "gateway unreachable — skipping top-up (runner will retry)"
+  fi
+  exit 0
+fi
+PENDING=$(printf '%s' "$PENDING_RAW" | /usr/bin/python3 -c 'import sys,json
 try:
     t=json.load(sys.stdin)["result"]["content"][0]["text"]
     d=json.loads(t); print(len(d if isinstance(d,list) else d.get("tasks",[])))
 except Exception: print(-1)' 2>/dev/null)
 [ -z "$PENDING" ] && PENDING=-1
 
-if [ "$PENDING" = "-1" ]; then log "gateway unreachable — skipping top-up (runner will retry)"; exit 0; fi
+if [ "$PENDING" = "-1" ]; then log "gateway response unparseable — skipping top-up (runner will retry)"; exit 0; fi
 if [ "$PENDING" -ge "$FLOOR" ] 2>/dev/null; then exit 0; fi   # queue healthy — nothing to do
 
 log "queue low: $PENDING pending (floor $FLOOR) — topping up"
@@ -207,6 +221,133 @@ REMAINING=$(( TOTAL - CONSUMED ))
 #   2. When explicitly enabled, the prompt now carries an explicit hard boundary
 #      forbidding tasks_create/tasks_update and any status change to existing
 #      tasks — the only writes it may make are to the backlog file + its commit.
+
+# ── SELF-HEAL (task-08dbc72f): position-based REMAINING can go silently wrong
+# without any malformed JSON involved. CONSUMED is a bare integer index into
+# "non-comment/blank lines, file order" — it has no memory of WHICH lines it
+# walked past. If the file is later edited so that lines earlier than CONSUMED
+# get annotated as `#`-prefixed comments (e.g. a "STALE ENTRIES FOUND FOR
+# HUMAN REVIEW" block marking already-shipped items) while new real items are
+# appended elsewhere, the non-comment/blank count can net out to the SAME
+# total — new, never-popped items then land at filtered-list positions the
+# cursor already considers "before CONSUMED", so REMAINING reads 0 (matching
+# TOTAL) while real work sits unconsumed. grep-based TOTAL and the cursor
+# already agree with EACH OTHER here (that's not the bug) — they just don't
+# agree with the FILE'S true state.
+#
+# Recompute a title-verified prefix the same way archive_runner_backlog.sh
+# already does for its "confirmed contiguous prefix": walk the file in order
+# and count how many leading JSON lines have an exact-title match already in
+# the gateway (any repo, any status) — schedule_task.sh passes --title through
+# to tasks_create verbatim, so a match means SOME machine already popped it.
+# That confirmed count is the one true consumed offset; correct the cursor
+# down to it when it disagrees. Only ever lowers the cursor (never raises it
+# past what the file can support), so worst case on a false correction is a
+# harmless duplicate re-enqueue, not lost/skipped work. Gateway-unreachable →
+# skip self-heal and fall through to the pre-existing exhaustion message.
+#
+# CANARY (task-fabf3ec4, P0 regression fix): "title absent from the gateway
+# list" is NOT proof a line was never popped — tasks get reconciled/cleaned
+# server-side, and tasks_list is capped at limit:2000, so a genuinely-old
+# consumed item can simply have aged out of what the gateway can still show
+# us. Treating that absence as "never consumed" caused a false correction
+# that re-popped 2 already-consumed items after an archive rotation (18
+# phantom tasks on 2026-08-10). Before trusting the list's silence about the
+# LIVE file's leading lines, sanity-check the list against titles we already
+# have independent, positive proof were consumed: everything in
+# config/archive/runner_backlog-*.jsonl was gateway-confirmed at archive time
+# (archive_runner_backlog.sh applies this exact same title-match gate before
+# rotating a line out). If NONE of those known-good archived titles are still
+# findable in the CURRENT gateway list, the list itself is stale/reconciled
+# right now — its silence carries no evidence either way — so skip the heal
+# entirely rather than act on it. Only skip when we have archived history to
+# canary against; with none (ARCHIVED=0, the original task-08dbc72f bug this
+# self-heal targets), behavior is unchanged.
+if [ "$REMAINING" -lt 1 ]; then
+  HEAL_TASKS_JSON=$(curl -sf -m 15 -X POST http://localhost:3100/mcp \
+    -H 'content-type: application/json' \
+    -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
+    -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"limit":2000}},"id":1}' 2>/dev/null)
+  if [ -n "$HEAL_TASKS_JSON" ]; then
+    HEAL_RESULT=$(BACKLOG="$BACKLOG" ARCHIVE_DIR="$ROOT/config/archive" /usr/bin/python3 -c '
+import sys, os, json, glob
+backlog_path = os.environ["BACKLOG"]
+archive_dir = os.environ.get("ARCHIVE_DIR", "")
+tasks_raw = sys.stdin.read()
+try:
+    payload = json.loads(tasks_raw)
+    text = payload["result"]["content"][0]["text"]
+    parsed = json.loads(text)
+    tasks = parsed if isinstance(parsed, list) else parsed.get("tasks", [])
+except Exception:
+    tasks = []
+known_titles = set(t.get("title", "") for t in tasks if t.get("title"))
+
+# Canary: titles already rotated into the archive were gateway-confirmed at
+# archive time. If the CURRENT list cant confirm any of them anymore, its
+# silence about the live files leading lines is not trustworthy either —
+# bail out with SKIP instead of a false "confirmed" count.
+archived_titles = []
+for fn in sorted(glob.glob(os.path.join(archive_dir, "runner_backlog-*.jsonl"))):
+    try:
+        for raw in open(fn):
+            s = raw.strip()
+            if not s or s.startswith("#"):
+                continue
+            try:
+                t = json.loads(s).get("title", "")
+            except Exception:
+                t = None
+            if t:
+                archived_titles.append(t)
+    except Exception:
+        pass
+
+if archived_titles and not any(t in known_titles for t in archived_titles):
+    print("SKIP")
+    sys.exit(0)
+
+confirmed = 0
+stopped = False
+for raw in open(backlog_path):
+    s = raw.strip()
+    if not s or s.startswith("#"):
+        continue
+    if stopped:
+        continue
+    try:
+        obj = json.loads(s)
+        title = obj.get("title", "")
+    except Exception:
+        # a genuinely malformed non-comment line cannot be title-matched —
+        # treat as not-yet-confirmed (never counts toward the safe prefix).
+        title = None
+    if title and title in known_titles:
+        confirmed += 1
+    else:
+        stopped = True
+print(confirmed)
+' <<<"$HEAL_TASKS_JSON")
+    HEAL_RESULT="$(printf '%s' "$HEAL_RESULT" | tr -d '[:space:]')"
+    if [ "$HEAL_RESULT" = "SKIP" ]; then
+      log "self-heal check: gateway task list can't confirm even the already-archived titles — treating it as stale/reconciled right now and leaving cursor as-is (see task-fabf3ec4)"
+    elif [ -n "$HEAL_RESULT" ]; then
+      HEAL_CONFIRMED="$(printf '%s' "$HEAL_RESULT" | tr -cd '0-9')"
+      if [ -n "$HEAL_CONFIRMED" ]; then
+        NEW_CONSUMED=$(( HEAL_CONFIRMED + ARCHIVED ))
+        if [ "$NEW_CONSUMED" -lt "$CONSUMED" ]; then
+          log "self-heal: cursor was $CONSUMED but only $HEAL_CONFIRMED backlog line(s) are gateway-confirmed consumed — correcting cursor to $NEW_CONSUMED (file drifted, see task-08dbc72f)"
+          CONSUMED="$NEW_CONSUMED"
+          echo "$CONSUMED" > "$CURSOR"
+          REMAINING=$(( TOTAL - CONSUMED ))
+        fi
+      fi
+    fi
+  else
+    log "self-heal check: gateway unreachable — cannot verify true exhaustion, trusting cursor as-is"
+  fi
+fi
+
 PLANNER_AUTOGEN="${RUNNER_PLANNER_AUTOGEN:-0}"
 PLANNER_STAMP="$ROOT/config/.runner_planner.stamp"
 PLANNER_THROTTLE_HRS="${RUNNER_PLANNER_THROTTLE_HRS:-6}"
@@ -236,14 +377,24 @@ if [ "$REMAINING" -le "$BACKLOG_MIN" ]; then
     # review for ai_management. Fetch the repo's full task list (no status
     # filter — tasks_list has no multi-status filter) and count matches whose
     # status hasn't reached a terminal state (done/dead_letter).
-    EXISTS=$(curl -sf -m 8 -X POST http://localhost:3100/mcp -H 'content-type: application/json' -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
-      -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"repo":"ai_management","limit":500}},"id":1}' 2>/dev/null \
-      | /usr/bin/python3 -c 'import sys,json
+    EXISTS_RAW=$(curl -sf -m 8 -X POST http://localhost:3100/mcp -H 'content-type: application/json' -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
+      -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"repo":"ai_management","limit":500}},"id":1}' 2>/dev/null)
+    if [ -z "$EXISTS_RAW" ]; then
+      if [ "$(gw_classify_failure "http://localhost:3100/mcp" 8)" = "auth-fail" ]; then
+        gw_warn_auth_fail "queue_topup PLANNER dedupe-check tasks_list"
+        log "backlog low ($REMAINING left) but gateway AUTH FAILURE (401/403) on the dedupe check — skipping planner enqueue this cycle rather than risk a duplicate"
+      else
+        log "backlog low ($REMAINING left) but gateway unreachable on dedupe check — skipping planner enqueue this cycle"
+      fi
+      EXISTS=1   # fail-safe: treat as "already exists" so a failed check never enqueues a possible duplicate
+    else
+      EXISTS=$(printf '%s' "$EXISTS_RAW" | /usr/bin/python3 -c 'import sys,json
 try:
     d=json.loads(json.load(sys.stdin)["result"]["content"][0]["text"])
     inflight={"pending","working","review","blocked"}
     print(sum(1 for t in (d if isinstance(d,list) else d.get("tasks",[])) if "PLANNER: regenerate" in t.get("title","") and t.get("status") in inflight))
 except Exception: print(0)' 2>/dev/null)
+    fi
     if [ "${EXISTS:-0}" = "0" ]; then
       date +%s > "$PLANNER_STAMP"
       "$SCRIPT_DIR/schedule_task.sh" --repo ai_management --priority P1 --agent product-manager --model claude-fable-5 \
@@ -264,27 +415,61 @@ NEED=$(( FLOOR - PENDING )); [ "$NEED" -lt 1 ] && exit 0
 # OFFSET is CONSUMED with the archived-away prefix subtracted back out, since
 # CONSUMED counts over all history but the current (possibly rotated) file
 # only holds what's left — see archived_total() above.
+#
+# SCANNED vs POPPED: the python side walks the filtered (non-comment/blank)
+# list one line at a time from OFFSET, and for each line either emits an ITEM
+# (valid JSON) or logs a MALFORMED marker and moves on — it never aborts on a
+# bad line, and it never silently drops one uncounted either. It stops once
+# NEED valid items are emitted or the list runs out, then reports SCANNED =
+# the number of filtered-list lines it walked through (valid + malformed).
+# The cursor must advance by SCANNED, not by POPPED (valid-only count) — if
+# it only advanced by POPPED, any malformed line in the window would never
+# get walked past on the next run, and the popper would re-scan (and re-skip)
+# the same malformed line forever without making progress.
 OFFSET=$(( CONSUMED - ARCHIVED )); [ "$OFFSET" -lt 0 ] && OFFSET=0
 POPPED=0
-while IFS=$'\t' read -r repo title priority agent desc; do
-  [ -n "$title" ] || continue
-  if [ "$DRY" = true ]; then log "would enqueue [$repo/$priority] $title"
-  else
-    "$SCRIPT_DIR/schedule_task.sh" --repo "$repo" --title "$title" --priority "$priority" --agent "$agent" --model claude-fable-5 --desc "$desc" >/dev/null 2>&1 \
-      && log "enqueued [$repo/$priority] $title"
-  fi
-  POPPED=$(( POPPED + 1 ))
+SCANNED=0
+while IFS=$'\t' read -r kind a b c d e; do
+  case "$kind" in
+    MALFORMED)
+      log "backlog line #$((a)) is not valid JSON, skipping (logged, not treated as end-of-backlog): $b — ${c:0:100}"
+      ;;
+    ITEM)
+      repo="$a"; title="$b"; priority="$c"; agent="$d"; desc="$e"
+      [ -n "$title" ] || continue
+      if [ "$DRY" = true ]; then log "would enqueue [$repo/$priority] $title"
+      else
+        "$SCRIPT_DIR/schedule_task.sh" --repo "$repo" --title "$title" --priority "$priority" --agent "$agent" --model claude-fable-5 --desc "$desc" >/dev/null 2>&1 \
+          && log "enqueued [$repo/$priority] $title"
+      fi
+      POPPED=$(( POPPED + 1 ))
+      ;;
+    SCANNED)
+      SCANNED="$a"
+      ;;
+  esac
 done < <(OFFSET="$OFFSET" NEED="$NEED" /usr/bin/python3 -c '
 import sys, os, json
 consumed=int(os.environ["OFFSET"]); need=int(os.environ["NEED"])
 lines=[l for l in open(sys.argv[1]) if l.strip() and not l.strip().startswith("#")]
-for l in lines[consumed:consumed+need]:
+emitted=0
+scanned=0
+i=consumed
+while i < len(lines) and emitted < need:
+    l = lines[i]; i += 1; scanned += 1
     try:
-        o=json.loads(l)
-        print("\t".join([o.get("repo","ai_management"),o.get("title","").replace("\t"," "),o.get("priority","P2"),o.get("agent","dev-fullstack"),o.get("desc","").replace("\t"," ").replace("\n"," ")]))
-    except Exception: pass
+        o = json.loads(l)
+        title = o.get("title", "")
+        if not title:
+            raise ValueError("missing/empty title")
+    except Exception as e:
+        print("MALFORMED\t%d\t%s\t%s" % (consumed + scanned, str(e).replace("\t", " "), l.strip().replace("\t", " ")))
+        continue
+    print("ITEM\t" + "\t".join([o.get("repo","ai_management"), title.replace("\t"," "), o.get("priority","P2"), o.get("agent","dev-fullstack"), o.get("desc","").replace("\t"," ").replace("\n"," ")]))
+    emitted += 1
+print("SCANNED\t%d" % scanned)
 ' "$BACKLOG")
 
-if [ "$DRY" != true ] && [ "$POPPED" -gt 0 ]; then echo $(( CONSUMED + POPPED )) > "$CURSOR"; fi
-log "topped up: $POPPED item(s) enqueued (backlog cursor now $(( CONSUMED + POPPED ))/$TOTAL)"
+if [ "$DRY" != true ] && [ "$SCANNED" -gt 0 ]; then echo $(( CONSUMED + SCANNED )) > "$CURSOR"; fi
+log "topped up: $POPPED item(s) enqueued (backlog cursor now $(( CONSUMED + SCANNED ))/$TOTAL)"
 exit 0

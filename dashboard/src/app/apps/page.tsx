@@ -55,7 +55,7 @@ function LinkRow({ label, url }: { label: string; url?: string }) {
       rel="noreferrer"
       // tap-press + min tap height: on a phone each destination is a comfortable
       // 44px target with a press response, not a hairline text link (registry pass).
-      className="tap-press flex items-center gap-2 text-xs -mx-1 px-1 py-2 sm:py-0.5 min-h-[44px] sm:min-h-0 rounded-md active:bg-zinc-800/60"
+      className="tap-press flex items-center gap-2 text-xs -mx-1 px-1 py-2 sm:py-0.5 min-h-[44px] sm:min-h-0 rounded-md active:bg-[rgb(var(--bg-hover))]/60"
     >
       <span className="w-16 shrink-0 text-zinc-600 uppercase tracking-wider text-[10px]">{label}</span>
       <span className="text-emerald-400/90 hover:text-emerald-300 truncate font-mono">{url}</span>
@@ -68,7 +68,7 @@ function InfoRow({ label, value }: { label: string; value?: string }) {
   return (
     <div className="flex items-center gap-2 text-xs">
       <span className="w-16 shrink-0 text-zinc-600 uppercase tracking-wider text-[10px]">{label}</span>
-      <span className="text-zinc-300 truncate font-mono">{value}</span>
+      <span className="text-[rgb(var(--text-primary))] truncate font-mono">{value}</span>
     </div>
   );
 }
@@ -87,7 +87,7 @@ function AheadBadge({ count }: { count?: number }) {
 
 function FrameworkDot({ ok, label }: { ok?: boolean; label: string }) {
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] text-zinc-500" title={`${label}: ${ok === undefined ? 'unknown' : ok ? 'present' : 'missing'}`}>
+    <span className="inline-flex items-center gap-1 text-[10px] text-[rgb(var(--text-muted))]" title={`${label}: ${ok === undefined ? 'unknown' : ok ? 'present' : 'missing'}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${ok === undefined ? 'bg-zinc-700' : ok ? 'bg-emerald-400' : 'bg-red-400'}`} />
       {label}
     </span>
@@ -131,7 +131,7 @@ async function DirectoryTab({ tenantId }: { tenantId: string }) {
         <Card>
           <EmptyState>
             <p>
-              No cards yet. Each repo populates its card on <code className="text-zinc-400">wrap up</code> via <code className="text-zinc-400">./AI/scripts/repo_card.sh</code>.
+              No cards yet. Each repo populates its card on <code className="text-[rgb(var(--text-secondary))]">wrap up</code> via <code className="text-[rgb(var(--text-secondary))]">./AI/scripts/repo_card.sh</code>.
             </p>
             <p className="mt-2">
               First time here? <a href="/welcome/start" className="text-emerald-400 hover:underline">Connect a repo</a> and it shows up here immediately.
@@ -142,25 +142,25 @@ async function DirectoryTab({ tenantId }: { tenantId: string }) {
 
       {Object.entries(groups).map(([group, list]) => (
         <div key={group}>
-          <h2 className="text-xs font-semibold text-zinc-500 mb-3 uppercase tracking-wider">{group}</h2>
+          <h2 className="text-xs font-semibold text-[rgb(var(--text-muted))] mb-3 uppercase tracking-wider">{group}</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {list.map((c) => {
               const stale = staleDays(c.updatedAt);
               const fw = byName.get(c.repoName);
               return (
-                <div key={c.repoName} className="bg-zinc-900/70 border border-zinc-800 rounded-xl p-4 flex flex-col gap-3 hover:border-zinc-700 transition-colors">
+                <div key={c.repoName} className="bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl p-4 flex flex-col gap-3 hover:border-zinc-700 transition-colors">
                   <div className="flex items-start justify-between">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="font-semibold text-sm text-zinc-100 truncate">{c.repoName}</p>
+                        <p className="font-semibold text-sm text-[rgb(var(--text-primary))] truncate">{c.repoName}</p>
                         <AheadBadge count={c.commitsAhead} />
                       </div>
-                      <p className="text-xs text-zinc-500 mt-0.5 line-clamp-2">{c.description || 'No description yet'}</p>
+                      <p className="text-xs text-[rgb(var(--text-muted))] mt-0.5 line-clamp-2">{c.description || 'No description yet'}</p>
                     </div>
                     <LevelDot level={c.lastStatusLevel} className="mt-1 !w-3 !h-3" />
                   </div>
 
-                  <div className="space-y-1 border-t border-zinc-800/70 pt-2">
+                  <div className="space-y-1 border-t border-[rgb(var(--border-subtle))]/70 pt-2">
                     <LinkRow label="local" url={c.localhostUrl} />
                     <LinkRow label="app" url={c.appUrl} />
                     <LinkRow label="api" url={c.apiUrl} />
@@ -169,9 +169,9 @@ async function DirectoryTab({ tenantId }: { tenantId: string }) {
                     <InfoRow label="mongo" value={c.mongo} />
                   </div>
 
-                  <div className="border-t border-zinc-800/70 pt-2">
+                  <div className="border-t border-[rgb(var(--border-subtle))]/70 pt-2">
                     <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">Last status</p>
-                    <p className="text-xs text-zinc-300 line-clamp-3">{c.lastStatus || '—'}</p>
+                    <p className="text-xs text-[rgb(var(--text-primary))] line-clamp-3">{c.lastStatus || '—'}</p>
                     <div className="flex items-center justify-between mt-1.5">
                       <p className="text-[10px] text-zinc-600">
                         {fmtSydney(c.updatedAt)}{stale !== null && stale > 7 ? ` · ${stale}d ago ⚠` : ''}

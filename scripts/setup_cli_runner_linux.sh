@@ -27,6 +27,13 @@
 # The installer prints this reminder when lingering is off.
 set -euo pipefail
 
+# $USER is NOT exported everywhere this script runs: Docker's USER directive sets
+# the uid only, and systemd/cron units carry a minimal env. Under `set -euo
+# pipefail` (above) a bare $USER aborts with "unbound variable" — that is exactly
+# how the systemd-install path died on the self-hosted CI runner. `id -un` always
+# resolves, so resolve it ONCE here and use $RUN_USER below.
+RUN_USER="${USER:-$(id -un)}"
+
 UNIT="myai-cli-runner"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 CRON_MARKER="# myai-cli-runner (managed by setup_cli_runner_linux.sh — do not edit)"
@@ -69,7 +76,7 @@ have_systemd() {
 resolve_backend() {
     case "$BACKEND" in
         systemd)
-            have_systemd || { echo "ERROR: --systemd requested but the systemd user manager is unreachable (try: loginctl enable-linger $USER, or use --cron)." >&2; exit 1; } ;;
+            have_systemd || { echo "ERROR: --systemd requested but the systemd user manager is unreachable (try: loginctl enable-linger $RUN_USER, or use --cron)." >&2; exit 1; } ;;
         cron)
             command -v crontab >/dev/null 2>&1 || { echo "ERROR: --cron requested but no crontab binary found." >&2; exit 1; } ;;
         auto)
@@ -94,8 +101,8 @@ status)
         echo "INSTALLED (systemd user timer): $UNIT.timer"
         systemctl --user is-active "$UNIT.timer" 2>/dev/null | sed 's/^/  state: /' || true
         systemctl --user list-timers "$UNIT.timer" --no-pager 2>/dev/null | sed -n '2p' | sed 's/^/  /' || true
-        if command -v loginctl >/dev/null 2>&1 && ! loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes'; then
-            echo "  NOTE: lingering is OFF — the timer stops when you log out. Fix: loginctl enable-linger $USER"
+        if command -v loginctl >/dev/null 2>&1 && ! loginctl show-user "$RUN_USER" 2>/dev/null | grep -q '^Linger=yes'; then
+            echo "  NOTE: lingering is OFF — the timer stops when you log out. Fix: loginctl enable-linger $RUN_USER"
         fi
     fi
     if command -v crontab >/dev/null 2>&1 && crontab -l 2>/dev/null | grep -qF "$CRON_MARKER"; then
@@ -174,8 +181,8 @@ TIMER_EOF
     systemctl --user daemon-reload
     systemctl --user enable --now "$UNIT.timer"
     echo "Installed $UNIT.timer (systemd user) — fires ${CADENCE} (slot-based, up to ${MAX_CONCURRENT:-5} concurrent; backs off 30m when full)."
-    if command -v loginctl >/dev/null 2>&1 && ! loginctl show-user "$USER" 2>/dev/null | grep -q '^Linger=yes'; then
-        echo "NOTE: lingering is OFF — the timer stops when you log out. For an always-on box run: loginctl enable-linger $USER"
+    if command -v loginctl >/dev/null 2>&1 && ! loginctl show-user "$RUN_USER" 2>/dev/null | grep -q '^Linger=yes'; then
+        echo "NOTE: lingering is OFF — the timer stops when you log out. For an always-on box run: loginctl enable-linger $RUN_USER"
     fi
     echo "Watch: systemctl --user list-timers $UNIT.timer  ·  tail -f $LOG_DIR/runner.out"
 else

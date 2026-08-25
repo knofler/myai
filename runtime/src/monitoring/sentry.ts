@@ -16,6 +16,7 @@
 
 import { createChildLogger } from '../shared/logger.js';
 import { SENSITIVE_HEADERS, redactString, deepRedact } from '../shared/redact.js';
+import { isAirGapped } from '../core/license.js';
 
 const log = createChildLogger({ module: 'sentry' });
 
@@ -109,6 +110,12 @@ export async function initSentry(): Promise<boolean> {
   const dsn = process.env.SENTRY_DSN;
   if (!dsn) {
     log.debug('SENTRY_DSN not set — error tracking disabled');
+    return false;
+  }
+  if (isAirGapped()) {
+    // AIR_GAPPED is a hard promise of zero outbound calls — honour it even if
+    // an operator left SENTRY_DSN set from a prior non-air-gapped config.
+    log.warn('SENTRY_DSN is set but AIR_GAPPED=true — Sentry stays disabled (no phone-home in air-gapped mode)');
     return false;
   }
   try {

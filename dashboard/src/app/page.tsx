@@ -13,6 +13,9 @@ import { Card, EmptyState } from '@/components/ui/card';
 import { SydneyClock } from '@/components/sydney-clock';
 import AutoRefresh from '@/components/auto-refresh';
 import { OnboardingChecklist } from '@/components/onboarding-checklist';
+import { CoachMarks } from '@/components/coach-marks';
+import { EmailVerifyBanner } from '@/components/email-verify-banner';
+import { ReconsentBanner } from '@/components/reconsent-banner';
 import { buildOnboardingSteps } from '@/lib/onboarding-checklist';
 
 export const dynamic = 'force-dynamic';
@@ -82,7 +85,7 @@ function FirstRunQuickstart() {
       meta={<Link href="/welcome/start" className="hover:text-emerald-400">guided first run →</Link>}
     >
       <div className="p-4 space-y-4">
-        <p className="text-sm text-zinc-400">
+        <p className="text-sm text-[rgb(var(--text-secondary))]">
           No repos or tasks are registered yet. Run one of these from your terminal, or take the guided
           four-step first run — Mission Control fills in as soon as the first repo card or task lands.
         </p>
@@ -91,13 +94,13 @@ function FirstRunQuickstart() {
             <Link
               key={q.title}
               href="/welcome/start"
-              className="block p-4 rounded-lg border border-zinc-800 bg-zinc-900/60 hover:border-emerald-700 transition-colors"
+              className="block p-4 rounded-lg border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))]/60 hover:border-emerald-700 transition-colors"
             >
-              <p className="text-sm font-medium text-zinc-200">{q.title} →</p>
-              <code className="mt-2 block px-2.5 py-1.5 rounded-md bg-zinc-950 border border-zinc-800 text-xs text-teal-300 font-mono overflow-x-auto whitespace-nowrap">
+              <p className="text-sm font-medium text-[rgb(var(--text-primary))]">{q.title} →</p>
+              <code className="mt-2 block px-2.5 py-1.5 rounded-md bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] text-xs text-teal-300 font-mono overflow-x-auto whitespace-nowrap">
                 {q.command}
               </code>
-              <p className="mt-2 text-xs text-zinc-500">{q.desc}</p>
+              <p className="mt-2 text-xs text-[rgb(var(--text-muted))]">{q.desc}</p>
             </Link>
           ))}
         </div>
@@ -108,10 +111,10 @@ function FirstRunQuickstart() {
 
 function ColumnRow({ top, bottom, right }: { top: React.ReactNode; bottom: React.ReactNode; right?: React.ReactNode }) {
   return (
-    <li className="px-4 py-2.5 flex items-center justify-between gap-3 hover:bg-zinc-800/30">
+    <li className="px-4 py-2.5 flex items-center justify-between gap-3 hover:bg-[rgb(var(--bg-hover))]/30">
       <div className="min-w-0">
-        <p className="text-sm text-zinc-200 truncate">{top}</p>
-        <p className="text-xs text-zinc-500 truncate mt-0.5">{bottom}</p>
+        <p className="text-sm text-[rgb(var(--text-primary))] truncate">{top}</p>
+        <p className="text-xs text-[rgb(var(--text-muted))] truncate mt-0.5">{bottom}</p>
       </div>
       {right && <div className="shrink-0 text-right">{right}</div>}
     </li>
@@ -187,7 +190,7 @@ export default async function MissionControl() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-brand-orange tracking-tight">Mission Control</h1>
-          <p className="text-sm text-zinc-500 mt-0.5">What&apos;s running · what needs you · what&apos;s next — live, 15s refresh</p>
+          <p className="text-sm text-[rgb(var(--text-muted))] mt-0.5">What&apos;s running · what needs you · what&apos;s next — live, 15s refresh</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {fable?.active && (
@@ -195,27 +198,34 @@ export default async function MissionControl() {
               FABLE FREE · {fableDaysLeft}d left
             </span>
           )}
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-800/80 border border-zinc-700/60 text-xs text-zinc-400">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[rgb(var(--bg-hover))]/80 border border-zinc-700/60 text-xs text-[rgb(var(--text-secondary))]">
             <LevelDot level={health ? 'ok' : 'error'} className="!w-1.5 !h-1.5" /> gateway
           </span>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-800/80 border border-zinc-700/60 text-xs text-zinc-400">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[rgb(var(--bg-hover))]/80 border border-zinc-700/60 text-xs text-[rgb(var(--text-secondary))]">
             <LevelDot level={dbOk ? 'ok' : 'error'} className="!w-1.5 !h-1.5" /> mongo
           </span>
           <SydneyClock />
-          <span className="hidden md:inline-flex items-center px-2 py-1 rounded-md bg-zinc-800/50 border border-zinc-700/40 text-[10px] text-zinc-500">⌘K</span>
+          <span className="hidden md:inline-flex items-center px-2 py-1 rounded-md bg-[rgb(var(--bg-hover))]/50 border border-zinc-700/40 text-[10px] text-[rgb(var(--text-muted))]">⌘K</span>
         </div>
       </div>
 
-      {dbOk && (
-        <OnboardingChecklist
-          steps={buildOnboardingSteps({
-            repoCount: fleet.length,
-            taskCount: taskTotal,
-            pickedUpCount: working.length + review.length + doneCount,
-            doneCount,
-          })}
-        />
-      )}
+      <EmailVerifyBanner />
+      <ReconsentBanner />
+
+      {dbOk && (() => {
+        const onboardingSteps = buildOnboardingSteps({
+          repoCount: fleet.length,
+          taskCount: taskTotal,
+          pickedUpCount: working.length + review.length + doneCount,
+          doneCount,
+        });
+        return (
+          <>
+            <OnboardingChecklist steps={onboardingSteps} />
+            <CoachMarks steps={onboardingSteps} />
+          </>
+        );
+      })()}
 
       {firstRun ? (
         <FirstRunQuickstart />
@@ -231,7 +241,7 @@ export default async function MissionControl() {
           {working.length === 0 ? (
             <EmptyState>No agents working right now.</EmptyState>
           ) : (
-            <ul className="divide-y divide-zinc-800/50">
+            <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
               {working.map((t) => (
                 <ColumnRow
                   key={t.taskId}
@@ -252,7 +262,7 @@ export default async function MissionControl() {
           {review.length === 0 ? (
             <EmptyState>Nothing waiting on you. ✨</EmptyState>
           ) : (
-            <ul className="divide-y divide-zinc-800/50">
+            <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
               {review.map((t) => (
                 <ColumnRow
                   key={t.taskId}
@@ -273,7 +283,7 @@ export default async function MissionControl() {
           {pending.length === 0 ? (
             <EmptyState>Queue empty.</EmptyState>
           ) : (
-            <ul className="divide-y divide-zinc-800/50">
+            <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
               {pending.map((t) => (
                 <ColumnRow
                   key={t.taskId}
@@ -293,11 +303,11 @@ export default async function MissionControl() {
           {nextFires.length === 0 ? (
             <EmptyState>No upcoming runs.</EmptyState>
           ) : (
-            <ul className="divide-y divide-zinc-800/50">
+            <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
               {nextFires.map((s) => (
                 <li key={s.scheduleId} className="px-4 py-2 flex items-center justify-between gap-3 text-sm">
-                  <span className="text-zinc-300 truncate">{s.name}</span>
-                  <span className="text-xs text-zinc-500 shrink-0">
+                  <span className="text-[rgb(var(--text-primary))] truncate">{s.name}</span>
+                  <span className="text-xs text-[rgb(var(--text-muted))] shrink-0">
                     {timeUntil(s.nextRun)} · {fmtSydney(s.nextRun)}
                   </span>
                 </li>
@@ -312,7 +322,7 @@ export default async function MissionControl() {
           ) : (
             <div className="p-4 flex flex-wrap gap-x-4 gap-y-2">
               {fleet.map((c) => (
-                <Link key={c.repoName} href="/apps" className="inline-flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200">
+                <Link key={c.repoName} href="/apps" className="inline-flex items-center gap-1.5 text-xs text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))]">
                   <LevelDot level={c.lastStatusLevel} className="!w-2 !h-2" />
                   {c.repoName}
                 </Link>
@@ -326,8 +336,8 @@ export default async function MissionControl() {
             {lastRun ? (
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-zinc-300 truncate">{lastRun.name}</p>
-                  <p className="text-xs text-zinc-500 truncate mt-0.5">{lastRun.lastResultSummary ?? '—'}</p>
+                  <p className="text-[rgb(var(--text-primary))] truncate">{lastRun.name}</p>
+                  <p className="text-xs text-[rgb(var(--text-muted))] truncate mt-0.5">{lastRun.lastResultSummary ?? '—'}</p>
                 </div>
                 <Badge className={lastRun.lastStatus === 'success' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : lastRun.lastStatus === 'error' ? 'bg-red-500/15 text-red-400 border-red-500/30' : ''}>
                   {lastRun.lastStatus} · {timeAgo(lastRun.lastRun)}
@@ -336,8 +346,8 @@ export default async function MissionControl() {
             ) : (
               <p className="text-zinc-600">No schedule has run yet.</p>
             )}
-            <div className="flex items-center justify-between border-t border-zinc-800/70 pt-2.5">
-              <span className="text-xs text-zinc-500">Today&apos;s LLM spend (UTC day)</span>
+            <div className="flex items-center justify-between border-t border-[rgb(var(--border-subtle))]/70 pt-2.5">
+              <span className="text-xs text-[rgb(var(--text-muted))]">Today&apos;s LLM spend (UTC day)</span>
               <span className={`text-sm font-semibold ${todaySpend > 10 ? 'text-red-400' : todaySpend > 5 ? 'text-yellow-400' : 'text-emerald-400'}`}>
                 {fmtUsd(todaySpend)}
               </span>

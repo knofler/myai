@@ -34,6 +34,8 @@ import {
   ProviderMaintenanceError,
 } from './provider-maintenance.js';
 import type { MaintenanceStatus } from './provider-maintenance.js';
+import { getFailoverProviderHealth } from './failover-backoff.js';
+import type { FailoverProviderHealth } from './failover-backoff.js';
 
 const log = createChildLogger({ module: 'llm-resilience' });
 
@@ -257,6 +259,10 @@ export interface ProviderHealth {
   rateLimiter: RateLimiterStats;
   /** Operator-initiated maintenance state — distinct from `circuit`, which trips automatically on errors. */
   maintenance: MaintenanceStatus;
+  /** Inter-hop backoff config + retry-budget/cost-budget drop counters for this
+   *  provider's role as a FAILOVER hop (see failover-backoff.ts). Distinct from
+   *  `circuit`/`rateLimiter`, which govern calls TO this provider directly. */
+  failover: FailoverProviderHealth;
 }
 
 /**
@@ -271,6 +277,7 @@ export function getProviderHealth(provider: string): ProviderHealth {
     circuit: getOrCreateCB(provider).stats,
     rateLimiter: getOrCreateRL(provider).stats,
     maintenance,
+    failover: getFailoverProviderHealth(provider),
   };
 }
 

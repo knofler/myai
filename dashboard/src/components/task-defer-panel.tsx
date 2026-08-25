@@ -30,18 +30,18 @@ export function TaskDeferPanel({ tasks }: { tasks: TaskDeferRow[] }) {
     >
       <table className="card-table w-full text-sm">
         <thead>
-          <tr className="text-left text-[11px] text-zinc-500 border-b border-zinc-800 uppercase tracking-wider">
+          <tr className="text-left text-[11px] text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
             <th className="px-4 py-2.5 font-medium">Repo</th>
             <th className="px-4 py-2.5 font-medium">Task</th>
             <th className="px-4 py-2.5 font-medium">Consecutive defers</th>
             <th className="px-4 py-2.5 font-medium">Last defer</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-zinc-800/50">
+        <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
           {sorted.map((t) => (
-            <tr key={t.taskId} className="hover:bg-zinc-800/30">
-              <td data-label="Repo" className="px-4 py-2.5 text-zinc-500 font-mono text-xs">{t.repo}</td>
-              <td data-label="Task" className="m-title px-4 py-2.5 text-zinc-200 max-w-sm truncate">{t.title}</td>
+            <tr key={t.taskId} className="hover:bg-[rgb(var(--bg-hover))]/30">
+              <td data-label="Repo" className="px-4 py-2.5 text-[rgb(var(--text-muted))] font-mono text-xs">{t.repo}</td>
+              <td data-label="Task" className="m-title px-4 py-2.5 text-[rgb(var(--text-primary))] max-w-sm truncate">{t.title}</td>
               <td data-label="Consecutive defers" className="px-4 py-2.5 text-xs font-mono text-red-400">{t.deferCount}×</td>
               <td data-label="Last defer" className="px-4 py-2.5 text-zinc-600 text-xs">{timeAgo(t.updatedAt)}</td>
             </tr>

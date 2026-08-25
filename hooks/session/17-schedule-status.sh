@@ -147,6 +147,24 @@ for _qt in "$ROOT/scripts/queue_topup.sh" "$ROOT/AI/scripts/queue_topup.sh"; do
     fi
 done
 
+# ── test->main ship drift (task-d4350b8f) — surface the condition the
+# runner's ship step (scripts/runner_ship_step.sh) acts on BEFORE it becomes a
+# backlog: how many commits origin/test carries that origin/main doesn't.
+# Cached refs only (no fetch — this hook must stay fast/offline-safe); a stale
+# reading just means "at least this many" until the next fetch.
+ship_drift_line=""
+if git -C "$ROOT" rev-parse --verify -q origin/main >/dev/null 2>&1 && git -C "$ROOT" rev-parse --verify -q origin/test >/dev/null 2>&1; then
+    ship_drift=$(git -C "$ROOT" rev-list --count origin/main..origin/test 2>/dev/null)
+    ship_threshold="${SHIP_DRIFT_THRESHOLD:-5}"
+    if [ -n "$ship_drift" ] && [ "$ship_drift" -gt 0 ] 2>/dev/null; then
+        if [ "$ship_drift" -ge "$ship_threshold" ] 2>/dev/null; then
+            ship_drift_line="  ${Y}🚀 SHIP${R}  ${D}test is ${ship_drift} commit(s) ahead of main (>= threshold ${ship_threshold}) — runner_ship_step.sh should open/merge a PR on the next review-flip${R}"
+        else
+            ship_drift_line="  ${C}◆ SHIP${R}  ${D}test is ${ship_drift} commit(s) ahead of main (threshold ${ship_threshold})${R}"
+        fi
+    fi
+fi
+
 # ── runner cadence (read real interval from plist) + last session ──
 runner_line="${D}not installed on this machine${R}"
 if launchctl list "$RUNNER_LABEL" >/dev/null 2>&1; then
@@ -179,6 +197,7 @@ printf '%s\n' "${B}╠${bar}╣${R}"
 printf '%s\n' "  ${B}runner:${R} $runner_line"
 [ -n "$well_line" ] && printf '%s\n' "$well_line"
 [ -n "$drift_line" ] && printf '%s\n' "$drift_line"
+[ -n "$ship_drift_line" ] && printf '%s\n' "$ship_drift_line"
 [ -n "$pricing_line" ] && printf '%s\n' "$pricing_line"
 printf '%s\n' "  ${D}dashboard: http://localhost:3210/schedule${R}"
 printf '%s\n' "${B}╚${bar}╝${R}"

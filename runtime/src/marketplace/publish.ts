@@ -40,7 +40,7 @@ import {
   artifactKey,
   normalizeManifestHash,
   sha256Hex,
-  LocalFilesystemArtifactStore,
+  resolveArtifactStore,
   type ArtifactStore,
 } from './artifact-store.js';
 // Lazy-imported inside publishSubmission (not top-level): artifact-quota.js
@@ -293,7 +293,7 @@ export function scanInjectionPatterns(
 // ── Orchestration ──────────────────────────────────────────────────────────
 
 /** Module-default backend: the local filesystem store (ADR-029 §2's self-hosted-tenant parity). */
-const defaultArtifactStore = new LocalFilesystemArtifactStore();
+const defaultArtifactStore = resolveArtifactStore();
 
 /**
  * Re-run ADR-028 §3's four checks server-side, fail-fast in order; on a pass,

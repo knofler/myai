@@ -160,6 +160,8 @@ export interface ScannedAtom {
   sha8: string;
   slug: string;
   body: string;
+  /** Never-drop pin recorded in the atom's own frontmatter (`pin: true`). */
+  pinned?: boolean;
 }
 
 function parseFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
@@ -247,6 +249,7 @@ export function scanAtoms(dir: string, opts: { repo?: string; atomLimit: number 
       sha8: shaMatch ? shaMatch[1] : '',
       slug: meta.slug || file.replace(/\.md$/, ''),
       body,
+      pinned: meta.pin === 'true' || undefined,
     });
   }
   return { atoms, truncated };

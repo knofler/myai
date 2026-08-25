@@ -56,20 +56,20 @@ export default async function SonaPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-          <p className="text-xs text-zinc-500 uppercase">Patterns</p>
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+          <p className="text-xs text-[rgb(var(--text-muted))] uppercase">Patterns</p>
           <p className="text-3xl font-bold text-emerald-400 mt-1">{totalPatterns}</p>
         </div>
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-          <p className="text-xs text-zinc-500 uppercase">Avg Confidence</p>
-          <p className="text-3xl font-bold text-zinc-100 mt-1">{avgConfidence}%</p>
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+          <p className="text-xs text-[rgb(var(--text-muted))] uppercase">Avg Confidence</p>
+          <p className="text-3xl font-bold text-[rgb(var(--text-primary))] mt-1">{avgConfidence}%</p>
         </div>
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-          <p className="text-xs text-zinc-500 uppercase">Total Usage</p>
-          <p className="text-3xl font-bold text-zinc-100 mt-1">{totalUsage}x</p>
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+          <p className="text-xs text-[rgb(var(--text-muted))] uppercase">Total Usage</p>
+          <p className="text-3xl font-bold text-[rgb(var(--text-primary))] mt-1">{totalUsage}x</p>
         </div>
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-          <p className="text-xs text-zinc-500 uppercase">High Confidence</p>
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+          <p className="text-xs text-[rgb(var(--text-muted))] uppercase">High Confidence</p>
           <p className="text-3xl font-bold text-emerald-400 mt-1">{highConfidence}</p>
           <p className="text-[10px] text-zinc-600 mt-0.5">&ge; 80%</p>
         </div>
@@ -77,27 +77,27 @@ export default async function SonaPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         {/* Category Distribution */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-zinc-300 mb-4">Category Distribution</h3>
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+          <h3 className="text-sm font-semibold text-[rgb(var(--text-primary))] mb-4">Category Distribution</h3>
           <div className="space-y-2">
             {Object.entries(categories).sort((a, b) => b[1] - a[1]).map(([cat, count]) => (
               <div key={cat} className="flex items-center gap-3">
-                <span className="text-xs text-zinc-400 w-24 shrink-0">{cat}</span>
-                <div className="flex-1 h-4 bg-zinc-800 rounded-full overflow-hidden">
+                <span className="text-xs text-[rgb(var(--text-secondary))] w-24 shrink-0">{cat}</span>
+                <div className="flex-1 h-4 bg-[rgb(var(--bg-hover))] rounded-full overflow-hidden">
                   <div
                     className="h-full bg-emerald-500/50 rounded-full"
                     style={{ width: `${(count / totalPatterns) * 100}%` }}
                   />
                 </div>
-                <span className="text-xs text-zinc-500 w-6 text-right">{count}</span>
+                <span className="text-xs text-[rgb(var(--text-muted))] w-6 text-right">{count}</span>
               </div>
             ))}
           </div>
         </div>
 
         {/* Tag Cloud */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-zinc-300 mb-4">Tag Cloud</h3>
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+          <h3 className="text-sm font-semibold text-[rgb(var(--text-primary))] mb-4">Tag Cloud</h3>
           <div className="flex flex-wrap gap-2">
             {topTags.map(([tag, count]) => {
               const size = 0.6 + (count / maxTagCount) * 0.6;
@@ -105,7 +105,7 @@ export default async function SonaPage() {
               return (
                 <span
                   key={tag}
-                  className="font-mono px-2 py-0.5 bg-zinc-800 rounded text-emerald-400 transition-colors hover:bg-zinc-700"
+                  className="font-mono px-2 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-emerald-400 transition-colors hover:bg-zinc-700"
                   style={{ fontSize: `${size}rem`, opacity }}
                 >
                   {tag}
@@ -118,14 +118,14 @@ export default async function SonaPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         {/* Most Used */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-zinc-300 mb-4">Most Used</h3>
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+          <h3 className="text-sm font-semibold text-[rgb(var(--text-primary))] mb-4">Most Used</h3>
           <div className="space-y-3">
             {mostUsed.map(p => (
               <div key={p.patternId} className="flex items-center justify-between">
                 <div className="min-w-0">
-                  <p className="text-sm text-zinc-200 truncate">{p.title}</p>
-                  <p className="text-[10px] text-zinc-500">{Math.round((p.confidence || 0) * 100)}% confidence</p>
+                  <p className="text-sm text-[rgb(var(--text-primary))] truncate">{p.title}</p>
+                  <p className="text-[10px] text-[rgb(var(--text-muted))]">{Math.round((p.confidence || 0) * 100)}% confidence</p>
                 </div>
                 <span className="text-sm font-bold text-emerald-400 shrink-0 ml-3">{p.usageCount}x</span>
               </div>
@@ -134,16 +134,16 @@ export default async function SonaPage() {
         </div>
 
         {/* Least Used */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-zinc-300 mb-4">Least Used</h3>
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+          <h3 className="text-sm font-semibold text-[rgb(var(--text-primary))] mb-4">Least Used</h3>
           <div className="space-y-3">
             {leastUsed.map(p => (
               <div key={p.patternId} className="flex items-center justify-between">
                 <div className="min-w-0">
-                  <p className="text-sm text-zinc-200 truncate">{p.title}</p>
-                  <p className="text-[10px] text-zinc-500">{Math.round((p.confidence || 0) * 100)}% confidence</p>
+                  <p className="text-sm text-[rgb(var(--text-primary))] truncate">{p.title}</p>
+                  <p className="text-[10px] text-[rgb(var(--text-muted))]">{Math.round((p.confidence || 0) * 100)}% confidence</p>
                 </div>
-                <span className="text-sm font-bold text-zinc-500 shrink-0 ml-3">{p.usageCount}x</span>
+                <span className="text-sm font-bold text-[rgb(var(--text-muted))] shrink-0 ml-3">{p.usageCount}x</span>
               </div>
             ))}
           </div>
@@ -151,15 +151,15 @@ export default async function SonaPage() {
       </div>
 
       {/* Confidence Ranking */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-zinc-300 mb-4">All Patterns by Confidence</h3>
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-[rgb(var(--text-primary))] mb-4">All Patterns by Confidence</h3>
         <div className="space-y-2">
           {patterns.map(p => {
             const pct = Math.round((p.confidence || 0) * 100);
             return (
               <div key={p.patternId} className="flex items-center gap-3">
-                <span className="text-xs text-zinc-400 w-48 shrink-0 truncate">{p.title}</span>
-                <div className="flex-1 h-3 bg-zinc-800 rounded-full overflow-hidden">
+                <span className="text-xs text-[rgb(var(--text-secondary))] w-48 shrink-0 truncate">{p.title}</span>
+                <div className="flex-1 h-3 bg-[rgb(var(--bg-hover))] rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full ${pct >= 80 ? 'bg-emerald-500' : pct >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
                     style={{ width: `${pct}%` }}

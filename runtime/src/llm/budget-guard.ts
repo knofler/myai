@@ -30,11 +30,12 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { Connection } from 'mongoose';
 import { BudgetUsageModel, BudgetCapOverrideModel, isConnected } from '../shared/db.js';
 import type { IBudgetCapOverride } from '../shared/db.js';
 import { getConfig } from '../shared/config.js';
 import { createChildLogger } from '../shared/logger.js';
-import { tenantScope, scopedFindOne } from '../shared/scoped-query.js';
+import { tenantScope, scopedFindOne, resolveScopedModel } from '../shared/scoped-query.js';
 import { checkAndEmitSpendAlert } from './spend-alert.js';
 import type { LlmRequest, LlmResponse } from './provider.js';
 
@@ -115,14 +116,14 @@ export interface EffectiveBudgetCaps {
   perChannelMonthlyCapUsd?: number;
 }
 
-async function getBudgetCapOverride(tenantId: string): Promise<IBudgetCapOverride | null> {
+async function getBudgetCapOverride(tenantId: string, connection?: Connection): Promise<IBudgetCapOverride | null> {
   const cached = overrideCache.get(tenantId);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
 
   if (!isConnected() || !BudgetCapOverrideModel) return null;
 
   try {
-    const doc = await scopedFindOne(BudgetCapOverrideModel, tenantId, {}).lean<IBudgetCapOverride | null>();
+    const doc = await scopedFindOne(BudgetCapOverrideModel, tenantId, {}, connection).lean<IBudgetCapOverride | null>();
     overrideCache.set(tenantId, { value: doc, expiresAt: Date.now() + CACHE_TTL_MS });
     return doc;
   } catch (err) {
@@ -167,6 +168,7 @@ function startOfDayUTC(now = new Date()): Date {
 async function aggregateCostSum(
   match: Record<string, unknown>,
   cacheKey: string,
+  connection?: Connection,
 ): Promise<number> {
   const cached = readCache(cacheKey);
   if (cached !== null) return cached;
@@ -179,7 +181,7 @@ async function aggregateCostSum(
   try {
     // tenant-ok: `match` is always tenant-scoped by callers — built from
     // `{ ...tenantScope(ctx.tenantId), ... }` in applyBudgetGuard above.
-    const result = await BudgetUsageModel.aggregate<{ _id: null; total: number }>([
+    const result = await resolveScopedModel(BudgetUsageModel, connection).aggregate<{ _id: null; total: number }>([
       { $match: match },
       { $group: { _id: null, total: { $sum: '$costUsd' } } },
     ]);
@@ -281,7 +283,7 @@ function withFailoverBudget(req: LlmRequest, remainingUsd: number): LlmRequest {
 
 export async function applyBudgetGuard(
   req: LlmRequest,
-  ctx: { tenantId: string; channelId?: string },
+  ctx: { tenantId: string; channelId?: string; connection?: Connection },
 ): Promise<BudgetCheckResult> {
   const config = getConfig();
   const budgets = config.budgets;
@@ -299,7 +301,7 @@ export async function applyBudgetGuard(
   // the env-configured cap below. `caps` (not `budgets`) is the source of
   // truth for every cap comparison from here on; `budgets.downgradeOpusThreshold`
   // /`downgradeSonnetThreshold`/`bypassChannelIds` stay env-only (not overridable).
-  const override = await getBudgetCapOverride(ctx.tenantId);
+  const override = await getBudgetCapOverride(ctx.tenantId, ctx.connection);
   const caps = resolveEffectiveBudgetCaps(budgets, override);
 
   // Aggregate current spend (cached 30s). Every match is scoped to the tenant
@@ -313,8 +315,8 @@ export async function applyBudgetGuard(
   const dayKey = `${ctx.tenantId}:day:${dayStart.toISOString()}`;
 
   const [mtd, today] = await Promise.all([
-    aggregateCostSum({ ...t, createdAt: { $gte: monthStart } }, monthKey),
-    aggregateCostSum({ ...t, createdAt: { $gte: dayStart } }, dayKey),
+    aggregateCostSum({ ...t, createdAt: { $gte: monthStart } }, monthKey, ctx.connection),
+    aggregateCostSum({ ...t, createdAt: { $gte: dayStart } }, dayKey, ctx.connection),
   ]);
 
   let channelMtd: number | undefined;
@@ -323,6 +325,7 @@ export async function applyBudgetGuard(
     channelMtd = await aggregateCostSum(
       { ...t, channelId: ctx.channelId, createdAt: { $gte: monthStart } },
       channelKey,
+      ctx.connection,
     );
   }
 
@@ -387,7 +390,19 @@ export async function applyBudgetGuard(
 export async function recordBudgetUsage(
   req: LlmRequest,
   res: LlmResponse,
-  ctx: { tenantId: string; channelId?: string; channelType?: string; agentName?: string; userId?: string },
+  ctx: {
+    tenantId: string;
+    channelId?: string;
+    channelType?: string;
+    agentName?: string;
+    userId?: string;
+    connection?: Connection;
+    /** Cost-attribution (repo/model/task-type/premium breakdown) — optional,
+     *  populated by callers that know the repo/lane a call ran under. */
+    repo?: string;
+    taskType?: string;
+    premium?: boolean;
+  },
 ): Promise<void> {
   const config = getConfig();
   if (!config.budgets || !config.budgets.enabled) return;
@@ -405,7 +420,7 @@ export async function recordBudgetUsage(
   const isFree = [...FREE_PROVIDER_PREFIXES].some(p => provider.startsWith(p));
 
   try {
-    await BudgetUsageModel.create({
+    await resolveScopedModel(BudgetUsageModel, ctx.connection).create({
       ...tenantScope(ctx.tenantId),
       callId: randomUUID(),
       channelId: ctx.channelId,
@@ -422,6 +437,9 @@ export async function recordBudgetUsage(
       cacheCreationInputTokens: res.cacheCreationInputTokens,
       cacheReadInputTokens: res.cacheReadInputTokens,
       batchMode: res.batchMode,
+      repo: ctx.repo,
+      taskType: ctx.taskType,
+      premium: ctx.premium,
       metadata: undefined,
     });
 

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { Connection } from 'mongoose';
 import { VectorModel, isConnected } from '../shared/db.js';
 import { getEmbeddingProvider } from './embeddings.js';
 import { createChildLogger } from '../shared/logger.js';
@@ -6,7 +7,7 @@ import { getBrainObfuscation } from '../shared/config.js';
 import { obfuscateText, deobfuscateText, OBFUSCATION_MAP_METADATA_KEY } from './obfuscate.js';
 import { obfMapKey, saveObfMap, loadObfMap } from './obf-map-store.js';
 import type { IVector } from '../shared/db.js';
-import { scopedFind, scopedFindOne, scopedCountDocuments, scopedDeleteMany, tenantScope } from '../shared/scoped-query.js';
+import { scopedFind, scopedFindOne, scopedCountDocuments, scopedDeleteMany, tenantScope, resolveScopedModel } from '../shared/scoped-query.js';
 import {
   AnnIndex,
   detectVectorBackend,
@@ -101,7 +102,7 @@ export async function storeVector(tenantId: string, opts: {
   tags?: string[];
   sessionId?: string;
   metadata?: Record<string, unknown>;
-}): Promise<boolean> {
+}, connection?: Connection): Promise<boolean> {
   if (!isConnected()) {
     log.warn('MongoDB not connected — cannot store vector');
     return false;
@@ -114,7 +115,7 @@ export async function storeVector(tenantId: string, opts: {
     repo: opts.repo,
     source: opts.source,
     contentHash: hash,
-  });
+  }, connection);
 
   if (existing) {
     log.debug({ repo: opts.repo, source: opts.source }, 'Vector already exists — skipping');
@@ -143,7 +144,7 @@ export async function storeVector(tenantId: string, opts: {
   const provider = getEmbeddingProvider();
   const embedding = await provider.embed(embedInput);
 
-  await VectorModel.create({
+  await resolveScopedModel(VectorModel, connection).create({
     ...tenantScope(tenantId),
     repo: opts.repo,
     source: opts.source,
@@ -169,12 +170,12 @@ export async function storeBatch(tenantId: string, chunks: Array<{
   tags?: string[];
   sessionId?: string;
   metadata?: Record<string, unknown>;
-}>): Promise<StoreResult> {
+}>, connection?: Connection): Promise<StoreResult> {
   let stored = 0, skipped = 0, failed = 0;
 
   for (const chunk of chunks) {
     try {
-      const wasStored = await storeVector(tenantId, chunk);
+      const wasStored = await storeVector(tenantId, chunk, connection);
       if (wasStored) stored++;
       else skipped++;
     } catch (err) {
@@ -206,7 +207,7 @@ export async function searchVectors(tenantId: string, opts: {
   tags?: string[];
   since?: Date;
   limit?: number;
-}): Promise<VectorSearchResult[]> {
+}, connection?: Connection): Promise<VectorSearchResult[]> {
   if (!isConnected()) {
     log.warn('MongoDB not connected — cannot search vectors');
     return [];
@@ -232,7 +233,7 @@ export async function searchVectors(tenantId: string, opts: {
       });
       // $vectorSearch is an Atlas-only stage absent from mongoose's PipelineStage
       // union, so cast through unknown.
-      const docs = await VectorModel.aggregate(pipeline as unknown as Parameters<typeof VectorModel.aggregate>[0]);
+      const docs = await resolveScopedModel(VectorModel, connection).aggregate(pipeline as unknown as Parameters<typeof VectorModel.aggregate>[0]);
       // An EMPTY Atlas result is treated as a miss, not a truth: a misconfigured
       // index (e.g. tenantId not declared as a `filter` field, or a dims mismatch
       // vs the 384-dim local embeddings) returns [] WITHOUT throwing, which would
@@ -260,7 +261,7 @@ export async function searchVectors(tenantId: string, opts: {
   }
 
   // ── Local: embedded ANN over tenant-scoped candidates ──
-  const index = await getLocalIndex(tenantId, opts);
+  const index = await getLocalIndex(tenantId, opts, connection);
   if (index.size === 0) return [];
 
   return index.query(queryEmbedding, limit).map(hit => deobfuscateResult(tenantId, { ...hit.item, score: hit.score }));
@@ -277,9 +278,12 @@ async function getLocalIndex(tenantId: string, opts: {
   source?: IVector['source'];
   tags?: string[];
   since?: Date;
-}): Promise<AnnIndex<VectorBase>> {
+}, connection?: Connection): Promise<AnnIndex<VectorBase>> {
   const tagsKey = (opts.tags || []).slice().sort().join(',');
-  const sig = `${tenantId}|${opts.repo || '*'}|${opts.source || '*'}|${tagsKey}|${opts.since ? +opts.since : ''}`;
+  // Connection-aware cache key (ADR-030 §2 plumbing): a dedicated-tier tenant's
+  // index must never be served from a shared-connection-built cache entry (or
+  // vice versa) even though both share the same tenantId.
+  const sig = `${tenantId}|${connection ? 'conn' : 'shared'}|${opts.repo || '*'}|${opts.source || '*'}|${tagsKey}|${opts.since ? +opts.since : ''}`;
 
   const cached = localIndexCache.get(sig);
   if (cached && Date.now() - cached.builtAt <= VECTOR_LOCAL_TTL_MS) return cached.index;
@@ -294,7 +298,7 @@ async function getLocalIndex(tenantId: string, opts: {
   // `embedding` is `select: false` on the schema — it MUST be explicitly
   // re-selected or every candidate comes back without a vector and the ANN
   // index builds empty (silent zero-result recall). Mirrors search.ts:43.
-  const candidates = (await scopedFind(VectorModel, tenantId, filter)
+  const candidates = (await scopedFind(VectorModel, tenantId, filter, connection)
     .select('+embedding')
     .sort({ updatedAt: -1 })
     .limit(VECTOR_LOCAL_MAX_CANDIDATES)
@@ -341,13 +345,14 @@ export async function sessionDateExists(
   repo: string,
   sessionDate: string,
   sources: IVector['source'][],
+  connection?: Connection,
 ): Promise<boolean> {
   if (!isConnected()) return false;
   const count = await scopedCountDocuments(VectorModel, tenantId, {
     repo,
     source: { $in: sources },
     'metadata.sessionDate': sessionDate,
-  });
+  }, connection);
   return count > 0;
 }
 
@@ -365,7 +370,7 @@ export async function recallSession(tenantId: string, opts: {
   k?: number;
   since?: Date;
   repo?: string;
-}): Promise<RecallResult[]> {
+}, connection?: Connection): Promise<RecallResult[]> {
   if (!isConnected()) {
     log.warn('MongoDB not connected — cannot recall sessions');
     return [];
@@ -383,7 +388,7 @@ export async function recallSession(tenantId: string, opts: {
         source,
         since: opts.since,
         limit: perSource,
-      }),
+      }, connection),
     ),
   );
 
@@ -403,13 +408,13 @@ export async function recallSession(tenantId: string, opts: {
 /**
  * Delete all vectors for a repo+source combination (used before re-indexing).
  */
-export async function deleteVectors(tenantId: string, repo: string, source?: IVector['source']): Promise<number> {
+export async function deleteVectors(tenantId: string, repo: string, source?: IVector['source'], connection?: Connection): Promise<number> {
   if (!isConnected()) return 0;
 
   const filter: Record<string, unknown> = { repo };
   if (source) filter.source = source;
 
-  const result = await scopedDeleteMany(VectorModel, tenantId, filter);
+  const result = await scopedDeleteMany(VectorModel, tenantId, filter, connection);
   log.info({ repo, source, deleted: result.deletedCount }, 'Vectors deleted');
   return result.deletedCount;
 }
@@ -417,12 +422,12 @@ export async function deleteVectors(tenantId: string, repo: string, source?: IVe
 /**
  * Get vector count by repo and/or source, scoped to a tenant.
  */
-export async function getVectorCount(tenantId: string, repo?: string, source?: IVector['source']): Promise<number> {
+export async function getVectorCount(tenantId: string, repo?: string, source?: IVector['source'], connection?: Connection): Promise<number> {
   if (!isConnected()) return 0;
 
   const filter: Record<string, unknown> = {};
   if (repo) filter.repo = repo;
   if (source) filter.source = source;
 
-  return scopedCountDocuments(VectorModel, tenantId, filter);
+  return scopedCountDocuments(VectorModel, tenantId, filter, connection);
 }

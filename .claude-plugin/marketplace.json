@@ -1,0 +1,44 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ai-management",
+  "description": "myAI's Claude Code plugin surface — curated agent/skill/hook bundles distributed from the same single ai-management npm engine (one engine, many surfaces; see plan/BRAIN_V2_CAPTURE_AND_OFFLOAD.md W6).",
+  "owner": {
+    "name": "knofler",
+    "url": "https://github.com/knofler/myai"
+  },
+  "plugins": [
+    {
+      "name": "myai-brain",
+      "description": "Git-versioned agent memory — capture, compress, and recall session context across agents and machines without re-reading state files every boot.",
+      "author": {
+        "name": "knofler"
+      },
+      "category": "productivity",
+      "source": "./plugins/brain",
+      "homepage": "https://github.com/knofler/myai#readme",
+      "keywords": ["memory", "brain", "context", "sona", "continuity"]
+    },
+    {
+      "name": "myai-fleet",
+      "description": "Multi-agent swarm coordination, GitHub lifecycle automation, and project/schedule tracking for myAI's fleet of managed repos.",
+      "author": {
+        "name": "knofler"
+      },
+      "category": "orchestration",
+      "source": "./plugins/fleet",
+      "homepage": "https://github.com/knofler/myai#readme",
+      "keywords": ["swarm", "fleet", "github", "orchestration", "scheduling"]
+    },
+    {
+      "name": "myai-blueprint",
+      "description": "Full-stack app scaffolding — frontend, API, database, and devops specialists plus scaffold skills for taking an idea to a running Next.js/Docker blueprint.",
+      "author": {
+        "name": "knofler"
+      },
+      "category": "development",
+      "source": "./plugins/blueprint",
+      "homepage": "https://github.com/knofler/myai#readme",
+      "keywords": ["scaffold", "blueprint", "nextjs", "docker", "fullstack"]
+    }
+  ]
+}

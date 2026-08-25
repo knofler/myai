@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import type { Connection } from 'mongoose';
 import { ScheduleModel, isConnected } from '../shared/db.js';
 import type { ISchedule, ScheduleKind, ScheduleStatus } from '../shared/db.js';
 import { createChildLogger } from '../shared/logger.js';
-import { scopedFind, scopedFindOne, scopedDeleteOne, tenantScope } from '../shared/scoped-query.js';
+import { scopedFind, scopedFindOne, scopedDeleteOne, tenantScope, resolveScopedModel } from '../shared/scoped-query.js';
 
 const log = createChildLogger({ module: 'schedule-store' });
 
@@ -97,9 +98,9 @@ function requireDb(): void {
   }
 }
 
-export async function createSchedule(tenantId: string, input: CreateScheduleInput): Promise<ScheduleView> {
+export async function createSchedule(tenantId: string, input: CreateScheduleInput, connection?: Connection): Promise<ScheduleView> {
   requireDb();
-  const doc = await ScheduleModel.create({
+  const doc = await resolveScopedModel(ScheduleModel, connection).create({
     ...tenantScope(tenantId),
     scheduleId: `sched-${randomUUID()}`,
     name: input.name,
@@ -119,9 +120,9 @@ export async function createSchedule(tenantId: string, input: CreateScheduleInpu
   return toView(doc);
 }
 
-export async function updateSchedule(tenantId: string, input: UpdateScheduleInput): Promise<ScheduleView | null> {
+export async function updateSchedule(tenantId: string, input: UpdateScheduleInput, connection?: Connection): Promise<ScheduleView | null> {
   requireDb();
-  const existing = await scopedFindOne(ScheduleModel, tenantId, { scheduleId: input.scheduleId });
+  const existing = await scopedFindOne(ScheduleModel, tenantId, { scheduleId: input.scheduleId }, connection);
   if (!existing) return null;
 
   if (input.name !== undefined) existing.name = input.name;
@@ -137,20 +138,20 @@ export async function updateSchedule(tenantId: string, input: UpdateScheduleInpu
   return toView(existing);
 }
 
-export async function getSchedule(tenantId: string, scheduleId: string): Promise<ScheduleView | null> {
+export async function getSchedule(tenantId: string, scheduleId: string, connection?: Connection): Promise<ScheduleView | null> {
   requireDb();
-  const doc = await scopedFindOne(ScheduleModel, tenantId, { scheduleId });
+  const doc = await scopedFindOne(ScheduleModel, tenantId, { scheduleId }, connection);
   return doc ? toView(doc) : null;
 }
 
-export async function listSchedules(tenantId: string, filter: ListSchedulesFilter = {}): Promise<ScheduleView[]> {
+export async function listSchedules(tenantId: string, filter: ListSchedulesFilter = {}, connection?: Connection): Promise<ScheduleView[]> {
   requireDb();
   const query: Record<string, unknown> = {};
   if (filter.enabled !== undefined) query.enabled = filter.enabled;
   if (filter.kind) query.kind = filter.kind;
   if (filter.status) query.lastStatus = filter.status;
 
-  const docs = await scopedFind(ScheduleModel, tenantId, query)
+  const docs = await scopedFind(ScheduleModel, tenantId, query, connection)
     .sort({ nextRun: 1, createdAt: 1 })
     .limit(filter.limit ?? 100)
     .exec();
@@ -177,9 +178,9 @@ export async function findDueSchedules(now: Date): Promise<ScheduleView[]> {
   return docs.map(toView);
 }
 
-export async function recordRunResult(tenantId: string, input: RunResultInput): Promise<ScheduleView | null> {
+export async function recordRunResult(tenantId: string, input: RunResultInput, connection?: Connection): Promise<ScheduleView | null> {
   requireDb();
-  const existing = await scopedFindOne(ScheduleModel, tenantId, { scheduleId: input.scheduleId });
+  const existing = await scopedFindOne(ScheduleModel, tenantId, { scheduleId: input.scheduleId }, connection);
   if (!existing) return null;
 
   existing.lastRun = input.ranAt;
@@ -197,8 +198,8 @@ export async function recordRunResult(tenantId: string, input: RunResultInput): 
   return toView(existing);
 }
 
-export async function deleteSchedule(tenantId: string, scheduleId: string): Promise<boolean> {
+export async function deleteSchedule(tenantId: string, scheduleId: string, connection?: Connection): Promise<boolean> {
   requireDb();
-  const result = await scopedDeleteOne(ScheduleModel, tenantId, { scheduleId });
+  const result = await scopedDeleteOne(ScheduleModel, tenantId, { scheduleId }, connection);
   return (result.deletedCount ?? 0) > 0;
 }

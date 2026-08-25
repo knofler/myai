@@ -196,19 +196,19 @@ export function ProductTour() {
         aria-label={skipReady ? 'Close tour' : 'Tour is starting'}
         onClick={trySkip}
         aria-disabled={!skipReady}
-        className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm"
+        className="absolute inset-0 bg-[rgb(var(--bg-page))]/80 backdrop-blur-sm"
         data-testid="tour-backdrop"
       />
 
       {/* card */}
-      <div className="gel-surface relative w-full max-w-lg rounded-3xl border border-zinc-800 p-7 shadow-2xl">
+      <div className="gel-surface relative w-full max-w-lg rounded-3xl border border-[rgb(var(--border-subtle))] p-7 shadow-2xl">
         <div className="flex items-center justify-between">
           <span className="text-[11px] uppercase tracking-widest text-teal-300" data-testid="tour-eyebrow">
             {step.eyebrow}
           </span>
           {autoAdvancing && (
             <span
-              className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-zinc-500"
+              className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[rgb(var(--text-muted))]"
               data-testid="tour-autoadvance"
             >
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal-400" />
@@ -219,21 +219,21 @@ export function ProductTour() {
 
         <h2
           id="tour-title"
-          className="mt-3 text-2xl font-bold leading-tight tracking-tight text-zinc-100"
+          className="mt-3 text-2xl font-bold leading-tight tracking-tight text-[rgb(var(--text-primary))]"
           data-testid="tour-title"
         >
           {step.title}
         </h2>
-        <p className="mt-3 text-sm leading-relaxed text-zinc-400" data-testid="tour-body">
+        <p className="mt-3 text-sm leading-relaxed text-[rgb(var(--text-secondary))]" data-testid="tour-body">
           {step.body}
         </p>
 
         {step.pillars && (
           <div className="mt-5 grid grid-cols-2 gap-3">
             {step.pillars.map((p) => (
-              <div key={p.label} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+              <div key={p.label} className="rounded-xl border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))]/50 p-3">
                 <div className="text-xs font-semibold text-brand-orange">{p.label}</div>
-                <div className="mt-1 text-xs text-zinc-500">{p.note}</div>
+                <div className="mt-1 text-xs text-[rgb(var(--text-muted))]">{p.note}</div>
               </div>
             ))}
           </div>
@@ -256,7 +256,7 @@ export function ProductTour() {
           <button
             onClick={back}
             disabled={i === 0}
-            className="text-sm text-zinc-500 hover:text-zinc-300 disabled:opacity-0"
+            className="text-sm text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] disabled:opacity-0"
             data-testid="tour-back"
           >
             ← Back
@@ -289,7 +289,7 @@ export function ProductTour() {
           {skipReady && (
             <button
               onClick={close}
-              className="text-[11px] text-zinc-600 underline-offset-2 transition hover:text-zinc-400 hover:underline"
+              className="text-[11px] text-zinc-600 underline-offset-2 transition hover:text-[rgb(var(--text-secondary))] hover:underline"
               data-testid="tour-skip"
             >
               Skip for now

@@ -38,17 +38,17 @@ export default async function MarketplaceReviewDetailPage({
         <Card title="Submission">
           <div className="p-4 space-y-3 text-sm">
             <div>
-              <span className="text-zinc-500">Listing:</span>{' '}
-              <span className="text-zinc-200">{listing.title}</span>{' '}
+              <span className="text-[rgb(var(--text-muted))]">Listing:</span>{' '}
+              <span className="text-[rgb(var(--text-primary))]">{listing.title}</span>{' '}
               <span className="text-zinc-600">({listing.slug}, {listing.kind})</span>
             </div>
             <div>
-              <span className="text-zinc-500">Manifest hash:</span>{' '}
-              <span className="text-zinc-300 font-mono text-xs">{v.manifestHash}</span>
+              <span className="text-[rgb(var(--text-muted))]">Manifest hash:</span>{' '}
+              <span className="text-[rgb(var(--text-primary))] font-mono text-xs">{v.manifestHash}</span>
             </div>
             <div>
-              <span className="text-zinc-500">Changelog:</span>
-              <p className="text-zinc-300 mt-1">{v.changelog}</p>
+              <span className="text-[rgb(var(--text-muted))]">Changelog:</span>
+              <p className="text-[rgb(var(--text-primary))] mt-1">{v.changelog}</p>
             </div>
           </div>
         </Card>

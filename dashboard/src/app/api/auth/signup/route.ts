@@ -27,6 +27,19 @@ export async function POST(req: Request) {
   // Team tier: an invite token switches signup to join-existing-tenant mode —
   // no org name needed (the tenant already exists) and no API key comes back.
   const inviteToken = typeof body.inviteToken === 'string' ? body.inviteToken.trim() : '';
+  // GROWTH — referral program: the `?ref=` code carried from another tenant's
+  // tracked invite link (see components/landing-signup.tsx). Optional; a
+  // missing/invalid code is a silent no-op on the gateway side.
+  const referralCode = typeof body.referralCode === 'string' ? body.referralCode.trim() : '';
+  // Design-partner program (GRAND_PRODUCT §7.4): a `trial_days` gift code
+  // redeemed at signup instead of via the post-signup /billing redeem flow —
+  // grants e.g. a 60-day Solo trial immediately. Optional; a bad/expired code
+  // is a silent no-op on the gateway side (signup never fails on it).
+  const trialCode = typeof body.trialCode === 'string' ? body.trialCode.trim() : '';
+  // Click-wrap consent: the signup form's "I agree" checkbox. Forwarded as a
+  // strict boolean; the gateway records it per tenant (version + timestamp)
+  // and rejects without it when LEGAL_CONSENT_REQUIRED=1.
+  const acceptTerms = body.acceptTerms === true;
 
   if (!name && !inviteToken) return NextResponse.json({ error: 'organisation name is required' }, { status: 400 });
   if (name.length > 120) return NextResponse.json({ error: 'name too long' }, { status: 400 });
@@ -48,6 +61,9 @@ export async function POST(req: Request) {
         tenantName: name || undefined,
         displayName: email.split('@')[0],
         inviteToken: inviteToken || undefined,
+        referralCode: referralCode || undefined,
+        trialCode: trialCode || undefined,
+        acceptTerms: acceptTerms || undefined,
       }),
       cache: 'no-store',
       signal: AbortSignal.timeout(8000),
@@ -61,6 +77,7 @@ export async function POST(req: Request) {
       tenant: { tenantId: gw.tenantId, name: gw.tenantName || name, plan: gw.plan || 'free' },
       role: gw.role,
       apiKey: gw.apiKey, // show-once, for connecting a tool/CLI (absent on invite joins)
+      trialEndsAt: gw.trialEndsAt, // set only when a valid trialCode was redeemed
     });
     setSessionCookie(res, gw.token, JWT_MAX_AGE);
     return res;

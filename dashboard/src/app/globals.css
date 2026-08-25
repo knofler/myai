@@ -49,6 +49,57 @@
    Bold is applied at the element; this only sets the hue. */
 .text-brand-orange { color: rgb(var(--brand-orange)); }
 
+/* ── Light-mode status-text overrides ─────────────────────────────
+   Per-page content uses Tailwind's bright/mid status shades (red-400,
+   amber-300, emerald-400, ...) tuned for legibility on the dark zinc
+   surfaces above — WCAG-AA-checked against dark-mode's rgb(var(--bg-*))
+   only. Once the structural bg/border classes flip light via the tokens
+   above, those same bright shades fall well under 4.5:1 on a white/slate-50
+   surface (e.g. red-400 on white ≈ 2.8:1). This block remaps every such
+   class, scoped to :root.light, to the darkest same-hue shade that still
+   clears AA on both light backgrounds — dark mode is untouched. Source of
+   truth + contrast proof: lib/theme.ts LIGHT_STATUS_TEXT_OVERRIDES,
+   checked by theme.test.ts. Keep both in sync when adding a new status
+   color class to page content. */
+:root.light .text-amber-200,
+:root.light .text-amber-300,
+:root.light .text-amber-400,
+:root.light .text-amber-500 { color: #b45309 !important; }
+:root.light .text-blue-300,
+:root.light .text-blue-400 { color: #2563eb !important; }
+:root.light .text-cyan-400 { color: #0e7490 !important; }
+:root.light .text-emerald-200,
+:root.light .text-emerald-300,
+:root.light .text-emerald-400,
+:root.light .text-emerald-500 { color: #047857 !important; }
+:root.light .text-gray-300 { color: #4b5563 !important; }
+:root.light .text-green-400 { color: #15803d !important; }
+:root.light .text-indigo-300,
+:root.light .text-indigo-400 { color: #4f46e5 !important; }
+:root.light .text-lime-400 { color: #4d7c0f !important; }
+:root.light .text-neutral-100,
+:root.light .text-neutral-300,
+:root.light .text-neutral-400 { color: #525252 !important; }
+:root.light .text-orange-400 { color: #c2410c !important; }
+:root.light .text-pink-400 { color: #be185d !important; }
+:root.light .text-purple-200,
+:root.light .text-purple-300,
+:root.light .text-purple-400 { color: #9333ea !important; }
+:root.light .text-red-300,
+:root.light .text-red-400 { color: #dc2626 !important; }
+:root.light .text-rose-200,
+:root.light .text-rose-300,
+:root.light .text-rose-400 { color: #be123c !important; }
+:root.light .text-sky-300 { color: #0369a1 !important; }
+:root.light .text-teal-50,
+:root.light .text-teal-100,
+:root.light .text-teal-200,
+:root.light .text-teal-300,
+:root.light .text-teal-400 { color: #0f766e !important; }
+:root.light .text-violet-400 { color: #7c3aed !important; }
+:root.light .text-yellow-400,
+:root.light .text-yellow-500 { color: #a16207 !important; }
+
 /* Orange brand gel — hero band on the showcase page only. */
 .gel-orange {
   background-image: linear-gradient(

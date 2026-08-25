@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction, Express } from 'express';
 import { randomUUID } from 'node:crypto';
 import { createChildLogger } from '../shared/logger.js';
 import { authenticate } from './auth.js';
+import { apiVersioning } from './api-version.js';
 import { tenantQuota } from './tenant-quota.js';
 import { regionGuard } from './region-guard.js';
 import { tenantDbGuard } from '../shared/tenant-db-registry.js';
@@ -11,6 +12,7 @@ import { captureException } from '../monitoring/sentry.js';
 import { recordLog } from '../monitoring/log-store.js';
 import { verifyJwt } from './user-auth.js';
 import { isSessionRevoked, touchSession } from './user-sessions.js';
+import { impersonationGuard } from './impersonation.js';
 
 const log = createChildLogger({ module: 'middleware' });
 
@@ -408,6 +410,14 @@ export function applyMiddleware(app: Express): {
   // 3c. Correlation id — before request logging so every log line carries it
   app.use(correlationId);
 
+  // 3d. API versioning — rewrites /api/v1/* to the canonical /api/* routes
+  //     (compatibility shim: same handlers, auth exemptions, and rate-limit
+  //     buckets for both shapes), stamps X-API-Version on every /api response,
+  //     rejects unsupported versions, and emits Deprecation/Sunset headers for
+  //     routes in the deprecation window. Before auth so exact-match exempt
+  //     path sets keep working; policy: documentation/API_VERSIONING.md.
+  app.use(apiVersioning());
+
   // 4. Request logging — after body parse so we capture the full lifecycle
   app.use(requestLogging);
 
@@ -439,6 +449,13 @@ export function applyMiddleware(app: Express): {
   // 8. Session revocation guard — after tenant auth, before routes. A no-op
   //    for requests without a myai_token cookie/Bearer JWT (API-key traffic).
   app.use(sessionRevocationGuard);
+
+  // 9. Impersonation guard (operator support-login-as-tenant) — after the
+  //    revocation guard so an ended support session 401s before it can be
+  //    audited as active. Inert for every request without an `imp`-claim JWT;
+  //    for impersonated sessions it stamps EVERY request into the target
+  //    tenant's audit chain and hard-rejects writes on read-only sessions.
+  app.use(impersonationGuard);
 
   // Start periodic cleanup
   const stopRateLimitCleanup = startRateLimitCleanup();

@@ -14,8 +14,10 @@
  *   - data_retention_purge_daily  → kind=tool, target=data_retention_purge, 03:00 UTC daily
  *   - mrr_snapshot_sweep_daily    → kind=tool, target=mrr_snapshot_sweep, 02:00 UTC daily
  *   - erasure_sweep_daily         → kind=tool, target=erasure_sweep, 04:00 UTC daily
+ *   - cancellation_purge_sweep_daily → kind=tool, target=cancellation_purge_sweep, 05:00 UTC daily
  *   - task_lease_reap_15min       → kind=tool, target=task_lease_reap, every 15 minutes
  *   - inline_exec_cycle_5min      → kind=tool, target=inline_execute, every 5 minutes
+ *   - recurring_task_sweep_5min   → kind=tool, target=recurring_tasks_sweep, every 5 minutes
  *
  * `inline_exec_cycle_5min` (ADR-018) is the activation wire-up for the
  * in-gateway inline execution lane: seeding it is what actually gives
@@ -83,6 +85,13 @@ const DEFAULT_SCHEDULES: DefaultScheduleSpec[] = [
     message: '{}',
   },
   {
+    name: 'cancellation_purge_sweep_daily',
+    cronExpr: '0 5 * * *', // 05:00 UTC daily — after the erasure sweep, ahead of the morning sweep
+    kind: 'tool',
+    target: 'cancellation_purge_sweep',
+    message: '{}',
+  },
+  {
     name: 'task_lease_reap_15min',
     cronExpr: '*/15 * * * *', // every 15 minutes — well under the default 1h claim lease, so a dead runner's task is freed promptly
     kind: 'tool',
@@ -94,6 +103,13 @@ const DEFAULT_SCHEDULES: DefaultScheduleSpec[] = [
     cronExpr: '*/5 * * * *', // every 5 minutes — a no-op cadence until INLINE_EXEC_ENABLED=1
     kind: 'tool',
     target: 'inline_execute',
+    message: '{}',
+  },
+  {
+    name: 'recurring_task_sweep_5min',
+    cronExpr: '*/5 * * * *', // every 5 minutes — enqueues due recurring templates as one-shot queue tasks; a no-op read when none are due
+    kind: 'tool',
+    target: 'recurring_tasks_sweep',
     message: '{}',
   },
 ];

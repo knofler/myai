@@ -1,28 +1,30 @@
-# Windows Runner Support — WSL2 (recommended) & native Task Scheduler (experimental)
+# Windows Runner Support — WSL2 (recommended), native Task Scheduler & native Windows Service (experimental)
 
 > How to make a Windows machine a per-machine *worker* for the autonomous CLI
 > task runner. The shared queue lives in the gateway; each box that should work
 > it needs a schedule installed once. On macOS that's launchd, on Linux a
-> systemd user timer — this page covers the two Windows options.
+> systemd user timer — this page covers the three Windows options.
 >
 > **Support tier: best-effort.** The runner (`scripts/cli_task_runner.sh`) is a
 > bash script developed and CI-tested on macOS + Linux. **WSL2 is the
 > recommended path** because inside WSL2 the runner *is* on Linux and the
-> standard installer applies unchanged. The **native Task Scheduler path is
-> experimental** — it works via Git Bash but is not covered by CI.
+> standard installer applies unchanged. The **native Task Scheduler and native
+> Windows Service paths are experimental** — they work via Git Bash but are not
+> covered by runtime CI (AST-parse + static checks only).
 
 ---
 
 ## Which path?
 
-| | Path A — WSL2 (recommended) | Path B — native Task Scheduler (experimental) |
-|---|---|---|
-| Scheduler | systemd user timer (`myai-cli-runner.timer`) | Windows Task Scheduler (`schtasks`, task `myai-cli-task-runner`) |
-| Installer | `scripts/setup_cli_runner_schedule.sh` (auto-routes to the Linux installer) | `scripts/setup_cli_runner_windows.ps1` |
-| Runner environment | real Linux (bash, GNU coreutils, tzdata) | Git Bash (MSYS2) on Windows |
-| CI coverage | yes — same code path as Linux (40-case hermetic suite) | static checks only |
-| Survives logoff | yes, with `loginctl enable-linger` + a WSL keep-alive task | no — interactive schtasks tasks run only while logged on |
-| When to pick | always, when WSL2 is available | locked-down machines where WSL2 can't be enabled |
+| | Path A — WSL2 (recommended) | Path B — native Task Scheduler (experimental) | Path C — native Windows Service (experimental) |
+|---|---|---|---|
+| Scheduler | systemd user timer (`myai-cli-runner.timer`) | Windows Task Scheduler (`schtasks`, task `myai-cli-task-runner`) | Windows Service `myai-cli-runner-svc` (nssm-supervised fire loop) |
+| Installer | `scripts/setup_cli_runner_schedule.sh` (auto-routes to the Linux installer) | `scripts/setup_cli_runner_windows.ps1` | `scripts/setup_cli_runner_windows_service.ps1` |
+| Runner environment | real Linux (bash, GNU coreutils, tzdata) | Git Bash (MSYS2) on Windows | Git Bash (MSYS2) on Windows |
+| CI coverage | yes — same code path as Linux (40-case hermetic suite) | static checks only | static checks only |
+| Survives logoff | yes, with `loginctl enable-linger` + a WSL keep-alive task | no — interactive schtasks tasks run only while logged on | **yes — SERVICE_AUTO_START, fires at boot with nobody logged on** |
+| Needs admin / extras | no | no | Administrator PowerShell + [nssm](https://nssm.cc) + your account password (service logon) |
+| When to pick | always, when WSL2 is available | locked-down machines where WSL2 can't be enabled | WSL2 unavailable AND the box must work the queue logged-off (headless worker) |
 
 Both paths share the exact same runner semantics — cadence installer only
 controls *when* fires happen; slots (`MAX_CONCURRENT`=5), the 30-minute busy
@@ -155,6 +157,112 @@ Same task name family (`myai-cli-task-runner` ↔ `com.myai.cli-task-runner` ↔
 
 ---
 
+## Path C — native Windows Service (EXPERIMENTAL)
+
+For machines where WSL2 is unavailable **and** the queue must keep being worked
+with nobody logged on — the one thing Path B structurally can't do (interactive
+`schtasks` tasks stop at logoff). A real Windows Service (`myai-cli-runner-svc`,
+`SERVICE_AUTO_START`) supervises a fire loop that runs the bash runner under
+Git Bash on the shared cadence.
+
+**Why nssm, not bare `sc.exe`:** a service binary must speak the SCM control
+protocol (`StartServiceCtrlDispatcher`); `powershell.exe`/`cmd.exe`/bash
+scripts don't, so `sc.exe create` pointed straight at a script gets killed by
+the SCM after ~30 seconds. [nssm](https://nssm.cc) is the standard shim that
+owns the SCM handshake and restarts the loop if it dies (60s throttle).
+`sc.exe` is still used for query/stop/delete, so `-Status`/`-Uninstall` work
+even without nssm on PATH.
+
+### Prerequisites
+
+- Everything from Path B (Git for Windows, Claude CLI logged in inside Git
+  Bash, `python3` in Git Bash), plus:
+- **nssm** — `winget install NSSM.NSSM`, `choco install nssm`,
+  `scoop install nssm`, or [nssm.cc/download](https://nssm.cc/download)
+  (auto-detected; override with `-NssmPath`).
+- **Administrator PowerShell** for install/uninstall (`-Status` works
+  unelevated).
+- **Your account password** — the service must run as *your* user (the runner
+  needs your `~/.claude-tech` login, `~/.ai-cli-runner`, git credentials).
+  Prompted via `Get-Credential`, never taken from the command line; nssm
+  grants the "Log on as a service" right automatically. (`-RunAsLocalSystem`
+  exists but is discouraged — SYSTEM's profile has no Claude login.)
+- **Gateway reachability while logged off**: Docker Desktop normally starts at
+  *login*, so a logged-off worker needs the gateway on another machine, or
+  Docker Desktop configured to start at boot. (The runner no-ops gracefully
+  when the gateway is unreachable — you just lose those fires.)
+
+### Install / manage
+
+```powershell
+# Administrator PowerShell
+powershell -ExecutionPolicy Bypass -File scripts\setup_cli_runner_windows_service.ps1                  # every 10 minutes
+powershell -ExecutionPolicy Bypass -File scripts\setup_cli_runner_windows_service.ps1 -EveryMinutes 5  # custom cadence
+powershell -ExecutionPolicy Bypass -File scripts\setup_cli_runner_windows_service.ps1 -Status          # service state + last log
+powershell -ExecutionPolicy Bypass -File scripts\setup_cli_runner_windows_service.ps1 -Uninstall       # stop + remove service + wrappers
+powershell -ExecutionPolicy Bypass -File scripts\setup_cli_runner_windows_service.ps1 -NssmPath "D:\tools\nssm.exe" -BashPath "D:\PortableGit\bin\bash.exe"
+```
+
+Re-running install is **idempotent**: an existing service is updated in place
+(cadence, paths, account) and restarted — no duplicates, no uninstall needed
+between runs.
+
+### What gets registered
+
+```
+Windows Service:  myai-cli-runner-svc   (SERVICE_AUTO_START, runs as YOUR user)
+      └─ nssm → powershell.exe %USERPROFILE%\.ai-cli-runner\service-loop.ps1
+            └─ forever loop: fire + Start-Sleep <cadence>
+                  └─ %USERPROFILE%\.ai-cli-runner\service-task.cmd   (owns the bash quoting chain)
+                        └─ "C:\Program Files\Git\bin\bash.exe" -lc scripts/cli_task_runner.sh
+                              └─ runner logs → %USERPROFILE%\.ai-cli-runner\runner.out / runner.err
+                                 loop logs   → %USERPROFILE%\.ai-cli-runner\service.out / service.err
+```
+
+Same service-name family (`myai-cli-runner-svc` ↔ `com.myai.cli-task-runner` ↔
+`myai-cli-runner.timer` ↔ `myai-cli-task-runner`), same runner log locations,
+same `-Status`/`-Uninstall` verbs. Slots, 30-minute busy backoff, and the
+Sydney off-hours guard all live in `cli_task_runner.sh` — identical everywhere;
+the service only controls the fire cadence.
+
+### Sleep prevention (MANDATORY for an always-on worker)
+
+A service survives logoff but **cannot wake a sleeping machine** — there is no
+Windows-service equivalent of launchd's RTC wake. Disable sleep on AC power
+(the analogue of macOS `sudo pmset -c sleep 0`):
+
+```powershell
+powercfg /change standby-timeout-ac 0
+powercfg /change hibernate-timeout-ac 0
+```
+
+### Known limitations (why this tier is experimental)
+
+- **Not runtime-CI-tested** — same MSYS2 best-effort caveats as Path B; CI
+  covers AST-parse + static structure only
+  (`scripts/tests/test_setup_cli_runner_windows_service.sh`).
+- **Password lifecycle** — when your Windows password changes, the service
+  logon breaks; re-run the installer to re-enter credentials.
+- **Cadence drift** — the loop sleeps a fixed interval *between* fires, so the
+  effective period is `cadence + fire duration` (a no-op guard fire is
+  seconds; a worked task shifts the next fire later — harmless for a
+  slot-based queue, but it's not schtasks' fixed wall-clock grid).
+- **Locks/slots** — same single-Git-installation rule as Path B (slot files
+  live under the MSYS2 `/tmp`).
+- If anything here fights you, switch to Path A — that's the supported route.
+
+### Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| Service won't start (error 1069) | Logon failure — wrong/expired password. Re-run the installer and re-enter credentials |
+| Starts then stops immediately | `type %USERPROFILE%\.ai-cli-runner\service.err` — loop wrapper diagnostics (bash path? ExecutionPolicy?) |
+| Fires but nothing happens | `type %USERPROFILE%\.ai-cli-runner\runner.err` — usually `claude`/`python3` missing in Git Bash, or gateway down (Docker Desktop starts at login!) |
+| Runs no-op during the day | Expected — off-hours guard (weekday 6pm–9am + weekends, Sydney). Manual override: `./scripts/cli_task_runner.sh --force` from Git Bash |
+| `nssm not found` at install | Install nssm (winget/choco/scoop/nssm.cc) or pass `-NssmPath` |
+
+---
+
 ## Silencing a Windows box that should never be a worker
 
 Same as everywhere else — create the opt-out marker (from Git Bash or WSL):
@@ -167,5 +275,6 @@ mkdir -p ~/.ai-cli-runner && touch ~/.ai-cli-runner/.no-runner
 
 *Related: `scripts/setup_cli_runner_schedule.sh` (cross-platform entry point) ·
 `scripts/setup_cli_runner_linux.sh` (WSL2/systemd path) ·
-`scripts/setup_cli_runner_windows.ps1` (native path) ·
+`scripts/setup_cli_runner_windows.ps1` (native Task Scheduler path) ·
+`scripts/setup_cli_runner_windows_service.ps1` (native Windows Service path) ·
 README → "Installing the runner on a machine".*

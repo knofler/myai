@@ -9,8 +9,8 @@
 // — kept in lock-step the same way billing.ts mirrors the gateway's billing.ts.
 
 import { callGateway } from './gateway';
-import { hasHostedBrain } from './billing';
-import type { TenantPlan } from './billing';
+import { hasHostedBrain } from './plan-limits';
+import type { TenantPlan } from './plan-limits';
 
 /** Public hosted-brain status (no secret material) — mirrors HostedBrainInfo. */
 export interface HostedBrainInfo {

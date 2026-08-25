@@ -11,11 +11,19 @@
 // Everything degrades gracefully when Stripe env is unset (local dev / CI):
 // `isStripeConfigured()` is false and the routes return 503 rather than crash.
 
+// Server-only. Safe at module scope again now that the pure plan table lives in
+// the client-safe `plan-limits.ts` — no client component reaches this module, so
+// webpack no longer drags node:crypto into a browser bundle.
 import crypto from 'node:crypto';
 
 // ── Env config ────────────────────────────────────────────────
 export const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
 export const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+/** Signing secret for the separate Connect webhook endpoint (`account.updated`
+ *  etc.) — Stripe issues Connect webhooks a distinct signing secret from the
+ *  platform-subscription endpoint above, even though both use the same
+ *  `Stripe-Signature` HMAC scheme verified by `verifyWebhookSignature`. */
+export const STRIPE_CONNECT_WEBHOOK_SECRET = process.env.STRIPE_CONNECT_WEBHOOK_SECRET || '';
 /** Stripe Price id for the recurring Solo subscription (price_…). */
 export const STRIPE_SOLO_PRICE_ID = process.env.STRIPE_SOLO_PRICE_ID || '';
 /** Stripe Price id for the Team tier subscription (price_…). */
@@ -45,8 +53,9 @@ export function isStripeConfigured(): boolean {
   return Boolean(STRIPE_SECRET_KEY && STRIPE_SOLO_PRICE_ID);
 }
 
+import type { TenantPlan } from './plan-limits';
+
 // ── Gate (mirror of runtime/src/core/billing.ts) ──────────────
-export type TenantPlan = 'free' | 'solo' | 'team' | 'scale';
 export type SubscriptionStatus =
   | 'none' | 'trialing' | 'active' | 'past_due' | 'canceled' | 'incomplete';
 
@@ -83,45 +92,14 @@ export function entitlementReason(state: BillingState): string | null {
 }
 
 // ── Per-plan entitlement limits (mirror of runtime/src/core/billing.ts) ──
-// Kept in lock-step with the gateway so checkout / webhook / gate / UI agree on
-// what each tier unlocks. A limit of -1 means "unlimited".
-export interface PlanLimits {
-  brainMaxAtoms: number;   // max brain atoms (-1 = unlimited)
-  teamSeats: number;       // max member seats (-1 = unlimited)
-  hostedBrain: boolean;    // managed cross-machine brain remote available?
-  requestsPerMin: number;  // per-tenant burst ceiling: gateway req/min (-1 = unlimited)
-  monthlyRequests: number; // per-tenant monthly request quota (-1 = unlimited)
-  includedSpendUsd: number; // $ of LLM spend included before the 80%/100% spend alert (-1 = unlimited)
-  teamFleetConsole: boolean; // cross-machine "who's doing what" panel on /fleet (GO_LIVE_PLAN Team tier)
-}
-
-export const PLAN_LIMITS: Readonly<Record<TenantPlan, PlanLimits>> = {
-  free: { brainMaxAtoms: 500, teamSeats: 1, hostedBrain: false, requestsPerMin: 60, monthlyRequests: 10_000, includedSpendUsd: 5, teamFleetConsole: false },
-  solo: { brainMaxAtoms: 5_000, teamSeats: 1, hostedBrain: true, requestsPerMin: 300, monthlyRequests: 200_000, includedSpendUsd: 50, teamFleetConsole: false },
-  team: { brainMaxAtoms: 50_000, teamSeats: 10, hostedBrain: true, requestsPerMin: 1_000, monthlyRequests: 2_000_000, includedSpendUsd: 250, teamFleetConsole: true },
-  scale: { brainMaxAtoms: -1, teamSeats: -1, hostedBrain: true, requestsPerMin: -1, monthlyRequests: -1, includedSpendUsd: -1, teamFleetConsole: true },
-} as const;
-
-export function planLimits(plan: TenantPlan): PlanLimits {
-  return PLAN_LIMITS[plan] ?? PLAN_LIMITS.free;
-}
-export function withinBrainLimit(plan: TenantPlan, count: number): boolean {
-  const max = planLimits(plan).brainMaxAtoms;
-  return max < 0 || count <= max;
-}
-export function canAddSeat(plan: TenantPlan, currentSeats: number): boolean {
-  const max = planLimits(plan).teamSeats;
-  return max < 0 || currentSeats < max;
-}
-export function hasHostedBrain(plan: TenantPlan): boolean {
-  return planLimits(plan).hostedBrain;
-}
-/** Team tier gate for the /fleet "Team Activity" panel — the cross-machine
- *  view of every teammate's latest sweep on a shared tenant. Free/Solo are
- *  single-seat, so there is nothing to show; Team/Scale unlock it. */
-export function hasTeamFleetConsole(plan: TenantPlan): boolean {
-  return planLimits(plan).teamFleetConsole;
-}
+// Plan table + predicates now live in the CLIENT-SAFE `plan-limits.ts` — this
+// module imports node:crypto, and webpack drags the whole graph into any client
+// bundle that reaches it (that chain broke the production build). Re-exported
+// here so every existing `@/lib/billing` importer is unaffected.
+export type { TenantPlan, PlanLimits } from './plan-limits';
+export {
+  PLAN_LIMITS, planLimits, withinBrainLimit, canAddSeat, hasHostedBrain, hasTeamFleetConsole,
+} from './plan-limits';
 
 // ── Stripe price ↔ plan mapping (env-sourced, interval-aware) ─────────
 // Read at call time so tests can toggle env and a deployment can add the annual

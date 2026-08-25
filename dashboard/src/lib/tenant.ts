@@ -5,37 +5,99 @@
 // *active tenant* for the current request and produces the Mongo filter every
 // scoped query must apply.
 //
-// CONTEXT SOURCE — the tenant is read from the `myai_tenant` cookie, which the
-// M2 signup/login + tenant-switcher flow sets after authentication. When no
-// cookie is present we fall back to DEFAULT_TENANT_ID.
+// CONTEXT SOURCE — the tenant is derived from the httpOnly `myai_token` session
+// JWT, verified by the gateway. The `myai_tenant` cookie the tenant-switcher
+// sets is a UI preference only and is never trusted as authorization (it is
+// client-writable — see GHSA-ffgf-pmmg-cjj5 and getActiveTenant below). With no
+// session we fall back to DEFAULT_TENANT_ID.
 //
-// ⚠ STANDING REQUIREMENT (do NOT regress): the dashboard must NEVER force a
-// login for LOCAL / loopback access. On any machine, hitting the dashboard on
-// localhost must render immediately as the default tenant with no /login
-// redirect — login is OPT-IN (for multi-tenant / hosted use), never a gate on
-// the local operator. That is why this fallback is permanent, not transitional,
-// and why there is deliberately no auth-gating middleware. The gateway mirrors
-// this: it trusts loopback callers without a key (runtime/src/core/auth.ts
-// `resolveNoKey` → isLoopback). If hosted enforcement ever needs a login wall,
-// it MUST exempt loopback so this requirement still holds.
+// ⚠ SUPERSEDED (2026-08-11) — this file used to carry a standing requirement that
+// local/loopback access must NEVER require a login, and that there was therefore
+// "deliberately no auth-gating middleware". Both halves are now false, by explicit
+// operator decision, and keeping the note would be the same species of stale
+// invariant that let GHSA-ffgf-pmmg-cjj5 ship:
+//   • There IS an auth gate — the single-operator middleware (lib/operator-auth.ts).
+//   • It has NO loopback exemption, because the old one keyed off the `Host`
+//     header, which is attacker-controlled; inside Docker every request arrives
+//     via the bridge, so `Host: localhost` bypassed it from anywhere on the network.
+// The local operator now logs in like everyone else, with a credential that lives
+// only in a gitignored `.env`. What survives is the *fallback below*: with no
+// session, the acting tenant is DEFAULT_TENANT_ID rather than an error.
 //
-// NOTE: the tenant is NEVER trusted as a data-shaping argument server-side at
-// the gateway (that resolves tenant from the per-tenant API key — see
-// runtime/src/core/auth.ts). Here it only selects which slice of the *local*
-// read-only mirror to render; the gateway remains the source of truth for any
-// write path.
+// NOTE: the gateway never trusts a caller-supplied tenant — it resolves tenant
+// from the per-tenant API key (runtime/src/core/auth.ts).
+//
+// ⚠ This module is NOT read-only, and the comment that used to claim so was
+// wrong. Several dashboard routes write to Mongo directly, scoped by whatever
+// this function returns — `api/projects` (Task.insertMany, and the runner
+// EXECUTES queue tasks as code), `api/connectors`, `api/budget-caps`,
+// `api/routing-policy`, `api/apps/new`, `api/onboarding/launch`. That mistaken
+// "read-only mirror" assumption is what allowed a client-writable cookie to
+// become an unauthenticated cross-tenant write primitive (GHSA-ffgf-pmmg-cjj5).
+// Treat every value returned here as a security decision, not a view preference.
 
 import { cookies } from 'next/headers';
 import { DEMO_MODE } from './demo';
-import { DEFAULT_TENANT_ID, TENANT_COOKIE } from './tenant-cookie';
+import { GATEWAY_HTTP_URL } from './gateway';
+import { SESSION_COOKIE_NAME } from './session-cookie';
+import { DEFAULT_TENANT_ID, TENANT_COOKIE, tenantFilter } from './tenant-cookie';
 
 // Re-export so existing server-side importers can keep using `@/lib/tenant`.
-export { DEFAULT_TENANT_ID, TENANT_COOKIE };
+// `tenantFilter` is pure and now lives in the client-safe module — see the note
+// there; importing it from here would drag `next/headers` into a client bundle.
+export { DEFAULT_TENANT_ID, TENANT_COOKIE, tenantFilter };
 
 /**
- * Resolve the active tenant for the current request from the `myai_tenant`
- * cookie, falling back to the default tenant when absent (single-operator /
- * pre-login). Never throws — a cookie-read failure degrades to the default.
+ * Resolve the session's tenant by asking the gateway to verify the httpOnly
+ * `myai_token` JWT (the same verifier `/api/auth/me` proxies to). Returns null
+ * when there is no session, the JWT is invalid, or the gateway is unreachable.
+ *
+ * The gateway is the ONLY thing that may turn a credential into a tenant id —
+ * the dashboard never decodes the JWT itself.
+ */
+async function tenantFromSession(jwt: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${GATEWAY_HTTP_URL}/api/auth/me`, {
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        ...(process.env.GATEWAY_LOCAL_TOKEN ? { 'x-gateway-local-token': process.env.GATEWAY_LOCAL_TOKEN } : {}),
+      },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const me = (await res.json().catch(() => null)) as { tenantId?: unknown; tenant?: unknown } | null;
+    const id = typeof me?.tenantId === 'string' ? me.tenantId : typeof me?.tenant === 'string' ? me.tenant : '';
+    return id.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the active tenant for the current request.
+ *
+ * ⚠ SECURITY (GHSA-ffgf-pmmg-cjj5, 2026-08-10): the `myai_tenant` cookie is
+ * written by client-side JavaScript — it is NOT httpOnly and NOT signed, so any
+ * caller can set it to any value. It used to be returned verbatim here, which
+ * made it an unauthenticated cross-tenant selector on every route that calls
+ * this function, including routes that write directly to Mongo (`/api/projects`
+ * fan-out creates queue tasks, and the autonomous runner executes queue tasks as
+ * code). It is therefore now treated as a **UI preference only, never as
+ * authorization**:
+ *
+ *   • No session         → DEFAULT_TENANT_ID. The cookie is ignored entirely.
+ *   • Valid session      → the tenant the GATEWAY says the JWT belongs to. The
+ *                          cookie is honoured only when it already agrees, so
+ *                          the tenant switcher keeps working for a session that
+ *                          genuinely is that tenant, and is inert otherwise.
+ *   • Session unverifiable (gateway down / bad JWT)
+ *                        → DEFAULT_TENANT_ID (fail closed to least privilege).
+ *
+ * The standing local-first requirement is untouched: a local operator with no
+ * login still renders immediately as the default tenant, with no /login redirect.
+ * What changed is only that an unauthenticated caller can no longer *choose*
+ * which tenant they act as. Never throws.
  */
 export async function getActiveTenant(): Promise<string> {
   // Read-only demo (src/lib/demo.ts): the tenant is pinned — the demo
@@ -44,29 +106,19 @@ export async function getActiveTenant(): Promise<string> {
   if (DEMO_MODE) return DEFAULT_TENANT_ID;
   try {
     const store = await cookies();
-    const value = store.get(TENANT_COOKIE)?.value?.trim();
-    return value || DEFAULT_TENANT_ID;
+    const jwt = store.get(SESSION_COOKIE_NAME)?.value?.trim();
+    // Unauthenticated (single-operator local install): default tenant only.
+    if (!jwt) return DEFAULT_TENANT_ID;
+
+    const sessionTenant = await tenantFromSession(jwt);
+    if (!sessionTenant) return DEFAULT_TENANT_ID;
+
+    // The switcher's cookie is allowed to select a tenant only when the verified
+    // session already IS that tenant; otherwise the session wins.
+    const requested = store.get(TENANT_COOKIE)?.value?.trim();
+    return requested && requested === sessionTenant ? requested : sessionTenant;
   } catch {
     return DEFAULT_TENANT_ID;
   }
 }
 
-/**
- * Build the Mongo filter that scopes a query to `tenantId`.
- *
- * - **Default tenant** → a backward-compatible catch-all that also matches rows
- *   written before the ADR-010 backfill (no `tenantId`, or `null`). This keeps
- *   the existing single-operator dashboard fully populated whether or not the
- *   tenant backfill has run on this database.
- * - **Any other (real) tenant** → a strict `{ tenantId }` match, so one tenant
- *   never sees another's rows.
- *
- * Spread into a query alongside other conditions, e.g.
- *   `Schedule.find({ ...tenantFilter(t), enabled: true })`.
- */
-export function tenantFilter(tenantId: string): Record<string, unknown> {
-  if (tenantId === DEFAULT_TENANT_ID) {
-    return { $or: [{ tenantId: DEFAULT_TENANT_ID }, { tenantId: { $exists: false } }, { tenantId: null }] };
-  }
-  return { tenantId };
-}

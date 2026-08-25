@@ -90,9 +90,12 @@ export interface TotpLoginResult {
 export async function verifyTotpLogin(pendingToken: string, code: string, device: DeviceInfo = {}): Promise<TotpLoginResult> {
   const pending = verifyMfaPendingToken(pendingToken);
 
+  // Account (per-userId) layer — the IP layer runs earlier as Express
+  // middleware (ipRateLimit('totp-verify', ...), server.ts) since it doesn't
+  // need the pending token parsed first.
   const rate = checkTotpVerifyRate(pending.sub);
   if (!rate.ok) {
-    throw new AuthError('too many attempts — please wait and try again', 429, 'RATE_LIMITED');
+    throw new AuthError('too many attempts — please wait and try again', 429, 'RATE_LIMITED', rate.retryAfter);
   }
 
   const user = await UserModel.findOne({ userId: pending.sub }).select('+totpSecret +totpRecoveryCodes').lean<IUser>();
@@ -177,10 +180,16 @@ export async function getTotpStatus(userId: string): Promise<{ enabled: boolean;
   return { enabled: !!user.totpEnabled, recoveryCodesRemaining: user.totpRecoveryCodes?.length || 0 };
 }
 
-// ── Per-tenant enforce policy (owner/admin toggle) ──
+// ── Per-tenant enforce policy (owner/admin toggle; any member can read it) ──
 
 export async function setTenantRequire2fa(tenantId: string, enabled: boolean): Promise<{ require2fa: boolean }> {
   const updated = await TenantModel.updateOne({ tenantId }, { $set: { require2fa: enabled } });
   if (!updated.matchedCount) throw new AuthError('tenant not found', 404, 'NOT_FOUND');
   return { require2fa: enabled };
+}
+
+export async function getTenantRequire2fa(tenantId: string): Promise<{ require2fa: boolean }> {
+  const tenant = await TenantModel.findOne({ tenantId }).select('require2fa').lean();
+  if (!tenant) throw new AuthError('tenant not found', 404, 'NOT_FOUND');
+  return { require2fa: !!tenant.require2fa };
 }

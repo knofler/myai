@@ -58,11 +58,11 @@ const ERROR_CODES: { code: string; status: string; meaning: string }[] = [
 function Section({ id, step, title, children }: { id: string; step?: number; title: string; children: React.ReactNode }) {
   return (
     <section id={id} className="scroll-mt-20">
-      <h2 className="text-lg font-semibold text-zinc-100 flex items-baseline gap-2">
+      <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))] flex items-baseline gap-2">
         {step != null && <span className="text-brand-orange">{step}.</span>}
         {title}
       </h2>
-      <div className="mt-3 text-sm text-zinc-400 leading-relaxed space-y-4">{children}</div>
+      <div className="mt-3 text-sm text-[rgb(var(--text-secondary))] leading-relaxed space-y-4">{children}</div>
     </section>
   );
 }
@@ -79,26 +79,26 @@ const TOC = [
 
 export default function DevelopersPage() {
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="min-h-screen bg-[rgb(var(--bg-page))] text-[rgb(var(--text-primary))]">
       {/* Header */}
-      <header className="border-b border-zinc-900">
+      <header className="border-b border-[rgb(var(--border-subtle))]">
         <div className="max-w-5xl mx-auto px-5 md:px-8 py-4 flex items-center justify-between">
           <Link href="/welcome" className="font-bold text-brand-orange">
             myAI
           </Link>
-          <nav className="flex items-center gap-4 text-xs text-zinc-500">
+          <nav className="flex items-center gap-4 text-xs text-[rgb(var(--text-muted))]">
             <a
               href={`${REST_BASE}/api/docs`}
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-zinc-200"
+              className="hover:text-[rgb(var(--text-primary))]"
             >
               Full API reference
             </a>
-            <Link href="/pricing" className="hover:text-zinc-200">
+            <Link href="/pricing" className="hover:text-[rgb(var(--text-primary))]">
               Pricing
             </Link>
-            <Link href="/login" className="hover:text-zinc-200">
+            <Link href="/operator-login" className="hover:text-[rgb(var(--text-primary))]">
               Sign in
             </Link>
           </nav>
@@ -108,7 +108,7 @@ export default function DevelopersPage() {
       {/* Body */}
       <main className="max-w-5xl mx-auto px-5 md:px-8 py-10 md:py-14">
         <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Developer portal</h1>
-        <p className="mt-2 text-sm text-zinc-400 max-w-2xl">
+        <p className="mt-2 text-sm text-[rgb(var(--text-secondary))] max-w-2xl">
           Everything an external integrator needs to call the myAI gateway directly: mint a
           scoped API key, copy-paste curl against the REST and MCP surfaces, and the
           rate-limit / error-code contract to build against. Building a Zapier or n8n
@@ -118,19 +118,19 @@ export default function DevelopersPage() {
           </a>
           .
         </p>
-        <p className="mt-2 text-xs text-zinc-500 max-w-2xl">
+        <p className="mt-2 text-xs text-[rgb(var(--text-muted))] max-w-2xl">
           Looking for the full endpoint-by-endpoint spec instead?{' '}
           <a href={`${REST_BASE}/api/docs`} target="_blank" rel="noopener noreferrer" className="text-brand-orange hover:underline">
             Browse the OpenAPI reference
           </a>{' '}
           (machine-readable spec at{' '}
-          <code className="text-zinc-400">/api/openapi.json</code>).
+          <code className="text-[rgb(var(--text-secondary))]">/api/openapi.json</code>).
         </p>
 
         {/* Table of contents */}
         <nav className="mt-6 flex flex-wrap gap-x-4 gap-y-1 text-xs">
           {TOC.map((t) => (
-            <a key={t.id} href={`#${t.id}`} className="text-zinc-500 hover:text-zinc-200">
+            <a key={t.id} href={`#${t.id}`} className="text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))]">
               {t.label}
             </a>
           ))}
@@ -149,7 +149,7 @@ export default function DevelopersPage() {
                   Sign up
                 </Link>{' '}
                 for a tenant (or{' '}
-                <Link href="/login" className="text-brand-orange hover:underline">
+                <Link href="/operator-login" className="text-brand-orange hover:underline">
                   sign in
                 </Link>{' '}
                 if you already have one).
@@ -168,28 +168,28 @@ export default function DevelopersPage() {
               </li>
               <li>
                 Copy the raw key from the show-once banner. It looks like{' '}
-                <code className="text-zinc-300">myai_live_8Kf2…</code> — the prefix is safe to log,
+                <code className="text-[rgb(var(--text-primary))]">myai_live_8Kf2…</code> — the prefix is safe to log,
                 the rest is not.
               </li>
             </ol>
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[rgb(var(--text-muted))]">
               Rotating a key (same page) keeps the old one valid for a 60-minute grace window by
               default, so you can swap credentials with zero downtime. Revoking is instant, no
               grace.
             </p>
-            <div className="overflow-x-auto rounded-lg border border-zinc-800">
+            <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
               <table className="w-full text-xs">
-                <thead className="bg-zinc-900/60 text-zinc-500">
+                <thead className="bg-[rgb(var(--bg-surface))]/60 text-[rgb(var(--text-muted))]">
                   <tr>
                     <th className="text-left px-3 py-2 font-medium">Scope</th>
                     <th className="text-left px-3 py-2 font-medium">Grants</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-900">
+                <tbody className="divide-y divide-[rgb(var(--border-subtle))]">
                   {SCOPES.map((s) => (
                     <tr key={s.scope}>
-                      <td className="px-3 py-2 font-mono text-zinc-300 whitespace-nowrap">{s.scope}</td>
-                      <td className="px-3 py-2 text-zinc-400">{s.grants}</td>
+                      <td className="px-3 py-2 font-mono text-[rgb(var(--text-primary))] whitespace-nowrap">{s.scope}</td>
+                      <td className="px-3 py-2 text-[rgb(var(--text-secondary))]">{s.grants}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -206,7 +206,7 @@ export default function DevelopersPage() {
               label="either header works"
               code={`Authorization: Bearer myai_live_8Kf2...\n# — or —\nx-api-key: myai_live_8Kf2...`}
             />
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[rgb(var(--text-muted))]">
               A missing or invalid key on a route that requires one returns{' '}
               <code>401 UNAUTHORIZED</code> — see the full error-code table in step 7.
             </p>
@@ -264,7 +264,7 @@ export default function DevelopersPage() {
               label="curl — tools/call"
               code={`curl -X POST ${MCP_BASE}/mcp \\\n  -H "Authorization: Bearer $MYAI_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "jsonrpc": "2.0",\n    "id": 3,\n    "method": "tools/call",\n    "params": { "name": "tasks_list", "arguments": { "repo": "my-app" } }\n  }'`}
             />
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[rgb(var(--text-muted))]">
               Add an <code>Idempotency-Key</code> header on write tools (e.g. <code>tasks_create</code>)
               to safely retry a call without double-creating the resource.
             </p>
@@ -280,7 +280,7 @@ export default function DevelopersPage() {
               label="curl — register a webhook"
               code={`curl -X POST ${REST_BASE}/api/webhooks \\\n  -H "Authorization: Bearer $MYAI_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "url": "https://hooks.zapier.com/hooks/catch/xxxx/yyyy/",\n    "events": ["task.completed", "task.blocked"]\n  }'`}
             />
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[rgb(var(--text-muted))]">
               Valid event names: <code>task.created</code>, <code>task.claimed</code>,{' '}
               <code>task.review</code>, <code>task.blocked</code>, <code>task.completed</code>,{' '}
               <code>plan.updated</code>, <code>runner.fired</code> — or <code>["*"]</code> for all
@@ -292,21 +292,21 @@ export default function DevelopersPage() {
 
           <Section id="rate-limits" step={6} title="Rate limits & quotas">
             <p>Two independent limits apply per tenant, both plan-scoped:</p>
-            <div className="overflow-x-auto rounded-lg border border-zinc-800">
+            <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
               <table className="w-full text-xs">
-                <thead className="bg-zinc-900/60 text-zinc-500">
+                <thead className="bg-[rgb(var(--bg-surface))]/60 text-[rgb(var(--text-muted))]">
                   <tr>
                     <th className="text-left px-3 py-2 font-medium">Plan</th>
                     <th className="text-left px-3 py-2 font-medium">Burst (per minute)</th>
                     <th className="text-left px-3 py-2 font-medium">Monthly quota</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-900">
+                <tbody className="divide-y divide-[rgb(var(--border-subtle))]">
                   {PLAN_LIMITS.map((p) => (
                     <tr key={p.plan}>
-                      <td className="px-3 py-2 text-zinc-300">{p.plan}</td>
-                      <td className="px-3 py-2 font-mono text-zinc-400">{p.perMin}</td>
-                      <td className="px-3 py-2 font-mono text-zinc-400">{p.perMonth}</td>
+                      <td className="px-3 py-2 text-[rgb(var(--text-primary))]">{p.plan}</td>
+                      <td className="px-3 py-2 font-mono text-[rgb(var(--text-secondary))]">{p.perMin}</td>
+                      <td className="px-3 py-2 font-mono text-[rgb(var(--text-secondary))]">{p.perMonth}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -324,7 +324,7 @@ export default function DevelopersPage() {
               label="429 — monthly quota"
               code={`HTTP/1.1 429 Too Many Requests\nRetry-After: 1382400\n\n{\n  "error": "monthly request quota exceeded — upgrade your plan or wait for the next billing period",\n  "code": "QUOTA_EXCEEDED",\n  "retryAfter": 1382400,\n  "limit": 10000,\n  "used": 10000\n}`}
             />
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[rgb(var(--text-muted))]">
               Back off exponentially on <code>RATE_LIMITED</code>; on <code>QUOTA_EXCEEDED</code>{' '}
               either wait for the UTC month to roll over or upgrade the plan from{' '}
               <Link href="/pricing" className="text-brand-orange hover:underline">
@@ -340,21 +340,21 @@ export default function DevelopersPage() {
               minimum, never the offending key. <code>code</code> is the stable field to branch on;
               the message text may change.
             </p>
-            <div className="overflow-x-auto rounded-lg border border-zinc-800">
+            <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
               <table className="w-full text-xs">
-                <thead className="bg-zinc-900/60 text-zinc-500">
+                <thead className="bg-[rgb(var(--bg-surface))]/60 text-[rgb(var(--text-muted))]">
                   <tr>
                     <th className="text-left px-3 py-2 font-medium">Code</th>
                     <th className="text-left px-3 py-2 font-medium">HTTP</th>
                     <th className="text-left px-3 py-2 font-medium">Meaning</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-900">
+                <tbody className="divide-y divide-[rgb(var(--border-subtle))]">
                   {ERROR_CODES.map((e) => (
                     <tr key={e.code}>
-                      <td className="px-3 py-2 font-mono text-zinc-300 whitespace-nowrap">{e.code}</td>
-                      <td className="px-3 py-2 font-mono text-zinc-400">{e.status}</td>
-                      <td className="px-3 py-2 text-zinc-400">{e.meaning}</td>
+                      <td className="px-3 py-2 font-mono text-[rgb(var(--text-primary))] whitespace-nowrap">{e.code}</td>
+                      <td className="px-3 py-2 font-mono text-[rgb(var(--text-secondary))]">{e.status}</td>
+                      <td className="px-3 py-2 text-[rgb(var(--text-secondary))]">{e.meaning}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -365,20 +365,20 @@ export default function DevelopersPage() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-zinc-900">
+      <footer className="border-t border-[rgb(var(--border-subtle))]">
         <div className="max-w-5xl mx-auto px-5 md:px-8 py-6 flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-600">
           <span className="font-bold text-brand-orange">myAI</span>
           <div className="flex items-center gap-4">
-            <a href={`${REST_BASE}/api/docs`} target="_blank" rel="noopener noreferrer" className="hover:text-zinc-400">
+            <a href={`${REST_BASE}/api/docs`} target="_blank" rel="noopener noreferrer" className="hover:text-[rgb(var(--text-secondary))]">
               API reference
             </a>
-            <Link href="/pricing" className="hover:text-zinc-400">
+            <Link href="/pricing" className="hover:text-[rgb(var(--text-secondary))]">
               Pricing
             </Link>
-            <Link href="/security" className="hover:text-zinc-400">
+            <Link href="/security" className="hover:text-[rgb(var(--text-secondary))]">
               Security
             </Link>
-            <Link href="/privacy" className="hover:text-zinc-400">
+            <Link href="/privacy" className="hover:text-[rgb(var(--text-secondary))]">
               Privacy
             </Link>
           </div>

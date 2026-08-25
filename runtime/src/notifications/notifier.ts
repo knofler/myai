@@ -1,7 +1,8 @@
+import type { Connection } from 'mongoose';
 import { createChildLogger } from '../shared/logger.js';
 import { getAdapter, listAdapters } from '../channels/registry.js';
 import { isConnected } from '../shared/db.js';
-import { scopedFind, tenantScope } from '../shared/scoped-query.js';
+import { scopedFind, tenantScope, resolveScopedModel } from '../shared/scoped-query.js';
 
 const log = createChildLogger({ module: 'notifier' });
 
@@ -62,6 +63,9 @@ const LEVEL_ICONS: Record<NotificationLevel, string> = {
 function getDefaultChatId(channel: string): string | undefined {
   if (channel === 'telegram') return process.env.TELEGRAM_DEFAULT_CHAT;
   if (channel === 'discord') return process.env.DISCORD_DEFAULT_CHANNEL;
+  // Slack has no fixed chat id — the "chat" a webhook posts to is baked into
+  // the webhook URL itself, so the fleet-wide default IS the destination.
+  if (channel === 'slack') return process.env.SLACK_DEFAULT_WEBHOOK;
   return undefined;
 }
 
@@ -91,22 +95,23 @@ export function formatNotification(opts: NotificationOpts): string {
 
 // ── Notification history (DB-backed) ─────────────────────
 
-async function storeNotification(tenantId: string, entry: NotificationHistoryEntry): Promise<void> {
+async function storeNotification(tenantId: string, entry: NotificationHistoryEntry, connection?: Connection): Promise<void> {
   if (!isConnected()) return;
   try {
     const { NotificationModel } = await import('../shared/db.js');
     if (!NotificationModel) return;
+    const model = resolveScopedModel(NotificationModel, connection);
     if (entry.dedupKey) {
       // Storm collapse: repeats with the same burst id update the one row
       // (bumping `count`/message in place) instead of inserting a new document.
-      await NotificationModel.findOneAndUpdate(
+      await model.findOneAndUpdate(
         { ...tenantScope(tenantId), dedupKey: entry.dedupKey },
         { $set: { ...tenantScope(tenantId), ...entry } },
         { upsert: true },
       );
       return;
     }
-    await NotificationModel.create({ ...tenantScope(tenantId), ...entry });
+    await model.create({ ...tenantScope(tenantId), ...entry });
   } catch (err) {
     log.warn({ err }, 'Failed to store notification in DB');
   }
@@ -121,16 +126,16 @@ async function storeNotification(tenantId: string, entry: NotificationHistoryEnt
  * path (`storeNotification`) so persistence stays in one place. No-op (and never
  * throws) when the DB is unavailable.
  */
-export async function recordNotification(tenantId: string, entry: NotificationHistoryEntry): Promise<void> {
-  await storeNotification(tenantId, entry);
+export async function recordNotification(tenantId: string, entry: NotificationHistoryEntry, connection?: Connection): Promise<void> {
+  await storeNotification(tenantId, entry, connection);
 }
 
-export async function getNotificationHistory(tenantId: string, limit: number = 20): Promise<NotificationHistoryEntry[]> {
+export async function getNotificationHistory(tenantId: string, limit: number = 20, connection?: Connection): Promise<NotificationHistoryEntry[]> {
   if (!isConnected()) return [];
   try {
     const { NotificationModel } = await import('../shared/db.js');
     if (!NotificationModel) return [];
-    const docs = await scopedFind(NotificationModel, tenantId, {})
+    const docs = await scopedFind(NotificationModel, tenantId, {}, connection)
       .sort({ sentAt: -1 })
       .limit(limit)
       .lean<NotificationHistoryEntry[]>();
@@ -143,7 +148,7 @@ export async function getNotificationHistory(tenantId: string, limit: number = 2
 
 // ── Core send function ───────────────────────────────────
 
-export async function sendNotification(tenantId: string, opts: NotificationOpts): Promise<NotificationResult> {
+export async function sendNotification(tenantId: string, opts: NotificationOpts, connection?: Connection): Promise<NotificationResult> {
   const level = opts.level ?? 'info';
   const formattedMessage = formatNotification(opts);
 
@@ -187,7 +192,7 @@ export async function sendNotification(tenantId: string, opts: NotificationOpts)
         sentAt: new Date(),
         success: false,
         error: result.error,
-      });
+      }, connection);
 
       continue;
     }
@@ -213,7 +218,7 @@ export async function sendNotification(tenantId: string, opts: NotificationOpts)
         sentAt: new Date(),
         success: false,
         error: result.error,
-      });
+      }, connection);
 
       continue;
     }
@@ -233,7 +238,7 @@ export async function sendNotification(tenantId: string, opts: NotificationOpts)
         source: opts.source,
         sentAt: new Date(),
         success: true,
-      });
+      }, connection);
     } catch (err) {
       const errorMsg = (err as Error).message;
       const result: NotificationSendResult = {
@@ -255,7 +260,7 @@ export async function sendNotification(tenantId: string, opts: NotificationOpts)
         sentAt: new Date(),
         success: false,
         error: errorMsg,
-      });
+      }, connection);
     }
   }
 

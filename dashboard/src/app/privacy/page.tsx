@@ -6,6 +6,8 @@
 // a customer signs up for a paid tier) and the local product's outbound calls.
 // Reachable without a login (middleware PUBLIC_PREFIXES + AppShell FULL_BLEED).
 import { LegalShell, Section, Bullets } from '@/components/legal-shell';
+import { GATEWAY_HTTP_URL } from '@/lib/gateway';
+import { fetchLegalDoc, LegalMarkdown } from '@/lib/legal-markdown';
 
 export const metadata = {
   title: 'Privacy Policy — myAI',
@@ -13,15 +15,32 @@ export const metadata = {
     'How myAI handles data: your working context stays on your own machine; the vendor only holds the minimal account and billing data needed to run a paid subscription.',
 };
 
-export default function PrivacyPage() {
+// PRIMARY SOURCE: the gateway's versioned markdown (GET /api/legal/docs/privacy
+// — env-driven copy via LEGAL_DOCS_DIR / LEGAL_* vars; its `version` drives
+// the signup click-wrap record + the dashboard re-consent prompt). The static
+// JSX below is the fallback when the gateway is unreachable — this page must
+// never 500 in front of a buyer.
+export default async function PrivacyPage() {
+  const doc = await fetchLegalDoc(GATEWAY_HTTP_URL, 'privacy');
+  if (doc) {
+    return (
+      <LegalShell title={doc.title} updated={`${doc.updated} (v${doc.version})`}>
+        <LegalMarkdown markdown={doc.markdown} />
+      </LegalShell>
+    );
+  }
+  return <StaticPrivacyFallback />;
+}
+
+function StaticPrivacyFallback() {
   return (
     <LegalShell
       title="Privacy Policy"
-      updated="2026-07-06"
+      updated="2026-08-21"
       intro={
         <>
           myAI is a self-hosted, user-owned platform. Your working context — agent memory, session state, handoffs, the
-          recall corpus — lives in a database on <strong className="text-zinc-200">your</strong> hardware and never
+          recall corpus — lives in a database on <strong className="text-[rgb(var(--text-primary))]">your</strong> hardware and never
           reaches us. This policy explains the only data we, the vendor, ever touch: the minimal account and billing
           information required to run a paid subscription, plus the optional outbound calls the software you run makes
           when <em>you</em> configure them. See the{' '}
@@ -34,7 +53,7 @@ export default function PrivacyPage() {
     >
       <Section heading="1. Your working context is not our data">
         <p>
-          The default myAI configuration makes <strong className="text-zinc-200">zero outbound network calls</strong>.
+          The default myAI configuration makes <strong className="text-[rgb(var(--text-primary))]">zero outbound network calls</strong>.
           Memory is a local database and a folder of markdown you can walk away with (
           <code className="text-teal-300">myai memory export</code>). We are not a processor of your context because it
           is never transmitted to us. There is no telemetry and no silent upload.
@@ -52,7 +71,7 @@ export default function PrivacyPage() {
           ]}
         />
         <p>
-          We do <strong className="text-zinc-200">not</strong> collect your agent memory, code, repositories, prompts,
+          We do <strong className="text-[rgb(var(--text-primary))]">not</strong> collect your agent memory, code, repositories, prompts,
           or task history — those stay on your machine.
         </p>
       </Section>
@@ -92,7 +111,7 @@ export default function PrivacyPage() {
           Because your context lives on your hardware, deletion is largely in your hands: stop the stack, remove the
           database volume, and it is gone. For hosted account data, we retain it while your account is active and delete
           or anonymise it within 30 days of account closure, except where we must keep billing records to meet legal
-          and tax obligations. To request access or deletion of hosted account data, contact us (Section 7).
+          and tax obligations. To request access or deletion of hosted account data, contact us (Section 8).
         </p>
       </Section>
 
@@ -107,7 +126,45 @@ export default function PrivacyPage() {
         </p>
       </Section>
 
-      <Section heading="7. Contact & changes">
+      <Section heading="7. Cookies" id="cookies">
+        <p>
+          The site sets only functional cookies — no advertising trackers, and no analytics unless you opt in via the
+          consent banner (none are in use today; the banner records the choice so any future tool is consent-gated):
+        </p>
+        <Bullets
+          items={[
+            <>
+              <code className="text-teal-300">myai_token</code> / <code className="text-teal-300">myai_operator</code> —
+              strictly necessary: your sign-in sessions.
+            </>,
+            <>
+              <code className="text-teal-300">myai_tenant</code> — strictly necessary: scopes the dashboard to your
+              workspace (an identifier only, never a credential).
+            </>,
+            <>
+              <code className="text-teal-300">myai_locale</code> — preference: remembers your language choice.
+            </>,
+            <>
+              <code className="text-teal-300">myai_consent</code> — strictly necessary: records your cookie choices so we
+              don&apos;t re-ask on every visit.
+            </>,
+          ]}
+        />
+        <p>
+          You can change your choices at any time via the &ldquo;Cookie settings&rdquo; link in the footer of any policy
+          page. Enterprise buyers: the{' '}
+          <a href="/dpa" className="text-teal-300 hover:underline">
+            Data Processing Addendum
+          </a>{' '}
+          and the{' '}
+          <a href="/subprocessors" className="text-teal-300 hover:underline">
+            subprocessor list
+          </a>{' '}
+          cover the processing side.
+        </p>
+      </Section>
+
+      <Section heading="8. Contact & changes">
         <p>
           Questions or data requests: open a private thread via{' '}
           <a
@@ -121,7 +178,7 @@ export default function PrivacyPage() {
           or email the maintainer listed in the repo profile. We will post any material change to this policy on this
           page and update the &ldquo;Last updated&rdquo; date above.
         </p>
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-[rgb(var(--text-muted))]">
           This document is a plain-language policy, not legal advice; adapt it to your jurisdiction before relying on it
           commercially.
         </p>

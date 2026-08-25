@@ -60,6 +60,7 @@ Every AI coding session, your agent learns things — decisions made, gotchas hi
   - [📱 Remote management](#-remote-management--drive-the-fleet-from-your-phone)
   - [🤖 Autonomous Runner](#-autonomous-runner--work-that-ships-while-you-sleep)
   - [🔌 MCP servers](#-mcp-servers--plug-in-tools)
+  - [🧩 Claude Code plugin marketplace](#-claude-code-plugin-marketplace)
   - [🔎 RAG & memory search](#-rag--memory-search)
   - [🤝 Multi-agent handoff](#-multi-agent-handoff)
   - [🐳 Local Docker stack](#-local-docker-stack)
@@ -267,6 +268,15 @@ myai queue [verb]    # inspect/control the runner task queue       → scripts/m
                      #   (done hidden by default); `queue cancel <taskId>` [--reason][--force]
                      #   marks it blocked (reversible — requeue via tasks_update
                      #   {status:pending}); `queue reprioritize <taskId> <P0|P1|P2|P3>`.
+myai open [target]   # terminal → browser, one keystroke          → scripts/myai_open.sh
+                     #   `open`/`open dashboard` (root) · `open board` (THIS repo's
+                     #   /work board — repo auto-detected, --repo overrides) ·
+                     #   `open task <id>` (deep-link a task; tab+repo resolved via the
+                     #   gateway when reachable) · `open repo` (/apps directory) · any
+                     #   named page (work | fleet | brain | memory | system | …).
+                     #   Hosted vs localhost from DASHBOARD_URL / MYAI_DASHBOARD_PORT.
+                     #   Cross-platform (open / xdg-open / WSL / Windows start;
+                     #   MYAI_OPEN_CMD override). --print prints the URL instead.
 myai scan <path>     # spider git repos → register + seed awareness → scripts/myai_scan.sh
                      #   walks <path>, finds every git repo (skips node_modules/vendored),
                      #   upserts each into the gateway app-directory (repos_card) + seeds RAG
@@ -311,13 +321,23 @@ myai login           # authenticate against a HOSTED gateway      → scripts/my
                      #   GET /api/auth/whoami before persisting anything — non-secret
                      #   identity (gatewayUrl/tenantId/org/plan) goes to ~/.myai/config,
                      #   the raw key to ~/.myai/credentials (chmod 600). Distinct from
-                     #   `myai config` (raw key setting, no validation) and tenant-key
+                     #   `myai config` (local schema-validated key editing) and tenant-key
                      #   rotation (operator CRUD). Flags: --key <apiKey> (or $MYAI_API_KEY,
                      #   or an interactive hidden prompt), --gateway-url <url>, --json.
 myai whoami          # show the active org/tenant/plan/quota       → scripts/myai_whoami.sh
                      #   round-trips to the gateway every time (never trusts cached
                      #   identity) so quota numbers are live. Requires `myai login` first.
                      #   Flags: --gateway-url <url>, --json.
+myai config [verb]   # safe, schema-validated ~/.myai/config editor → scripts/myai_config.sh
+                     #   view/set keys (org, gateway URL, brain wiring, model routing)
+                     #   instead of hand-editing the JSON. `config`/`config list`
+                     #   [--json][--reveal] (secret-shaped values redacted, unknown keys
+                     #   flagged) · `config keys` (the schema: key + type + description) ·
+                     #   `config get <key>` · `config set <key> <value>` (per-key
+                     #   validation: URL/enum/abspath/model-id; unknown keys refused
+                     #   unless --force; secret-NAMED keys always refused — credentials
+                     #   belong in ~/.myai/credentials via `myai login`/`myai rotate-keys`)
+                     #   · `config unset <key>` · `config path`. Purely local.
 myai runner <verb>   # manage the local off-hours runner schedule → scripts/myai_runner.sh
                      #   install [--every-minutes N|--every-hours N] | uninstall | start |
                      #   stop | status (+ next-fire) | logs [-f] [-n N] — launchd (mac) /
@@ -333,6 +353,16 @@ myai brain <verb>    # git-versioned agent memory                 → scripts/my
                      #   auto-distills ~150-token boot briefs as plain files (reading
                      #   needs no server — git pull → read files). 5-minute scripted
                      #   walkthrough: TRY_BRAIN.md (ships in the npm package).
+myai wrapup --mechanical   # the mechanical half of `wrap up`, ONE call → scripts/myai_wrapup.sh
+                     #   rotate_state.sh + repo_card.sh + memory_reindex + brain atom/
+                     #   merge/verify + the WRAPPED UP banner, fused into one entrypoint —
+                     #   the only reasoning left for a session close is authoring the
+                     #   ~300-token atom body (piped on stdin, or --atom-file). Every step
+                     #   is individually non-fatal (missing script / unreachable gateway /
+                     #   no brain wired degrades that ONE step, never the run); always
+                     #   exits 0 once flags parse. Flags: --topic <t> --repo <name>
+                     #   --slug <s> --profile <p> --reindex-scope master|all --no-atom
+                     #   --no-rotate --no-card --no-reindex --quiet.
 myai memory ...      # portable memory bundle                     → scripts/myai_memory.sh
                      #   export [dir] pulls the corpus (state/handoff/pattern source
                      #   texts) as JSON manifest + markdown; import <dir> re-embeds on
@@ -457,7 +487,7 @@ The CLI runner is a per-machine *worker* — the shared queue lives in the gatew
 
 - **macOS** → a launchd user agent (`com.myai.cli-task-runner`). Keep the box awake on AC power: `sudo pmset -c sleep 0`.
 - **Linux / VPS** → the entry point auto-routes (same flags) to `scripts/setup_cli_runner_linux.sh`: a **systemd user timer** (`myai-cli-runner.timer`) when the user manager is reachable, otherwise a **crontab entry** with a managed marker (WSL1, minimal containers, non-systemd distros). Force a backend with `--systemd` / `--cron`. On a headless box run `loginctl enable-linger $USER` once so the timer survives logout — the installer reminds you when lingering is off.
-- **Windows** → **best-effort tier**, two paths (full guide: `documentation/WINDOWS_RUNNER.md`). **Recommended: WSL2** — inside WSL2 the entry point routes to the Linux/systemd installer unchanged; add a `myai-wsl-keepalive` logon task so the WSL VM (and its timer) stays up. **Experimental: native Task Scheduler** — `scripts/setup_cli_runner_windows.ps1` registers a `schtasks` job (`myai-cli-task-runner`, same 10-min cadence, mirrored `-Status`/`-Uninstall` verbs) that fires the runner via Git Bash through a hidden-window wrapper; runs only while logged on and isn't CI-tested. Running the bash entry point from Git Bash prints these options and exits.
+- **Windows** → **best-effort tier**, three paths (full guide: `documentation/WINDOWS_RUNNER.md`). **Recommended: WSL2** — inside WSL2 the entry point routes to the Linux/systemd installer unchanged; add a `myai-wsl-keepalive` logon task so the WSL VM (and its timer) stays up. **Experimental: native Task Scheduler** — `scripts/setup_cli_runner_windows.ps1` registers a `schtasks` job (`myai-cli-task-runner`, same 10-min cadence, mirrored `-Status`/`-Uninstall` verbs) that fires the runner via Git Bash through a hidden-window wrapper; runs only while logged on and isn't CI-tested. **Experimental: native Windows Service** — `scripts/setup_cli_runner_windows_service.ps1` registers a real service (`myai-cli-runner-svc`, nssm-supervised fire loop, `SERVICE_AUTO_START`) that keeps working the queue with nobody logged on; needs admin + nssm + your account password, idempotent re-install. Running the bash entry point from Git Bash prints these options and exits.
 
 The cadence installer only controls *when* fires happen; the slot/backoff semantics (up to `MAX_CONCURRENT` = 5 parallel tasks, 30-minute backoff when all slots are busy, weekday 6pm–9am + weekend off-hours guard) live in `cli_task_runner.sh` and are identical on both platforms. Silence a machine that should never be a worker: `touch ~/.ai-cli-runner/.no-runner`.
 
@@ -548,6 +578,41 @@ templates/mcp-docker.json   ← Docker overlay → merged if docker-compose.yml 
 ### On `agent mode` — MCP Awareness
 
 When `agent mode` runs in any repo, it reports which MCP servers are active by reading `.mcp.json`. This ensures the agent knows what tools are available before dispatching work.
+
+---
+
+## 🧩 Claude Code plugin marketplace
+
+Beyond MCP servers, myAI also ships as three installable **Claude Code plugins** — curated agent/skill/hook bundles over the *same single* `ai-management` npm engine (no separate package, no duplicated files). Install just the bundle(s) you need instead of the whole framework.
+
+| Plugin | Bundle | Keywords |
+|---|---|---|
+| `myai-brain` | Git-versioned agent memory — capture, compress, recall context across agents/machines | memory, brain, context, sona, continuity |
+| `myai-fleet` | Multi-agent swarm coordination + GitHub lifecycle automation + schedule tracking | swarm, fleet, github, orchestration, scheduling |
+| `myai-blueprint` | Full-stack scaffolding — frontend/API/database/devops specialists + scaffold skills | scaffold, blueprint, nextjs, docker, fullstack |
+
+### Install
+
+```bash
+# 1. Add the marketplace (one-time — points at the public mirror)
+claude plugin marketplace add knofler/myai
+
+# 2. Install the bundle(s) you want
+claude plugin install myai-brain@ai-management
+claude plugin install myai-fleet@ai-management
+claude plugin install myai-blueprint@ai-management
+```
+
+Or from inside a Claude Code session:
+
+```
+/plugin marketplace add knofler/myai
+/plugin install myai-brain@ai-management
+```
+
+Manifest source: `.claude-plugin/marketplace.json`. Each plugin is a thin manifest plus symlinked `agents/`, `skills/`, `hooks/` pointing at this repo's shared top-level dirs — one engine, many surfaces, not a fork or a separate package.
+
+> Plugins install agents/skills/hooks only — they don't bring the gateway, dashboard, or runner. For the full self-hosted stack, use the [npm or `curl | sh` install paths](#-quickstart--download--running-in-5-minutes) (details: `documentation/DISTRIBUTION.md`).
 
 ---
 
@@ -1453,7 +1518,7 @@ JSON-RPC 2.0 over HTTP. This is the endpoint other LLMs (Claude Code in any repo
 - `tools/call` — invoke a tool (params: `{name, arguments}`)
 - `ping` — keepalive
 
-**132 MCP tools** (representative subset below — see [`runtime/src/mcp/tools.ts`](runtime/src/mcp/tools.ts) for the full set incl. `memory_reindex`, `schedules_*` incl. `schedules_seed`, `budgets_*`, `agents_invoke`, `skills_invoke`, `morning_sweep`, `evening_sweep`, `dispatch_cycle`, `fleet_overview`, `standing_agents_status`, `notifications_*`, `health_alerts_*`):
+**165 MCP tools** (representative subset below — see [`runtime/src/mcp/tools.ts`](runtime/src/mcp/tools.ts) for the full set incl. `memory_reindex`, `schedules_*` incl. `schedules_seed`, `budgets_*`, `agents_invoke`, `skills_invoke`, `morning_sweep`, `evening_sweep`, `dispatch_cycle`, `fleet_overview`, `standing_agents_status`, `notifications_*`, `health_alerts_*`):
 
 | Category | Tool | Purpose |
 |----------|------|---------|
@@ -1824,7 +1889,7 @@ Every block ends with a `… N more — run "more <type>" to see all` hint.
 | `ai tools` | Show 5 of each category |
 | `more agents` | Dump all 62 agents grouped by category |
 | `more skills` | Dump all 136 skills |
-| `more mcp tools` or `more mcp` | Dump all 132 MCP tools with full input schemas |
+| `more mcp tools` or `more mcp` | Dump all 165 MCP tools with full input schemas |
 | `more routes` | Dump all HTTP + WS + MCP + dashboard routes (same as the Gateway Routes section above) |
 | `ai tools help` or `help ai tools` | Print this usage block |
 

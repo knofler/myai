@@ -38,11 +38,13 @@ const COMMANDS = [
   { name: 'status', args: '[args...]', script: 'myai_status.sh',
     desc: 'Gateway/runner/queue health at a glance: gateway/dashboard HTTP health, docker compose ps, task-queue counts, continuity meter, and the local off-hours runner\'s installed/active state (--json for scripts; exit 0 = healthy)' },
   { name: 'boot', args: '[args...]', script: 'myai_boot.sh',
-    desc: 'TOKEN-FREE session boot — the deterministic spine of `agent mode -min` with zero LLM cost: git sync (ff-only pull), brain delta since last boot (pure git), schedule banner, remote-control status. Run BEFORE opening Claude. --no-fetch | --no-pull | --quiet' },
+    desc: 'TOKEN-FREE session boot — the deterministic spine of `agent mode -min` with zero LLM cost: git sync (ff-only pull), brain delta since last boot (pure git) INCLUDING the compiled brief.md/working.md read straight off brain main on disk (zero gateway dependency, BRAIN_OFFLINE.md Layer 3), schedule banner, remote-control status. Run BEFORE opening Claude. --no-fetch | --no-pull | --working (also print working.md) | --offline (skip git fetch + the two gateway-backed banners entirely — guaranteed to complete with the stack fully down) | --quiet' },
   { name: 'logs', args: '[service...]', script: 'myai_logs.sh',
     desc: 'Live-tail stack logs — wraps `docker compose logs -f` (optionally one service: gateway | dashboard | mongo; --no-follow, --tail N); --runner also tails the local off-hours CLI runner\'s latest job log alongside it, prefixed [runner]' },
   { name: 'queue', args: '[args...]', script: 'myai_queue.sh',
     desc: 'Inspect and control the runner task queue — the CLI mirror of the dashboard /work orchestration view. `queue` / `queue list` [--repo][--status][--priority][--all][--json]; `queue cancel <taskId>` [--reason][--force] marks it blocked (reversible); `queue reprioritize <taskId> <P0|P1|P2|P3>` changes its priority' },
+  { name: 'open', args: '[target...]', script: 'myai_open.sh',
+    desc: 'Jump from the terminal to the right dashboard view in one keystroke: `open`/`open dashboard` (root), `open board` (THIS repo\'s /work board — repo auto-detected from the git checkout, --repo overrides), `open task <id>` (deep-link a queue task — tab + repo resolved via the gateway when reachable, graceful /work fallback when not), `open repo` (App Directory /apps), or any named dashboard page (work | fleet | apps | brain | memory | system | …). Localhost vs hosted resolves from DASHBOARD_URL / MYAI_DASHBOARD_PORT (env wins over .env). Cross-platform launcher: macOS open / Linux xdg-open / WSL wslview / Windows start, MYAI_OPEN_CMD override, $BROWSER fallback; --print prints the URL instead of launching' },
   { name: 'scan', args: '[path]', script: 'myai_scan.sh',
     desc: 'Spider git repos under a dir → register each in the gateway directory + seed RAG awareness (--register also lists in managed_repos.txt; --dry-run previews)' },
   { name: 'demo', args: '[args...]', script: 'myai_demo.sh',
@@ -60,25 +62,33 @@ const COMMANDS = [
   { name: 'schedule', args: '[args...]', script: 'schedule_task.sh',
     desc: 'Queue an autonomous task for the CLI runner (pass --title, etc.)' },
   { name: 'login', args: '[args...]', script: 'myai_login.sh',
-    desc: 'Authenticate this terminal against a hosted myAI gateway — validates a per-tenant API key via GET /api/auth/whoami and persists it (`--key <apiKey>` or $MYAI_API_KEY or an interactive hidden prompt; `--gateway-url URL`; `--json`). End-user session identity — distinct from `myai config` (raw key setting, no validation) and tenant-key rotation (operator CRUD)' },
+    desc: 'Authenticate this terminal against a hosted myAI gateway — validates a per-tenant API key via GET /api/auth/whoami and persists it (`--key <apiKey>` or $MYAI_API_KEY or an interactive hidden prompt; `--gateway-url URL`; `--json`). End-user session identity — distinct from `myai config` (local schema-validated key editing, no gateway round-trip) and tenant-key rotation (operator CRUD)' },
   { name: 'whoami', args: '[args...]', script: 'myai_whoami.sh',
     desc: 'Print the active org/tenant/plan/quota for the session `myai login` established — always round-trips to the gateway for live quota (`--gateway-url URL` override; `--json`)' },
+  { name: 'config', args: '[args...]', script: 'myai_config.sh',
+    desc: 'Safe front-end for the per-user ~/.myai/config store — view/set keys (org, gateway URL, brain wiring, model routing) with SCHEMA VALIDATION instead of hand-editing the JSON: `config`/`config list` [--json][--reveal] (values redacted where secret-shaped, unknown keys flagged); `config keys` (the schema: every known key + type + description); `config get <key>`; `config set <key> <value>` (per-key validation — URL/enum/path/model-id; unknown keys refused unless --force; secret-named keys ALWAYS refused — credentials live in ~/.myai/credentials via `myai login`/`myai rotate-keys`, never in config); `config unset <key>`; `config path`. Purely local (no gateway round-trip)' },
   { name: 'mcp', args: '[args...]', script: 'myai_mcp.sh',
     desc: 'Propagate the MCP server config through the installed module (not update_all): `mcp repo [path]` writes/refreshes a repo .mcp.json from the bundled template (deep-merge — framework servers canonical, custom preserved); `mcp sync [museum|tech|personal|all]` refreshes the per-org Claude config dirs from the template; `mcp print` shows the base config. --dry-run supported' },
   { name: 'mirror', args: '[args...]', script: 'mongo_mirror.sh',
     desc: 'Keep a LOCAL copy of the gateway memory + registry so localhost is not single-point-of-failure on Atlas. Streams mongodump→mongorestore (Atlas → local by default) in a throwaway mongo:7 container — no host mongo tools. --dry-run previews; --collections a,b scopes; --reverse (local → Atlas) is guarded behind --yes; --install-schedule [--every-minutes N] / --schedule-status / --uninstall-schedule manage the periodic (hourly default) launchd/cron refresh' },
   { name: 'rotate-keys', args: '<local|tenant> [args...]', script: 'myai_rotate_keys.sh',
     desc: 'Self-rotate a gateway credential with a dual-valid grace window (zero-downtime): `rotate-keys local [--grace-minutes N]` rewrites GATEWAY_LOCAL_TOKEN in .env, keeping the old value valid for the grace window; `rotate-keys tenant <tenantId> [--grace-minutes N] [--env live|test]` mints a new tenant bootstrap API key via the gateway (local-trust only), old key stays valid server-side until grace elapses — new key is shown ONCE' },
+  { name: 'tenant', args: '<create|list|suspend|reactivate|rotate-key> [args...]', script: 'myai_tenant.sh',
+    desc: 'Operator tenant lifecycle CRUD, scriptable from the terminal (wraps the gateway\'s admin-gated /api/tenants endpoints — needs ADMIN_API_TOKEN configured on the gateway): `tenant create --tenant-id <id> --name <name> [--plan free|solo|team|scale] [--owner-email <email>] [--env live|test]` provisions a tenant + first API key (shown ONCE); `tenant list [--status active|suspended|deleted] [--plan <plan>] [--limit N]`; `tenant suspend <tenantId> [--reason "..."]` blocks every key call instantly; `tenant reactivate <tenantId>` restores it; `tenant rotate-key <tenantId> [--grace-minutes N] [--env live|test]` delegates to `rotate-keys tenant` (local-trust only, zero-downtime grace window)' },
   { name: 'runner', args: '[args...]', script: 'myai_runner.sh',
     desc: 'Manage the local off-hours CLI runner schedule (launchd/systemd) — install [--every-minutes N|--every-hours N] | uninstall | start | stop | status (+ next-fire) | logs [-f] [-n N]. Distinct from `myai status`/`myai logs` (gateway health) — this controls the local worker' },
   { name: 'brain', args: '[args...]', script: 'myai_brain.sh',
     desc: 'Git-versioned agent memory — init | status | write | stash | pop | branch | checkout | merge | log | diff | blame | revert | gc | session | distill (sessions = commits, wrap up = merge; walkthrough: TRY_BRAIN.md)' },
+  { name: 'wrapup', args: '[args...]', script: 'myai_wrapup.sh',
+    desc: 'The mechanical half of `wrap up` in ONE call (BRAIN W4.2): rotate_state.sh + repo_card.sh + memory_reindex + brain atom/merge/verify + the WRAPPED UP banner. `wrapup --mechanical` runs all five; pipe the ~300-token session summary on stdin (or --atom-file <path>) to also write + merge the brain atom (--no-atom skips it). Every step is individually non-fatal — a missing script or unreachable gateway degrades that one step and the run continues; exits 0. --topic <t> --repo <name> --slug <s> --profile <p> --reindex-scope master|all --no-rotate --no-card --no-reindex --quiet' },
   { name: 'memory', args: '[args...]', script: 'myai_memory.sh',
     desc: 'Portable memory bundle — export [dir] pulls the corpus (state/handoff/patterns source texts) as JSON manifest + markdown; import <dir> re-embeds on this gateway with dedup-by-hash' },
   { name: 'context', args: '[args...]', script: 'myai_context.sh',
     desc: 'FULL portable context bundle — export [dir] tars memory corpus + vectors (embeddings) + brain atoms + config into ONE versioned, checksummed, secret-redacted .tar.gz; import <archive> verifies integrity and re-imports (memory always, brain/config opt-in); import-external <source> ingests FROM ChatGPT/Claude export, Obsidian, markdown, or a raw vector store (re-embed + dedup, tenant-scoped). Own + download your whole context.' },
   { name: 'recall', args: '<query...>', script: 'myai_recall.sh',
     desc: 'TOKEN-FREE semantic recall over the repo-local SQLite index (code symbols + brain atoms) via sparse BM25 + local embeddings — NO LLM, NO network, NO tokens. Builds the index on first use. --k N | --json | --rebuild' },
+  { name: 'ctx', args: '<query...>', script: 'myai_ctx.sh',
+    desc: 'TOKEN-FREE context lookup — the primitive that replaces bulk Read/Grep: bare `file:line` pointers + `atom:<ref>` refs, one per line, over the same repo-local SQLite index `recall` uses (NO LLM, NO network, NO tokens, fully offline — works with the gateway down). --k N | --json | --rebuild | --db PATH' },
   { name: 'backup', args: '[args...]', script: 'myai_backup.sh',
     desc: 'Snapshot the git-versioned brain repo + ~/.myai config files into one dated .tar.gz archive (--out <file> or [dir] to place it; round-trips with `myai restore`)' },
   { name: 'restore', args: '[args...]', script: 'myai_restore.sh',
@@ -91,6 +101,10 @@ const COMMANDS = [
     desc: 'Print the installed ai-management module path — the framework-as-module resolver a kernel-only repo (no per-repo AI/ copy) uses to find agents/skills/hooks/rule bodies. Fails loud (exit 1) if the resolved dir is not a valid install, so safety hooks never silently go missing (--json for scripts)' },
   { name: 'release', args: '[args...]', script: 'myai_release.sh',
     desc: 'One-command release cut: `release [patch|minor|major]` bumps package.json + CHANGELOG.md from Conventional Commits, clean-room-validates (shell unit suite + publish_guard.sh leak scan + a Docker install/smoke check), and commits locally — any validation failure auto-reverts the bump. `release --tag` (run on main after the commit merges) tags + pushes the release and prints the `gh release create` follow-up. --dry-run previews; --skip-tests/--skip-guard/--skip-docker skip a validation stage; --json for scripts' },
+  { name: 'completions', args: '<shell>', handler: completions,
+    desc: 'Generate a shell completion script (commands, flags, and dynamic --repo names) for bash | zsh | fish. Prints to stdout; install instructions are inline as comments in the generated script. Command list is read straight off this table, so it can never drift from `myai --help` — enforced by runtime/tests/unit/cli-dispatch.test.ts' },
+  { name: '__repos', args: '[args...]', handler: printRepos, hidden: true,
+    desc: 'Internal: list managed repo names (one per line) from config/managed_repos.txt — used by shell completion to fill in --repo values' },
 ];
 
 // ── Dispatch ────────────────────────────────────────────────────────────────
@@ -378,6 +392,14 @@ function runDoctorChecks() {
 
   const git = bin('git');
   allOk &= check('git on PATH', git ? true : 'warn', git || 'not found');
+
+  // tmux backs `remote_fleet.sh start` (task-52b349fb): every museum session
+  // is a named tmux session so the claude process survives iTerm quitting.
+  // Without tmux, `remote start` hard-fails outright — surface that here
+  // instead of letting an operator discover it while reaching for their phone.
+  const tmux = bin('tmux', ['-V']);
+  check('tmux on PATH', tmux ? true : 'warn',
+    tmux || 'not found — `remote_fleet.sh start` will hard-fail; install with `brew install tmux` (macOS) or your package manager');
 
   // ── credentials: claude CLI and/or ANTHROPIC_API_KEY ─────────────────────
   const claude = bin('claude', ['--version']);
@@ -795,6 +817,176 @@ function root(extraArgs) {
   return true;
 }
 
+// ── completions: bash/zsh/fish shell-completion generator ────────────────────
+// Everything below reads command names + descriptions straight off COMMANDS
+// (the same table `--help` and dispatch() use), so a new/renamed/removed
+// command is picked up automatically — nothing here needs to be hand-maintained
+// in step with the registry. runtime/tests/unit/cli-dispatch.test.ts asserts
+// every COMMANDS name appears in each generated script, which is what actually
+// keeps this in sync (a command added to the table without a matching entry
+// here would still show up — this only guards against the table changing shape
+// out from under a hardcoded string list, which doesn't exist).
+
+const COMPLETION_SHELLS = ['bash', 'zsh', 'fish'];
+
+// Trim a (possibly long, backtick/em-dash-heavy) COMMANDS desc down to a single
+// short clause suitable for a completion menu line.
+function completionShortDesc(desc) {
+  const clause = String(desc || '').split(/ — | \(|\. /)[0];
+  return clause.replace(/[`]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// POSIX single-quote escaping (bash/zsh): close the quote, insert an escaped
+// quote, reopen — the standard '\'' trick, since single quotes don't support
+// backslash escapes inside themselves.
+function posixSingleQuote(s) {
+  return `'${String(s).replace(/'/g, "'\\''")}'`;
+}
+
+// fish single-quote escaping: fish DOES support backslash escapes inside single
+// quotes, so this is the simpler \\ / \' form (not the POSIX close-reopen trick).
+function fishSingleQuote(s) {
+  return `'${String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+// Read config/managed_repos.txt (the fleet roster) and return sorted, deduped
+// basenames — used for dynamic `--repo <TAB>` completion. Absent file (a repo
+// checked out without the master's fleet config) → empty list, not an error.
+function reposList() {
+  const file = path.join(REPO_ROOT, 'config', 'managed_repos.txt');
+  if (!fs.existsSync(file)) return [];
+  const names = new Set();
+  for (const raw of fs.readFileSync(file, 'utf8').split('\n')) {
+    const line = raw.split('#')[0].trim();
+    if (!line) continue;
+    const name = path.basename(line.replace(/\/+$/, ''));
+    if (name) names.add(name);
+  }
+  return [...names].sort();
+}
+
+function printRepos() {
+  for (const name of reposList()) console.log(name);
+  return true;
+}
+
+function generateBashCompletion() {
+  const words = COMMANDS.filter((c) => !c.hidden).map((c) => c.name).concat(['-h', '--help', '-v', '--version']).join(' ');
+  return `#!/usr/bin/env bash
+# myai bash completion — generated by \`myai completions bash\` from the command
+# table in bin/myai.cjs. Re-run after upgrading myai to pick up new commands.
+#
+# Install (pick one):
+#   myai completions bash | sudo tee /usr/local/etc/bash_completion.d/myai >/dev/null   # Homebrew bash-completion@2 (macOS)
+#   myai completions bash > "\${BASH_COMPLETION_USER_DIR:-$HOME/.local/share/bash-completion}/completions/myai"  # user-local
+#   echo 'source <(myai completions bash)' >> ~/.bashrc                                 # load on every new shell
+#
+# Requires the \`bash-completion\` package for _init_completion; falls back to a
+# minimal parse of COMP_WORDS if it isn't loaded.
+_myai_completions() {
+  local cur prev
+  if declare -F _init_completion >/dev/null 2>&1; then
+    _init_completion || return
+  else
+    cur="\${COMP_WORDS[COMP_CWORD]}"
+    prev="\${COMP_WORDS[COMP_CWORD-1]}"
+  fi
+
+  case "\$prev" in
+    --repo)
+      COMPREPLY=( \$(compgen -W "\$(myai __repos 2>/dev/null)" -- "\$cur") )
+      return 0
+      ;;
+  esac
+
+  if [[ \$COMP_CWORD -eq 1 ]]; then
+    COMPREPLY=( \$(compgen -W "${words}" -- "\$cur") )
+    return 0
+  fi
+
+  COMPREPLY=( \$(compgen -f -- "\$cur") )
+}
+complete -F _myai_completions myai
+complete -F _myai_completions ai-manage
+`;
+}
+
+function generateZshCompletion() {
+  const entries = COMMANDS
+    .filter((c) => !c.hidden)
+    .map((c) => `    ${posixSingleQuote(`${c.name}:${completionShortDesc(c.desc)}`)}`)
+    .join('\n');
+  return `#compdef myai ai-manage
+# myai zsh completion — generated by \`myai completions zsh\` from the command
+# table in bin/myai.cjs. Re-run after upgrading myai to pick up new commands.
+#
+# Install:
+#   mkdir -p ~/.zsh/completions && myai completions zsh > ~/.zsh/completions/_myai
+#   # in ~/.zshrc, BEFORE compinit:  fpath=(~/.zsh/completions $fpath)
+#   # then open a new shell (or: autoload -U compinit && compinit)
+_myai() {
+  local -a commands
+  commands=(
+${entries}
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe 'myai command' commands
+    return
+  fi
+
+  if [[ "\${words[CURRENT-1]}" == "--repo" ]]; then
+    local -a repos
+    repos=(\${(f)"\$(myai __repos 2>/dev/null)"})
+    _describe 'repo' repos
+    return
+  fi
+
+  _files
+}
+_myai "\$@"
+`;
+}
+
+function generateFishCompletion() {
+  const lines = COMMANDS
+    .filter((c) => !c.hidden)
+    .map((c) => `complete -c myai -f -n '__fish_use_subcommand' -a ${fishSingleQuote(c.name)} -d ${fishSingleQuote(completionShortDesc(c.desc))}`)
+    .join('\n');
+  return `# myai fish completion — generated by \`myai completions fish\` from the command
+# table in bin/myai.cjs. Re-run after upgrading myai to pick up new commands.
+#
+# Install:
+#   myai completions fish > ~/.config/fish/completions/myai.fish
+# (fish auto-loads completions/*.fish from that directory in every new shell)
+complete -c myai -f
+${lines}
+complete -c myai -l help -s h -d 'Show help'
+complete -c myai -l version -s v -d 'Print version'
+complete -c myai -l repo -d 'Repo name' -a '(myai __repos 2>/dev/null)'
+`;
+}
+
+function completions(extraArgs) {
+  const args = Array.isArray(extraArgs) ? extraArgs : [];
+  const shell = args.find((a) => !a.startsWith('-'));
+  if (!shell) {
+    console.error('myai completions: missing shell argument.');
+    console.error(`Usage: myai completions <${COMPLETION_SHELLS.join('|')}>`);
+    return false;
+  }
+  if (!COMPLETION_SHELLS.includes(shell)) {
+    console.error(`myai completions: unknown shell '${shell}'.`);
+    console.error(`Supported shells: ${COMPLETION_SHELLS.join(', ')}`);
+    return false;
+  }
+  const script = shell === 'bash' ? generateBashCompletion()
+    : shell === 'zsh' ? generateZshCompletion()
+    : generateFishCompletion();
+  console.log(script);
+  return true;
+}
+
 // ── commander path (used when the dep is installed) ──────────────────────────
 function runWithCommander(Command) {
   const program = new Command();
@@ -805,7 +997,7 @@ function runWithCommander(Command) {
 
   for (const c of COMMANDS) {
     const sub = program
-      .command(c.args ? `${c.name} ${c.args}` : c.name)
+      .command(c.args ? `${c.name} ${c.args}` : c.name, c.hidden ? { hidden: true } : undefined)
       .description(c.desc)
       .allowUnknownOption(true)
       .helpOption(false);
@@ -824,8 +1016,9 @@ function printHelp() {
   console.log(`myai — CLI for the AI Management Framework (v${PKG.version})\n`);
   console.log('Usage: myai <command> [args...]\n');
   console.log('Commands:');
-  const width = Math.max(...COMMANDS.map((c) => (c.name + ' ' + c.args).length));
-  for (const c of COMMANDS) {
+  const visible = COMMANDS.filter((c) => !c.hidden);
+  const width = Math.max(...visible.map((c) => (c.name + ' ' + c.args).length));
+  for (const c of visible) {
     const sig = `${c.name} ${c.args}`.trim();
     console.log(`  ${sig.padEnd(width + 2)}${c.desc}`);
   }
@@ -884,7 +1077,10 @@ function runFallback(argv) {
 // those must never block. Lives in main() only (never dispatch()/runFallback()
 // directly) so the existing dispatch-level unit tests, which assert exact
 // spawnSync call counts/args, are untouched.
-const SETUP_EXEMPT_COMMANDS = new Set(['setup', 'doctor', 'root']);
+// `config` is exempt too: it is the tool that CREATES/edits ~/.myai/config, so
+// auto-triggering the interactive setup wizard on its absence would both block
+// scripted `config set` runs and gate the front-end on the very file it manages.
+const SETUP_EXEMPT_COMMANDS = new Set(['setup', 'doctor', 'root', 'completions', '__repos', 'config']);
 
 function needsAutoSetup(argv) {
   const args = argv.slice(2);
@@ -952,6 +1148,13 @@ module.exports = {
   moduleRoot,
   root,
   MODULE_MARKERS,
+  COMPLETION_SHELLS,
+  completions,
+  generateBashCompletion,
+  generateZshCompletion,
+  generateFishCompletion,
+  reposList,
+  printRepos,
   findAnthropicKey,
   portInUse,
   hostReachable,

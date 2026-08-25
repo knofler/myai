@@ -107,10 +107,10 @@ async function getProofStats(): Promise<{ stats: ProofStats; series: { date: str
 
 function StatTile({ value, label, sub }: { value: React.ReactNode; label: string; sub?: string }) {
   return (
-    <div className="gel-surface bg-zinc-900/70 border border-zinc-800 rounded-2xl p-6 text-center">
+    <div className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-2xl p-6 text-center">
       <p className="text-4xl font-bold text-teal-300 tabular-nums">{value}</p>
-      <p className="text-sm font-medium text-zinc-200 mt-2">{label}</p>
-      {sub && <p className="text-xs text-zinc-500 mt-1">{sub}</p>}
+      <p className="text-sm font-medium text-[rgb(var(--text-primary))] mt-2">{label}</p>
+      {sub && <p className="text-xs text-[rgb(var(--text-muted))] mt-1">{sub}</p>}
     </div>
   );
 }
@@ -125,21 +125,21 @@ export default async function ProofPage() {
   const shareText = `myAI: ${continuity.ratioLabel} fewer tokens to re-teach a fresh agent — ${continuity.reductionPct}% cold-start reduction.`;
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="min-h-screen bg-[rgb(var(--bg-page))] text-[rgb(var(--text-primary))]">
       <header className="max-w-5xl mx-auto px-5 md:px-8 h-16 flex items-center justify-between">
         <Link href="/welcome" className="text-xl font-bold tracking-tight text-brand-orange">
           myAI
         </Link>
         <nav className="flex items-center gap-4 text-sm">
-          <Link href="/welcome" className="text-zinc-400 hover:text-zinc-200 hidden sm:inline">
+          <Link href="/welcome" className="text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hidden sm:inline">
             Product
           </Link>
-          <Link href="/pricing" className="text-zinc-400 hover:text-zinc-200 hidden sm:inline">
+          <Link href="/pricing" className="text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hidden sm:inline">
             Pricing
           </Link>
           <Link
-            href="/login"
-            className="px-3 py-1.5 rounded-lg border border-zinc-800 text-zinc-200 hover:border-zinc-700 transition"
+            href="/operator-login"
+            className="px-3 py-1.5 rounded-lg border border-[rgb(var(--border-subtle))] text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
           >
             Sign in
           </Link>
@@ -148,11 +148,11 @@ export default async function ProofPage() {
 
       <main className="max-w-5xl mx-auto px-5 md:px-8 pt-10 pb-20">
         <div className="text-center max-w-2xl mx-auto">
-          <p className="text-xs uppercase tracking-[0.2em] text-zinc-500 font-semibold">Proof, not promises</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-[rgb(var(--text-muted))] font-semibold">Proof, not promises</p>
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight mt-2">
             We woke up to shipped work — every night.
           </h1>
-          <p className="mt-4 text-zinc-400">
+          <p className="mt-4 text-[rgb(var(--text-secondary))]">
             This page is generated live from myAI&apos;s own platform data — the same off-hours autonomous runner we
             sell is the one building myAI itself. Every number below is a cross-tenant aggregate: no tenant, repo
             name, URL, or cost figure is ever shown here.
@@ -167,10 +167,10 @@ export default async function ProofPage() {
         </div>
 
         <div className="mt-6">
-          <div className="gel-surface bg-zinc-900/70 border border-zinc-800 rounded-2xl p-6">
+          <div className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-2xl p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-zinc-200">Tasks shipped, last 7 days</h2>
-              <span className="text-xs text-zinc-500">{seriesTotal} total · {stats.runnerSuccessRate}% runner success rate</span>
+              <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Tasks shipped, last 7 days</h2>
+              <span className="text-xs text-[rgb(var(--text-muted))]">{seriesTotal} total · {stats.runnerSuccessRate}% runner success rate</span>
             </div>
             <div className="flex items-end gap-2 h-32">
               {series.map((d) => {
@@ -178,7 +178,7 @@ export default async function ProofPage() {
                 const isToday = d.date === series[series.length - 1]?.date;
                 return (
                   <div key={d.date} className="flex-1 flex flex-col items-center gap-1 group">
-                    <span className="text-[10px] font-mono text-zinc-500 group-hover:text-zinc-300">
+                    <span className="text-[10px] font-mono text-[rgb(var(--text-muted))] group-hover:text-[rgb(var(--text-primary))]">
                       {d.count > 0 ? d.count : ''}
                     </span>
                     <div className="w-full flex items-end justify-center" style={{ height: '84px' }}>
@@ -201,16 +201,16 @@ export default async function ProofPage() {
         </div>
 
         <div className="mt-6">
-          <div className="gel-surface bg-zinc-900/70 border border-zinc-800 rounded-2xl p-6">
+          <div className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-2xl p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-zinc-200">Continuity savings — the shareable number</h2>
-              <span className="text-xs text-zinc-500">
+              <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Continuity savings — the shareable number</h2>
+              <span className="text-xs text-[rgb(var(--text-muted))]">
                 {continuity.measuredBoots > 0
                   ? `measured across ${continuity.measuredBoots.toLocaleString('en-US')} cold starts`
                   : 'benchmark: scripts/brain_token_eval.py'}
               </span>
             </div>
-            <p className="text-xs text-zinc-500 mb-4">
+            <p className="text-xs text-[rgb(var(--text-muted))] mb-4">
               A blank agent boots knowing a project for a fraction of the tokens it takes to re-read the full state +
               handoff by hand, every single session start. This is that ratio — anonymized, platform-wide, no tenant
               or repo ever attached to it.
@@ -220,13 +220,13 @@ export default async function ProofPage() {
                 <p className="text-6xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
                   {continuity.ratioLabel}
                 </p>
-                <p className="text-sm font-semibold text-zinc-200 mt-1">fewer tokens to re-teach a fresh agent</p>
-                <p className="text-xs text-zinc-500 mt-1">
+                <p className="text-sm font-semibold text-[rgb(var(--text-primary))] mt-1">fewer tokens to re-teach a fresh agent</p>
+                <p className="text-xs text-[rgb(var(--text-muted))] mt-1">
                   {continuity.reductionPct}% cold-start reduction · {fmtTokens(continuity.legacyAvgTokens)} →{' '}
                   {fmtTokens(continuity.brainAvgTokens)} tok/boot
                 </p>
               </div>
-              <div className="rounded-xl overflow-hidden border border-zinc-800 bg-black">
+              <div className="rounded-xl overflow-hidden border border-[rgb(var(--border-subtle))] bg-black">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src="/proof/card" alt={shareText} className="w-full h-auto" />
               </div>
@@ -237,7 +237,7 @@ export default async function ProofPage() {
                 href="/proof/card"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-sm text-zinc-400 hover:text-zinc-200 underline underline-offset-4"
+                className="text-sm text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] underline underline-offset-4"
               >
                 Open card image ↗
               </a>
@@ -250,13 +250,13 @@ export default async function ProofPage() {
             <Link href="/welcome" className="px-4 py-2.5 rounded-xl gel-brand text-teal-100 font-semibold hover:brightness-110 transition">
               See how it works →
             </Link>
-            <Link href="/pricing" className="px-4 py-2.5 rounded-xl border border-zinc-700 text-zinc-200 hover:border-teal-700 hover:text-teal-300 transition">
+            <Link href="/pricing" className="px-4 py-2.5 rounded-xl border border-zinc-700 text-[rgb(var(--text-primary))] hover:border-teal-700 hover:text-teal-300 transition">
               View pricing
             </Link>
           </div>
           <p className="mt-6 text-xs text-zinc-600">
             Anonymized aggregate metrics from myAI&apos;s own live deployment, refreshed every 5 minutes. Full
-            capability reference: <Link href="/showcase" className="text-zinc-500 hover:text-teal-300 underline underline-offset-2">/showcase</Link>.
+            capability reference: <Link href="/showcase" className="text-[rgb(var(--text-muted))] hover:text-teal-300 underline underline-offset-2">/showcase</Link>.
           </p>
         </div>
       </main>

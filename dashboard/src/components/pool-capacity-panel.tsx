@@ -30,13 +30,13 @@ function AgenticQualityRow({ providers }: { providers: PoolCapacityQuality[] }) 
     <div className="col-span-2 md:col-span-4 flex flex-wrap gap-x-6 gap-y-1.5 -mt-1 px-1">
       {providers.map((p) => (
         <div key={p.provider} className="flex items-center gap-2 text-xs" title={`${p.provider} pass-rate over last ${p.window} outcomes`}>
-          <span className="text-zinc-500 uppercase tracking-wider">{p.provider}</span>
+          <span className="text-[rgb(var(--text-muted))] uppercase tracking-wider">{p.provider}</span>
           <span className={p.passRate === null ? 'text-zinc-600' : p.passRate >= 0.7 ? 'text-emerald-400' : p.passRate >= 0.4 ? 'text-yellow-400' : 'text-red-400'}>
             {p.passRate === null ? 'n/a' : `${Math.round(p.passRate * 100)}%`}
           </span>
           <span className="text-zinc-600">(n={p.n})</span>
           {p.recent.length > 0 && (
-            <span className="font-mono text-zinc-500 tracking-tighter" aria-hidden="true">{sparkline(p.recent)}</span>
+            <span className="font-mono text-[rgb(var(--text-muted))] tracking-tighter" aria-hidden="true">{sparkline(p.recent)}</span>
           )}
         </div>
       ))}

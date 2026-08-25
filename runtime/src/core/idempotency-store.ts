@@ -16,7 +16,7 @@ import { createChildLogger } from '../shared/logger.js';
 const log = createChildLogger({ module: 'idempotency-store' });
 
 /** Tools where a client retry/double-click must not create a duplicate resource. */
-export const IDEMPOTENT_TOOLS = new Set(['tasks_create', 'plan_set']);
+export const IDEMPOTENT_TOOLS = new Set(['tasks_create', 'tasks_bulk', 'plan_set']);
 
 /** Default cache lifetime for a stored response — short by design. */
 export const IDEMPOTENCY_TTL_MS = Number(process.env.IDEMPOTENCY_TTL_MS) || 10 * 60_000;

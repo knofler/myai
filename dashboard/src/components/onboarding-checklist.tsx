@@ -64,10 +64,10 @@ export function OnboardingChecklist({ steps }: { steps: OnboardingStep[] }) {
                   {s.done ? '✓' : i + 1}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className={`text-sm ${s.done ? 'text-zinc-500 line-through decoration-zinc-700' : 'text-zinc-200'}`}>
+                  <p className={`text-sm ${s.done ? 'text-[rgb(var(--text-muted))] line-through decoration-zinc-700' : 'text-[rgb(var(--text-primary))]'}`}>
                     {s.label}
                   </p>
-                  <p className="text-xs text-zinc-500 mt-0.5">{s.desc}</p>
+                  <p className="text-xs text-[rgb(var(--text-muted))] mt-0.5">{s.desc}</p>
                 </div>
                 {s.id === next?.id && (
                   <Link
@@ -81,11 +81,11 @@ export function OnboardingChecklist({ steps }: { steps: OnboardingStep[] }) {
               </li>
             ))}
           </ol>
-          <div className="flex items-center justify-end pt-1 border-t border-zinc-800/70">
+          <div className="flex items-center justify-end pt-1 border-t border-[rgb(var(--border-subtle))]/70">
             <button
               type="button"
               onClick={dismiss}
-              className="text-xs text-zinc-500 hover:text-zinc-300 transition"
+              className="text-xs text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
               data-testid="onboarding-checklist-dismiss"
             >
               Dismiss

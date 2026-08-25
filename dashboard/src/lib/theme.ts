@@ -100,3 +100,53 @@ export const THEME_PALETTE: Record<ResolvedTheme, { bgPage: Rgb; bgSurface: Rgb;
     textSecondary: [71, 85, 105], // slate-600
   },
 };
+
+// ── Light-mode status-text overrides ───────────────────────────────────
+// Page content uses Tailwind's bright/mid status shades (red-400, amber-300,
+// emerald-400, ...) — legible on the dark zinc surfaces this dashboard
+// shipped with, but well under WCAG AA once the surface flips light (e.g.
+// red-400 on white ≈ 2.8:1). Source of truth for the `:root.light` override
+// rules in app/globals.css — keep both in sync. theme.test.ts asserts every
+// entry here clears AA against both light backgrounds; globals.css is
+// re-derived by hand from this table (no build-time codegen), so update the
+// CSS block whenever this map changes.
+export const LIGHT_STATUS_TEXT_OVERRIDES: Record<string, Rgb> = {
+  'text-amber-200': [180, 83, 9], // amber-700
+  'text-amber-300': [180, 83, 9],
+  'text-amber-400': [180, 83, 9],
+  'text-amber-500': [180, 83, 9],
+  'text-blue-300': [37, 99, 235], // blue-600
+  'text-blue-400': [37, 99, 235],
+  'text-cyan-400': [14, 116, 144], // cyan-700
+  'text-emerald-200': [4, 120, 87], // emerald-700
+  'text-emerald-300': [4, 120, 87],
+  'text-emerald-400': [4, 120, 87],
+  'text-emerald-500': [4, 120, 87],
+  'text-gray-300': [75, 85, 99], // gray-600
+  'text-green-400': [21, 128, 61], // green-700
+  'text-indigo-300': [79, 70, 229], // indigo-600
+  'text-indigo-400': [79, 70, 229],
+  'text-lime-400': [77, 124, 15], // lime-700
+  'text-neutral-100': [82, 82, 82], // neutral-600
+  'text-neutral-300': [82, 82, 82],
+  'text-neutral-400': [82, 82, 82],
+  'text-orange-400': [194, 65, 12], // orange-700
+  'text-pink-400': [190, 24, 93], // pink-700
+  'text-purple-200': [147, 51, 234], // purple-600
+  'text-purple-300': [147, 51, 234],
+  'text-purple-400': [147, 51, 234],
+  'text-red-300': [220, 38, 38], // red-600
+  'text-red-400': [220, 38, 38],
+  'text-rose-200': [190, 18, 60], // rose-700
+  'text-rose-300': [190, 18, 60],
+  'text-rose-400': [190, 18, 60],
+  'text-sky-300': [3, 105, 161], // sky-700
+  'text-teal-50': [15, 118, 110], // teal-700
+  'text-teal-100': [15, 118, 110],
+  'text-teal-200': [15, 118, 110],
+  'text-teal-300': [15, 118, 110],
+  'text-teal-400': [15, 118, 110],
+  'text-violet-400': [124, 58, 237], // violet-600
+  'text-yellow-400': [161, 98, 7], // yellow-700
+  'text-yellow-500': [161, 98, 7],
+};

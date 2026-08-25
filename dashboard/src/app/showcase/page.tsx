@@ -85,10 +85,10 @@ async function getCounts(): Promise<Counts> {
 
 function CountTile({ value, label, sub }: { value: React.ReactNode; label: string; sub?: string }) {
   return (
-    <div className="gel-surface bg-zinc-900/70 border border-zinc-800 rounded-xl p-4 text-center">
+    <div className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl p-4 text-center">
       <p className="text-3xl font-bold text-teal-300 tabular-nums">{value}</p>
-      <p className="text-xs font-medium text-zinc-300 mt-1">{label}</p>
-      {sub && <p className="text-[10px] text-zinc-500 mt-0.5">{sub}</p>}
+      <p className="text-xs font-medium text-[rgb(var(--text-primary))] mt-1">{label}</p>
+      {sub && <p className="text-[10px] text-[rgb(var(--text-muted))] mt-0.5">{sub}</p>}
     </div>
   );
 }
@@ -105,17 +105,17 @@ function Capability({
   badge?: string;
 }) {
   return (
-    <div className="gel-surface bg-zinc-900/70 border border-zinc-800 rounded-xl p-4 hover:border-teal-500/30 transition-colors">
+    <div className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl p-4 hover:border-teal-500/30 transition-colors">
       <div className="flex items-center gap-2.5">
         <span className="text-lg leading-none text-teal-300" aria-hidden>{icon}</span>
-        <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
+        <h3 className="text-sm font-semibold text-[rgb(var(--text-primary))]">{title}</h3>
         {badge && (
           <span className="ml-auto gel-badge text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-teal-500/10 text-teal-300 border border-teal-500/25">
             {badge}
           </span>
         )}
       </div>
-      <p className="text-xs text-zinc-400 mt-2 leading-relaxed">{body}</p>
+      <p className="text-xs text-[rgb(var(--text-secondary))] mt-2 leading-relaxed">{body}</p>
     </div>
   );
 }
@@ -123,14 +123,14 @@ function Capability({
 // One labelled step in the autonomous-loop flow.
 function FlowStep({ n, label, desc }: { n: number; label: string; desc: string }) {
   return (
-    <div className="flex-1 min-w-[8.5rem] gel-surface bg-zinc-900/70 border border-zinc-800 rounded-xl p-3">
+    <div className="flex-1 min-w-[8.5rem] gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl p-3">
       <div className="flex items-center gap-2">
         <span className="flex items-center justify-center w-5 h-5 rounded-full bg-teal-500/15 border border-teal-500/30 text-[10px] font-bold text-teal-300 tabular-nums">
           {n}
         </span>
-        <span className="text-xs font-semibold text-zinc-100">{label}</span>
+        <span className="text-xs font-semibold text-[rgb(var(--text-primary))]">{label}</span>
       </div>
-      <p className="text-[11px] text-zinc-500 mt-1.5 leading-snug">{desc}</p>
+      <p className="text-[11px] text-[rgb(var(--text-muted))] mt-1.5 leading-snug">{desc}</p>
     </div>
   );
 }
@@ -198,13 +198,13 @@ export default async function ShowcasePage() {
     <div className="max-w-5xl mx-auto space-y-8">
       {/* ── (a) Hero — what myAI is + one-line pitch ──────────────── */}
       <section className="gel-orange rounded-2xl px-6 py-8">
-        <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-400 font-semibold">Showcase</p>
+        <p className="text-[11px] uppercase tracking-[0.2em] text-[rgb(var(--text-secondary))] font-semibold">Showcase</p>
         <h1 className="text-4xl font-bold tracking-tight mt-1 text-brand-orange">myAI</h1>
-        <p className="text-base text-zinc-200 mt-3 max-w-2xl font-medium">
+        <p className="text-base text-[rgb(var(--text-primary))] mt-3 max-w-2xl font-medium">
           An AI brain you drop into any codebase. It crawls the repo, learns the architecture, and works
           like an employee — multi-agent, autonomous, mobile-controllable.
         </p>
-        <p className="text-sm text-zinc-400 mt-2 max-w-2xl">
+        <p className="text-sm text-[rgb(var(--text-secondary))] mt-2 max-w-2xl">
           Generic AI assistants forget everything each session. myAI gives them persistent memory,
           cross-repo awareness, scheduled autonomous work, and human oversight from your phone.
         </p>
@@ -212,10 +212,10 @@ export default async function ShowcasePage() {
           <Link href="/" className="px-3 py-1.5 rounded-lg gel-brand border border-teal-500/40 text-teal-200 hover:border-teal-400 transition-colors">
             Open Mission Control →
           </Link>
-          <Link href="/work" className="px-3 py-1.5 rounded-lg gel-surface border border-zinc-700 text-zinc-300 hover:text-zinc-100 transition-colors">
+          <Link href="/work" className="px-3 py-1.5 rounded-lg gel-surface border border-zinc-700 text-[rgb(var(--text-primary))] hover:text-[rgb(var(--text-primary))] transition-colors">
             See the work queue
           </Link>
-          <Link href="/proof" className="px-3 py-1.5 rounded-lg gel-surface border border-zinc-700 text-zinc-300 hover:text-zinc-100 transition-colors">
+          <Link href="/proof" className="px-3 py-1.5 rounded-lg gel-surface border border-zinc-700 text-[rgb(var(--text-primary))] hover:text-[rgb(var(--text-primary))] transition-colors">
             Public proof page ↗
           </Link>
         </div>
@@ -232,8 +232,8 @@ export default async function ShowcasePage() {
 
       {/* ── (b) The autonomous loop ───────────────────────────────── */}
       <section>
-        <h2 className="text-lg font-bold text-zinc-100">The autonomous loop</h2>
-        <p className="text-sm text-zinc-500 mt-1 mb-4">
+        <h2 className="text-lg font-bold text-[rgb(var(--text-primary))]">The autonomous loop</h2>
+        <p className="text-sm text-[rgb(var(--text-muted))] mt-1 mb-4">
           One continuous cycle — from a sentence to a shipped, supported app.
         </p>
         <div className="flex flex-wrap items-stretch gap-2">
@@ -245,8 +245,8 @@ export default async function ShowcasePage() {
 
       {/* ── (c) Key capabilities ──────────────────────────────────── */}
       <section>
-        <h2 className="text-lg font-bold text-zinc-100">What it can do</h2>
-        <p className="text-sm text-zinc-500 mt-1 mb-4">
+        <h2 className="text-lg font-bold text-[rgb(var(--text-primary))]">What it can do</h2>
+        <p className="text-sm text-[rgb(var(--text-muted))] mt-1 mb-4">
           Capabilities shipping today — counts are live where the gateway and database are reachable.
         </p>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -258,24 +258,24 @@ export default async function ShowcasePage() {
 
       {/* ── Sibling products — clearly-structured placeholders ────── */}
       <section>
-        <h2 className="text-lg font-bold text-zinc-100">The platform</h2>
-        <p className="text-sm text-zinc-500 mt-1 mb-4">
+        <h2 className="text-lg font-bold text-[rgb(var(--text-primary))]">The platform</h2>
+        <p className="text-sm text-[rgb(var(--text-muted))] mt-1 mb-4">
           myAI is the first of three products. The others get their own showcase, done right.
         </p>
         <div className="grid sm:grid-cols-3 gap-3">
-          <div className="gel-surface bg-zinc-900/70 border border-teal-500/30 rounded-xl p-4">
+          <div className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-teal-500/30 rounded-xl p-4">
             <p className="text-sm font-semibold text-teal-300">myAI</p>
-            <p className="text-[11px] text-zinc-400 mt-1">The AI management framework — this page.</p>
+            <p className="text-[11px] text-[rgb(var(--text-secondary))] mt-1">The AI management framework — this page.</p>
             <span className="inline-block mt-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/25">live</span>
           </div>
-          <a href="#agentflow" className="gel-surface bg-zinc-900/70 border border-teal-500/30 rounded-xl p-4 hover:border-teal-400 transition-colors">
+          <a href="#agentflow" className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-teal-500/30 rounded-xl p-4 hover:border-teal-400 transition-colors">
             <p className="text-sm font-semibold text-teal-300">agentFlow</p>
-            <p className="text-[11px] text-zinc-400 mt-1">Idea→app 8-stage generation pipeline. See the full section below ↓</p>
+            <p className="text-[11px] text-[rgb(var(--text-secondary))] mt-1">Idea→app 8-stage generation pipeline. See the full section below ↓</p>
             <span className="inline-block mt-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/25">live</span>
           </a>
-          <a href="#connect" className="gel-surface bg-zinc-900/70 border border-teal-500/30 rounded-xl p-4 hover:border-teal-400 transition-colors">
+          <a href="#connect" className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-teal-500/30 rounded-xl p-4 hover:border-teal-400 transition-colors">
             <p className="text-sm font-semibold text-teal-300">connect</p>
-            <p className="text-[11px] text-zinc-400 mt-1">Bug &amp; feature intake hub for shipped apps. See the full section below ↓</p>
+            <p className="text-[11px] text-[rgb(var(--text-secondary))] mt-1">Bug &amp; feature intake hub for shipped apps. See the full section below ↓</p>
             <span className="inline-block mt-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/25">live</span>
           </a>
         </div>
@@ -284,10 +284,10 @@ export default async function ShowcasePage() {
       {/* ── (c2) agentFlow showcase — idea to shipped app ─────────── */}
       <section id="agentflow" className="scroll-mt-6">
         <div className="flex items-center gap-2">
-          <h2 className="text-lg font-bold text-zinc-100">agentFlow</h2>
+          <h2 className="text-lg font-bold text-[rgb(var(--text-primary))]">agentFlow</h2>
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/25">live</span>
         </div>
-        <p className="text-sm text-zinc-500 mt-1 mb-4 max-w-2xl">
+        <p className="text-sm text-[rgb(var(--text-muted))] mt-1 mb-4 max-w-2xl">
           The idea→app generation pipeline built on this framework. An 8-stage agent pipeline turns a
           plain-English idea into a working, tested application — real codegen, not scaffolding.
         </p>
@@ -319,10 +319,10 @@ export default async function ShowcasePage() {
       {/* ── (c3) connect showcase — support→triage→fix→PR→deploy loop ─ */}
       <section id="connect" className="scroll-mt-6">
         <div className="flex items-center gap-2">
-          <h2 className="text-lg font-bold text-zinc-100">connect</h2>
+          <h2 className="text-lg font-bold text-[rgb(var(--text-primary))]">connect</h2>
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-300 border border-teal-500/25">live</span>
         </div>
-        <p className="text-sm text-zinc-500 mt-1 mb-4 max-w-2xl">
+        <p className="text-sm text-[rgb(var(--text-muted))] mt-1 mb-4 max-w-2xl">
           The bug &amp; feature intake hub for shipped apps. A closed loop turns a user
           report into a deployed fix — AI-triaged, AI-drafted, human-reviewed.
         </p>
@@ -353,9 +353,9 @@ export default async function ShowcasePage() {
 
       {/* ── (d) Full SHOWCASE.md, rendered nicely ─────────────────── */}
       <section>
-        <h2 className="text-lg font-bold text-zinc-100 mb-1">Full capability reference</h2>
-        <p className="text-sm text-zinc-500 mb-4">
-          The master <code className="text-zinc-400">SHOWCASE.md</code>, rendered live.
+        <h2 className="text-lg font-bold text-[rgb(var(--text-primary))] mb-1">Full capability reference</h2>
+        <p className="text-sm text-[rgb(var(--text-muted))] mb-4">
+          The master <code className="text-[rgb(var(--text-secondary))]">SHOWCASE.md</code>, rendered live.
         </p>
         {showcaseMd ? (
           <Card>
@@ -366,9 +366,9 @@ export default async function ShowcasePage() {
         ) : (
           <Card title="SHOWCASE.md not found">
             <EmptyState>
-              Could not read <code className="text-zinc-400">SHOWCASE.md</code>. The dashboard reads it from
-              the master repo mounted read-only at <code className="text-zinc-400">AI_ROOT</code> — verify the
-              volume mount in <code className="text-zinc-400">docker-compose.yml</code>.
+              Could not read <code className="text-[rgb(var(--text-secondary))]">SHOWCASE.md</code>. The dashboard reads it from
+              the master repo mounted read-only at <code className="text-[rgb(var(--text-secondary))]">AI_ROOT</code> — verify the
+              volume mount in <code className="text-[rgb(var(--text-secondary))]">docker-compose.yml</code>.
             </EmptyState>
           </Card>
         )}

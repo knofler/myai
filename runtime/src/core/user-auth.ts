@@ -15,20 +15,39 @@ import { UserModel, TenantModel, DEFAULT_TENANT_ID, type IUser, type UserRole, t
 import { checkEntitlement, EntitlementError } from './entitlements.js';
 import { provisionTenant } from './tenant-keys.js';
 import { redeemInvite, markInviteAccepted } from './invites.js';
+import { applyReferralSignup } from './referrals.js';
+import { redeemGiftCode } from './gift-codes.js';
 import { AuthError } from './tenant-context.js';
+import { assertSignupConsent, recordLegalConsent } from './legal.js';
 import { createChildLogger } from '../shared/logger.js';
 import { notifyLifecycleMilestone } from '../notifications/lifecycle-emails.js';
 import { sendAccountLockedEmail } from './account-unlock.js';
+import { sendEmailVerification } from './email-verification.js';
 import { recordSession, type DeviceInfo } from './user-sessions.js';
+import { recordAuditEvent } from './audit-log.js';
 
 const log = createChildLogger({ module: 'user-auth' });
 
 // ── Lockout (auto-unlock-via-email is the recovery path — account-unlock.ts) ──
-// After LOCKOUT_THRESHOLD consecutive failed logins, the account locks for
-// LOCKOUT_DURATION_MINUTES (hard-wait fallback) AND an unlock email fires
+// After LOCKOUT_THRESHOLD consecutive failed logins, the account locks for a
+// backed-off duration (hard-wait fallback) AND an unlock email fires
 // immediately so the user can self-serve recover without waiting it out.
+//
+// Backoff: `lockoutCount` (shared/db.ts) counts consecutive lockout CYCLES —
+// distinct from `failedLoginAttempts`, which resets to 0 the moment a lockout
+// fires. It only resets on a SUCCESSFUL login, so an attacker who keeps
+// grinding through threshold after threshold (e.g. auto-clicking the unlock
+// email each time) faces LOCKOUT_DURATION_MINUTES * 2^lockoutCount each
+// round, capped at LOCKOUT_MAX_DURATION_MINUTES — not a flat wait forever.
 const LOCKOUT_THRESHOLD = Number(process.env.AUTH_LOCKOUT_THRESHOLD) || 5;
 const LOCKOUT_DURATION_MINUTES = Number(process.env.AUTH_LOCKOUT_DURATION_MIN) || 30;
+const LOCKOUT_MAX_DURATION_MINUTES = Number(process.env.AUTH_LOCKOUT_MAX_DURATION_MIN) || 24 * 60;
+
+/** Exponential backoff on lockout duration, capped. Exported for tests. */
+export function lockoutDurationMinutes(priorLockouts: number): number {
+  const scaled = LOCKOUT_DURATION_MINUTES * 2 ** Math.max(0, priorLockouts);
+  return Math.min(scaled, LOCKOUT_MAX_DURATION_MINUTES);
+}
 
 // ── bcrypt (pure-JS fallback to avoid native addon dependency) ──
 
@@ -81,12 +100,29 @@ if (!process.env.JWT_SECRET) {
 }
 const JWT_EXPIRES_SECONDS = Number(process.env.JWT_EXPIRES_SECONDS) || 86400; // 24h
 
+/**
+ * Impersonation marker on a session JWT (operator support-login-as-tenant).
+ * Server-minted ONLY (issueImpersonationToken, gated by ADMIN_API_TOKEN) —
+ * its presence is what the impersonationGuard middleware and the dashboard
+ * banner key off, so it can never be set by a normal login path.
+ */
+export interface ImpersonationClaims {
+  /** Who is impersonating — 'operator' today (x-admin-token has no identity). */
+  by: string;
+  /** Why the support session was opened — required, lands in every audit line. */
+  reason?: string;
+  /** Read-only session: mutating requests are rejected by impersonationGuard. */
+  ro: boolean;
+}
+
 export interface JwtPayload {
   sub: string;        // userId
   tid: string;        // tenantId
   email: string;
   role: UserRole;
   sid: string;         // session id — UserSession row this token maps to (device mgmt / revocation)
+  /** Present ONLY on operator support-impersonation sessions (core/impersonation.ts). */
+  imp?: ImpersonationClaims;
   iat: number;
   exp: number;
 }
@@ -96,12 +132,12 @@ function base64url(input: string | Buffer): string {
   return b.toString('base64url');
 }
 
-function signJwt(payload: Omit<JwtPayload, 'iat' | 'exp'>): string {
+function signJwt(payload: Omit<JwtPayload, 'iat' | 'exp'>, expiresSeconds: number = JWT_EXPIRES_SECONDS): string {
   const now = Math.floor(Date.now() / 1000);
   const fullPayload: JwtPayload = {
     ...payload,
     iat: now,
-    exp: now + JWT_EXPIRES_SECONDS,
+    exp: now + expiresSeconds,
   };
   const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const body = base64url(JSON.stringify(fullPayload));
@@ -125,6 +161,30 @@ export async function issueSessionToken(claims: {
 } & DeviceInfo): Promise<string> {
   const sid = await recordSession({ userId: claims.userId, tenantId: claims.tenantId, role: claims.role, userAgent: claims.userAgent, ip: claims.ip });
   return signJwt({ sub: claims.userId, tid: claims.tenantId, email: claims.email, role: claims.role, sid });
+}
+
+/**
+ * Mint a TIME-BOXED impersonation session JWT (operator support-login-as-tenant,
+ * core/impersonation.ts). Identical shape to a normal session token — it rides
+ * every existing choke point (sessionRevocationGuard revocation, verifyJwt
+ * expiry, RBAC role resolution) — plus the `imp` marker claims and a far
+ * shorter caller-set expiry (auto-expiry is the JWT `exp` itself, no cleanup
+ * job needed). Records a UserSession row like every other login method so the
+ * session is visible in the tenant's device list and revocable there too.
+ */
+export async function issueImpersonationToken(claims: {
+  userId: string;
+  tenantId: string;
+  email: string;
+  role: UserRole;
+  expiresInSeconds: number;
+  imp: ImpersonationClaims;
+} & DeviceInfo): Promise<string> {
+  const sid = await recordSession({ userId: claims.userId, tenantId: claims.tenantId, role: claims.role, userAgent: claims.userAgent, ip: claims.ip });
+  return signJwt(
+    { sub: claims.userId, tid: claims.tenantId, email: claims.email, role: claims.role, sid, imp: claims.imp },
+    claims.expiresInSeconds,
+  );
 }
 
 // ── TOTP MFA pending token (short-lived, distinct from the session JWT) ──
@@ -222,6 +282,23 @@ export interface SignupInput {
   /** Team tier: redeem an invite and join the inviter's tenant instead of
    *  provisioning a new one. Role comes from the invite (default member). */
   inviteToken?: string;
+  /** GROWTH — referral program: the `?ref=` code from another tenant's
+   *  tracked invite link. Only meaningful on the fresh-tenant path (a
+   *  referral always rewards a brand-new signup, never an invite join into
+   *  an existing tenant); ignored when `inviteToken` is set. */
+  referralCode?: string;
+  /** Design-partner program (GRAND_PRODUCT §7.4): a gift-code (grantType
+   *  'trial_days') redeemed at signup to grant a time-boxed trial (e.g. a
+   *  60-day Solo trial) instead of starting on the free plan. Only meaningful
+   *  on the fresh-tenant path, like referralCode; ignored on invite joins. A
+   *  bad/expired/unknown code never blocks signup — same non-fatal posture as
+   *  a bad referral code. */
+  trialCode?: string;
+  /** Click-wrap consent (core/legal.ts): the signup form's "I agree to the
+   *  Terms / Privacy / Acceptable Use" checkbox. When true, an append-only
+   *  LegalConsent record is written at the current document versions. When
+   *  LEGAL_CONSENT_REQUIRED=1 (hosted posture) signup REJECTS without it. */
+  acceptTerms?: boolean;
 }
 
 export interface SignupResult {
@@ -233,6 +310,8 @@ export interface SignupResult {
   tenantName?: string;
   plan?: TenantPlan;
   role: UserRole;
+  /** Set when a valid trialCode was redeemed — the trial's expiry, for the signup UI to surface. */
+  trialEndsAt?: Date;
 }
 
 export async function signup(input: SignupInput, device: DeviceInfo = {}): Promise<SignupResult> {
@@ -241,6 +320,10 @@ export async function signup(input: SignupInput, device: DeviceInfo = {}): Promi
   if (!input.password || input.password.length < 8) {
     throw new AuthError('password must be at least 8 characters', 400, 'BAD_REQUEST');
   }
+
+  // Click-wrap gate BEFORE any provisioning — when enforcement is on, no
+  // tenant/user may exist without a consent record to attach to it.
+  assertSignupConsent(input.acceptTerms);
 
   const existingUser = await UserModel.findOne({ email }).lean();
   if (existingUser) {
@@ -275,6 +358,24 @@ export async function signup(input: SignupInput, device: DeviceInfo = {}): Promi
 
     log.info({ tenantId: invite.tenantId, userId, email, role: invite.role }, 'user joined tenant via invite');
 
+    // Consent record for the joining USER (the tenant's own record was written
+    // by its creator at signup). Awaited-but-non-fatal: a failed write is
+    // logged, never blocks the join — same posture as the sends below.
+    if (input.acceptTerms === true) {
+      try {
+        await recordLegalConsent({ tenantId: invite.tenantId, userId, email, source: 'signup', ip: device.ip });
+      } catch (err) {
+        log.error({ err, tenantId: invite.tenantId, userId }, 'legal consent record failed at invite join');
+      }
+    }
+
+    // Fire-and-forget, same posture as the fresh-tenant path below — an
+    // invite join is still a brand-new USER (the tenant already exists), so
+    // the address behind it still needs confirming.
+    void sendEmailVerification({ userId, tenantId: invite.tenantId, email }).catch((err) =>
+      log.error({ err, userId }, 'email verification send failed'),
+    );
+
     const sid = await recordSession({ userId, tenantId: invite.tenantId, role: invite.role, userAgent: device.userAgent, ip: device.ip });
     const token = signJwt({ sub: userId, tid: invite.tenantId, email, role: invite.role, sid });
     return { token, tenantId: invite.tenantId, userId, tenantName: tenant?.name, plan: tenant?.plan, role: invite.role };
@@ -304,6 +405,25 @@ export async function signup(input: SignupInput, device: DeviceInfo = {}): Promi
 
   log.info({ tenantId, userId, email }, 'user signup');
 
+  // Click-wrap consent record — the per-tenant legal evidence (version +
+  // timestamp + who clicked). Awaited-but-non-fatal when enforcement is off;
+  // written before the fire-and-forget sends so the record exists by the time
+  // the signup response lands.
+  if (input.acceptTerms === true) {
+    try {
+      await recordLegalConsent({ tenantId, userId, email, source: 'signup', ip: device.ip });
+    } catch (err) {
+      log.error({ err, tenantId, userId }, 'legal consent record failed at signup');
+    }
+  }
+
+  // Fire-and-forget, same posture as the lifecycle email below — never block
+  // signup on mail delivery. The dashboard surfaces unverified state via a
+  // resend banner (see email-verification.ts), not a login gate.
+  void sendEmailVerification({ userId, tenantId, email }).catch((err) =>
+    log.error({ err, userId }, 'email verification send failed'),
+  );
+
   // Activation funnel + lifecycle welcome email: a fresh tenant = the first
   // milestone. Fire-and-forget + idempotent (ADR-014 posture) — never block
   // signup on the meter or the email. Only the default fresh-tenant path
@@ -311,9 +431,44 @@ export async function signup(input: SignupInput, device: DeviceInfo = {}): Promi
   // tenant, so they are not new funnel entries or welcome-email sends.
   void notifyLifecycleMilestone(tenantId, 'signup', { tenantName, source: 'signup' });
 
+  // GROWTH — referral program: credit both sides when this signup came from a
+  // tracked link. Never fails signup on a bad/stale/unknown code — a broken
+  // referral link must not block the person actually signing up.
+  if (input.referralCode) {
+    try {
+      await applyReferralSignup({ code: input.referralCode, refereeTenantId: tenantId });
+    } catch (err) {
+      log.error({ err, tenantId }, 'referral signup credit failed');
+    }
+  }
+
+  // Design-partner program (GRAND_PRODUCT §7.4): redeem a trial gift code
+  // (grantType 'trial_days') at signup so a design partner lands straight on
+  // their trial tier instead of free + a separate manual redeem step.
+  // Awaited (unlike the referral credit above) because a successful redeem
+  // changes `plan`/`trialEndsAt` in the response the signup UI reads; a
+  // bad/expired/unknown code is still non-fatal — it just leaves the tenant
+  // on the free plan it was already provisioned on.
+  let plan: TenantPlan = 'free';
+  let trialEndsAt: Date | undefined;
+  if (input.trialCode) {
+    try {
+      const redemption = await redeemGiftCode({
+        code: input.trialCode,
+        tenantId,
+        actorRole: 'owner',
+        redeemedBy: userId,
+      });
+      if (redemption.plan) plan = redemption.plan;
+      trialEndsAt = redemption.currentPeriodEnd;
+    } catch (err) {
+      log.warn({ err, tenantId }, 'trial code redemption failed at signup');
+    }
+  }
+
   const sid = await recordSession({ userId, tenantId, role: 'owner', userAgent: device.userAgent, ip: device.ip });
   const token = signJwt({ sub: userId, tid: tenantId, email, role: 'owner', sid });
-  return { token, apiKey: rawKey, tenantId, userId, tenantName, plan: 'free', role: 'owner' };
+  return { token, apiKey: rawKey, tenantId, userId, tenantName, plan, role: 'owner', trialEndsAt };
 }
 
 // ── Login ──
@@ -363,10 +518,12 @@ export async function login(input: LoginInput, device: DeviceInfo = {}): Promise
   }
 
   if (user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+    const retryAfter = Math.max(1, Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000));
     throw new AuthError(
       'account locked after too many failed login attempts — check your email for an unlock link',
       423,
       'ACCOUNT_LOCKED',
+      retryAfter,
     );
   }
 
@@ -374,18 +531,34 @@ export async function login(input: LoginInput, device: DeviceInfo = {}): Promise
   if (!valid) {
     const attempts = (user.failedLoginAttempts ?? 0) + 1;
     if (attempts >= LOCKOUT_THRESHOLD) {
-      const lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MINUTES * 60_000);
+      const priorLockouts = user.lockoutCount ?? 0;
+      const durationMinutes = lockoutDurationMinutes(priorLockouts);
+      const lockedUntil = new Date(Date.now() + durationMinutes * 60_000);
       await UserModel.updateOne(
         { userId: user.userId },
-        { $set: { failedLoginAttempts: 0, lockedUntil } },
+        { $set: { failedLoginAttempts: 0, lockedUntil, lockoutCount: priorLockouts + 1 } },
       );
       // Fire the self-serve unlock email immediately — don't make the user
-      // wait out LOCKOUT_DURATION_MINUTES or file a support ticket.
+      // wait out the backed-off duration or file a support ticket.
       await sendAccountLockedEmail({ userId: user.userId, tenantId: user.tenantId, email: user.email });
+      // Repeated-failures signal for the audit trail (ADR-013 §5 posture —
+      // one line per lockout, not per failed attempt; see audit-log.ts header).
+      recordAuditEvent({
+        tenantId: user.tenantId,
+        actor: { userId: user.userId, role: user.role, via: 'jwt' },
+        action: 'account.locked',
+        target: user.userId,
+        detail: { attempts, lockoutCount: priorLockouts + 1, durationMinutes, ip: device.ip },
+      });
+      log.warn(
+        { tenantId: user.tenantId, userId: user.userId, attempts, lockoutCount: priorLockouts + 1, durationMinutes, ip: device.ip },
+        'account locked after repeated failed logins',
+      );
       throw new AuthError(
         'account locked after too many failed login attempts — check your email for an unlock link',
         423,
         'ACCOUNT_LOCKED',
+        durationMinutes * 60,
       );
     }
     await UserModel.updateOne({ userId: user.userId }, { $set: { failedLoginAttempts: attempts } });
@@ -394,7 +567,7 @@ export async function login(input: LoginInput, device: DeviceInfo = {}): Promise
 
   await UserModel.updateOne(
     { userId: user.userId },
-    { $set: { lastLoginAt: new Date(), failedLoginAttempts: 0 } },
+    { $set: { lastLoginAt: new Date(), failedLoginAttempts: 0, lockoutCount: 0 } },
   );
 
   // TOTP MFA (core/totp-mfa.ts): a password match alone isn't a session yet —
@@ -437,6 +610,8 @@ export async function getCurrentUser(payload: JwtPayload): Promise<{
   displayName?: string;
   role: UserRole;
   tenantName?: string;
+  emailVerified: boolean;
+  impersonation?: { by: string; reason?: string; readOnly: boolean; expiresAt: string };
 }> {
   const user = await UserModel.findOne({ userId: payload.sub }).lean<IUser>();
   if (!user) throw new AuthError('user not found', 404, 'NOT_FOUND');
@@ -447,8 +622,24 @@ export async function getCurrentUser(payload: JwtPayload): Promise<{
     tenantId: user.tenantId,
     email: user.email,
     displayName: user.displayName,
-    role: user.role,
+    // Impersonation sessions run under the TOKEN's role (a read-only support
+    // session is scoped down to `viewer`), not the target user's stored role —
+    // the UI must gate on what this session can actually do.
+    role: payload.imp ? payload.role : user.role,
     tenantName: tenant?.name,
+    emailVerified: !!user.emailVerified,
+    // The dashboard's ImpersonationBanner keys off this — present only on
+    // operator support sessions (core/impersonation.ts).
+    ...(payload.imp
+      ? {
+          impersonation: {
+            by: payload.imp.by,
+            reason: payload.imp.reason,
+            readOnly: payload.imp.ro,
+            expiresAt: new Date(payload.exp * 1000).toISOString(),
+          },
+        }
+      : {}),
   };
 }
 
@@ -488,6 +679,9 @@ export async function ensureBootstrapAdmin(): Promise<void> {
     passwordHash,
     displayName: email.split('@')[0],
     role: 'owner' as UserRole,
+    // Operator-configured via env, not a public signup — nothing to verify.
+    emailVerified: true,
+    emailVerifiedAt: new Date(),
   });
   log.warn(
     { email, tenantId: DEFAULT_TENANT_ID },

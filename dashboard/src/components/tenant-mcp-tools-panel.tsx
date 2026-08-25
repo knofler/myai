@@ -8,7 +8,7 @@
 import { useState } from 'react';
 
 const inputCls =
-  'px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-100 placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
+  'px-3 py-2 rounded-lg bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
 
 interface TenantOption {
   tenantId: string;
@@ -93,8 +93,8 @@ export default function TenantMcpToolsPanel({ tenants }: { tenants: TenantOption
   const allowSet = new Set(parseList(allowText));
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 max-w-2xl">
-      <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">Tenant</label>
+    <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5 max-w-2xl">
+      <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Tenant</label>
       <select
         className={`${inputCls} w-full mb-4`}
         value={tenantId}
@@ -109,13 +109,13 @@ export default function TenantMcpToolsPanel({ tenants }: { tenants: TenantOption
         ))}
       </select>
 
-      {loading && <p className="text-xs text-zinc-500">Loading…</p>}
+      {loading && <p className="text-xs text-[rgb(var(--text-muted))]">Loading…</p>}
 
       {error && (
         <div className="mb-4 bg-red-950/30 border border-red-800/50 rounded-lg p-3 text-xs text-red-300">
           {error}
           {error.includes('ADMIN_DISABLED') || error.toLowerCase().includes('admin_disabled') ? (
-            <> — set <code className="bg-zinc-800 px-1 rounded">ADMIN_API_TOKEN</code> on the dashboard and gateway to enable this panel.</>
+            <> — set <code className="bg-[rgb(var(--bg-hover))] px-1 rounded">ADMIN_API_TOKEN</code> on the dashboard and gateway to enable this panel.</>
           ) : null}
         </div>
       )}
@@ -124,12 +124,12 @@ export default function TenantMcpToolsPanel({ tenants }: { tenants: TenantOption
         <>
           {view.operatorOnlyTools.length > 0 && (
             <div className="mb-4">
-              <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">
+              <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">
                 Operator-only tools — check to allow for this tenant
               </label>
               <div className="grid grid-cols-2 gap-1.5 max-h-56 overflow-y-auto pr-1">
                 {view.operatorOnlyTools.map((tool) => (
-                  <label key={tool} className="flex items-center gap-2 text-xs text-zinc-300 font-mono">
+                  <label key={tool} className="flex items-center gap-2 text-xs text-[rgb(var(--text-primary))] font-mono">
                     <input
                       type="checkbox"
                       checked={allowSet.has(tool)}
@@ -143,7 +143,7 @@ export default function TenantMcpToolsPanel({ tenants }: { tenants: TenantOption
             </div>
           )}
 
-          <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">
+          <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">
             Allowlist (comma-separated tool names)
           </label>
           <input
@@ -153,7 +153,7 @@ export default function TenantMcpToolsPanel({ tenants }: { tenants: TenantOption
             placeholder="fleet_run_start, brain_host_provision"
           />
 
-          <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">
+          <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">
             Denylist (comma-separated tool names — additionally hides an otherwise-visible tool)
           </label>
           <input

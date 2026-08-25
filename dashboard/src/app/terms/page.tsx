@@ -5,6 +5,8 @@
 // surface is deliberately narrow. Reachable without a login (middleware
 // PUBLIC_PREFIXES + AppShell FULL_BLEED).
 import { LegalShell, Section, Bullets } from '@/components/legal-shell';
+import { GATEWAY_HTTP_URL } from '@/lib/gateway';
+import { fetchLegalDoc, LegalMarkdown } from '@/lib/legal-markdown';
 
 export const metadata = {
   title: 'Terms of Service — myAI',
@@ -12,7 +14,24 @@ export const metadata = {
     'The terms governing use of the myAI self-hosted software and the optional hosted subscription: license, acceptable use, subscriptions & billing, warranty, and liability.',
 };
 
-export default function TermsPage() {
+// PRIMARY SOURCE: the gateway's versioned markdown (GET /api/legal/docs/terms
+// — env-driven copy via LEGAL_DOCS_DIR / LEGAL_* vars; its `version` drives
+// the signup click-wrap record + the dashboard re-consent prompt). The static
+// JSX below is the fallback when the gateway is unreachable — this page must
+// never 500 in front of a buyer.
+export default async function TermsPage() {
+  const doc = await fetchLegalDoc(GATEWAY_HTTP_URL, 'terms');
+  if (doc) {
+    return (
+      <LegalShell title={doc.title} updated={`${doc.updated} (v${doc.version})`}>
+        <LegalMarkdown markdown={doc.markdown} />
+      </LegalShell>
+    );
+  }
+  return <StaticTermsFallback />;
+}
+
+function StaticTermsFallback() {
   return (
     <LegalShell
       title="Terms of Service"
@@ -88,8 +107,8 @@ export default function TermsPage() {
 
       <Section heading="6. Warranty disclaimer">
         <p>
-          The software and the hosted service are provided <strong className="text-zinc-200">&ldquo;as is&rdquo;</strong>{' '}
-          and <strong className="text-zinc-200">&ldquo;as available&rdquo;</strong>, without warranties of any kind,
+          The software and the hosted service are provided <strong className="text-[rgb(var(--text-primary))]">&ldquo;as is&rdquo;</strong>{' '}
+          and <strong className="text-[rgb(var(--text-primary))]">&ldquo;as available&rdquo;</strong>, without warranties of any kind,
           express or implied, including merchantability, fitness for a particular purpose, and non-infringement. myAI
           orchestrates autonomous agents that write and run code; you are responsible for reviewing their output before
           relying on it in production.
@@ -119,7 +138,7 @@ export default function TermsPage() {
           </a>{' '}
           or email the maintainer listed in the repo profile.
         </p>
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-[rgb(var(--text-muted))]">
           This is a template, not legal advice; have counsel review it against your jurisdiction and business before
           relying on it commercially.
         </p>

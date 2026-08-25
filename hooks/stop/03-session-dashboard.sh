@@ -20,7 +20,9 @@ STATE_FILE="$ROOT/AI/state/STATE.md"
 [ ! -f "$STATE_FILE" ] && STATE_FILE="$ROOT/state/STATE.md"
 STATE_AGE=999
 if [ -f "$STATE_FILE" ]; then
-  STATE_MOD=$(stat -f "%m" "$STATE_FILE" 2>/dev/null || stat -c "%Y" "$STATE_FILE" 2>/dev/null || echo 0)
+  # GNU-first (AI_RULES §4): BSD-style `stat -f "%m"` is `--file-system` on
+  # Linux and succeeds with a mount-point line instead of failing over.
+  STATE_MOD=$(stat -c "%Y" "$STATE_FILE" 2>/dev/null || stat -f "%m" "$STATE_FILE" 2>/dev/null || echo 0)
   NOW=$(date +%s)
   STATE_AGE=$(( (NOW - STATE_MOD) / 60 ))
 fi
@@ -29,7 +31,8 @@ HANDOFF_FILE="$ROOT/AI/state/AI_AGENT_HANDOFF.md"
 [ ! -f "$HANDOFF_FILE" ] && HANDOFF_FILE="$ROOT/state/AI_AGENT_HANDOFF.md"
 HANDOFF_AGE=999
 if [ -f "$HANDOFF_FILE" ]; then
-  HANDOFF_MOD=$(stat -f "%m" "$HANDOFF_FILE" 2>/dev/null || stat -c "%Y" "$HANDOFF_FILE" 2>/dev/null || echo 0)
+  # GNU-first (AI_RULES §4): see STATE_MOD above.
+  HANDOFF_MOD=$(stat -c "%Y" "$HANDOFF_FILE" 2>/dev/null || stat -f "%m" "$HANDOFF_FILE" 2>/dev/null || echo 0)
   HANDOFF_AGE=$(( (NOW - HANDOFF_MOD) / 60 ))
 fi
 # 6. Current branch

@@ -41,6 +41,21 @@ while IFS= read -r raw || [ -n "$raw" ]; do
   line="${raw%%#*}"; d="$(eval echo "$(echo "$line" | xargs)")"
   [ -d "$d/.git" ] || continue
   git -C "$d" remote get-url origin >/dev/null 2>&1 || continue   # no remote → can't git-deploy
+
+  # A repo with no web-app markers cannot deploy to Vercel AT ALL, so a missing
+  # vercel.json there means "nothing to gate" — not "burning quota". Without this
+  # gate, every docs/ops repo lands in the 🔴 ROGUE list and the banner cries wolf
+  # every single session (TNEW-OPS — monitoring reports, no package.json — did
+  # exactly that until 2026-08-24). Mirrors CLAUDE.md's web-project detection.
+  is_web=0
+  for _m in package.json next.config.js next.config.mjs next.config.ts next.config.cjs vercel.json .vercel; do
+    if [ -e "$d/$_m" ] || git -C "$d" cat-file -e "origin/test:$_m" 2>/dev/null \
+                       || git -C "$d" cat-file -e "origin/main:$_m" 2>/dev/null; then
+      is_web=1; break
+    fi
+  done
+  [ "$is_web" = 1 ] || continue
+
   name="$(basename "$d")"
   remote_state="$(classify "$d" origin/test)"
   local_state="$(classify "$d" "")"

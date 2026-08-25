@@ -17,6 +17,7 @@ import {
   PAID_PLANS,
 } from '@/lib/billing';
 import { isInDunning, dunningMaxAttempts } from '@/lib/dunning';
+import { asTenantRegion } from '@/lib/residency';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,6 +30,9 @@ export async function GET(req: Request) {
   return NextResponse.json({
     tenantId: auth.tenant.tenantId,
     plan: auth.tenant.plan,
+    // ADR-024 data residency — pinned region for the dashboard's residency
+    // badge. Falls back to 'us' (the schema default) for pre-migration rows.
+    region: asTenantRegion(auth.tenant.region),
     subscriptionStatus: auth.tenant.subscriptionStatus ?? 'none',
     entitled: isEntitled(state),
     reason: entitlementReason(state),

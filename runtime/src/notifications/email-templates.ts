@@ -180,17 +180,37 @@ export const EMAIL_TEMPLATE_NAMES: readonly EmailTemplateName[] = [
   'digest',
 ];
 
+/**
+ * Template versions — bump a template's entry whenever its renderer's copy or
+ * structure meaningfully changes. The version is stamped into every rendered
+ * email and recorded on the delivery log row, so a deliverability regression
+ * ("opens dropped after Tuesday") can be pinned to the template revision that
+ * shipped it.
+ */
+export const EMAIL_TEMPLATE_VERSIONS: Record<EmailTemplateName, number> = {
+  verification: 1,
+  'password-reset': 1,
+  receipt: 1,
+  welcome: 1,
+  digest: 1,
+};
+
 export interface RenderedEmail {
   subject: string;
   html: string;
   text: string;
   from: string;
   replyTo?: string;
+  /** Version of the template that produced this render (EMAIL_TEMPLATE_VERSIONS). */
+  templateVersion: number;
 }
 
 // ── Renderers (one per template) ─────────────────────────────
 
-function renderVerification(b: TenantBranding, d: VerificationEmailData): RenderedEmail {
+/** Renderers produce everything except the version — the dispatcher stamps that. */
+type RenderedBody = Omit<RenderedEmail, 'templateVersion'>;
+
+function renderVerification(b: TenantBranding, d: VerificationEmailData): RenderedBody {
   const subject = `Verify your email for ${b.tenantName}`;
   const bodyHtml = `
     <p>Hi,</p>
@@ -209,7 +229,7 @@ function renderVerification(b: TenantBranding, d: VerificationEmailData): Render
   return { subject, html: layout(b, subject, bodyHtml), text, from: formatFromHeader(b), replyTo: b.replyTo };
 }
 
-function renderPasswordReset(b: TenantBranding, d: PasswordResetEmailData): RenderedEmail {
+function renderPasswordReset(b: TenantBranding, d: PasswordResetEmailData): RenderedBody {
   const subject = `Reset your ${b.tenantName} password`;
   const bodyHtml = `
     <p>Hi,</p>
@@ -228,7 +248,7 @@ function renderPasswordReset(b: TenantBranding, d: PasswordResetEmailData): Rend
   return { subject, html: layout(b, subject, bodyHtml), text, from: formatFromHeader(b), replyTo: b.replyTo };
 }
 
-function renderReceipt(b: TenantBranding, d: ReceiptEmailData): RenderedEmail {
+function renderReceipt(b: TenantBranding, d: ReceiptEmailData): RenderedBody {
   const subject = `Your ${b.tenantName} receipt — ${d.invoiceNumber}`;
   const receiptLink = d.receiptUrl ? button(b, d.receiptUrl, 'View receipt') : '';
   const bodyHtml = `
@@ -254,7 +274,7 @@ function renderReceipt(b: TenantBranding, d: ReceiptEmailData): RenderedEmail {
   return { subject, html: layout(b, subject, bodyHtml), text, from: formatFromHeader(b), replyTo: b.replyTo };
 }
 
-function renderWelcome(b: TenantBranding, d: WelcomeEmailData): RenderedEmail {
+function renderWelcome(b: TenantBranding, d: WelcomeEmailData): RenderedBody {
   const subject = `Welcome to ${b.tenantName}`;
   const greeting = d.displayName ? `Hi ${escapeHtml(d.displayName)},` : 'Hi,';
   const bodyHtml = `
@@ -272,7 +292,7 @@ function renderWelcome(b: TenantBranding, d: WelcomeEmailData): RenderedEmail {
   return { subject, html: layout(b, subject, bodyHtml), text, from: formatFromHeader(b), replyTo: b.replyTo };
 }
 
-function renderDigest(b: TenantBranding, d: DigestEmailData): RenderedEmail {
+function renderDigest(b: TenantBranding, d: DigestEmailData): RenderedBody {
   const subject = `Your ${b.tenantName} digest — ${d.periodLabel}`;
   const rows = d.items
     .map(
@@ -302,20 +322,27 @@ export function renderEmailTemplate<T extends EmailTemplateName>(
   branding: TenantBranding,
   data: EmailTemplateDataMap[T],
 ): RenderedEmail {
+  let body: RenderedBody;
   switch (name) {
     case 'verification':
-      return renderVerification(branding, data as VerificationEmailData);
+      body = renderVerification(branding, data as VerificationEmailData);
+      break;
     case 'password-reset':
-      return renderPasswordReset(branding, data as PasswordResetEmailData);
+      body = renderPasswordReset(branding, data as PasswordResetEmailData);
+      break;
     case 'receipt':
-      return renderReceipt(branding, data as ReceiptEmailData);
+      body = renderReceipt(branding, data as ReceiptEmailData);
+      break;
     case 'welcome':
-      return renderWelcome(branding, data as WelcomeEmailData);
+      body = renderWelcome(branding, data as WelcomeEmailData);
+      break;
     case 'digest':
-      return renderDigest(branding, data as DigestEmailData);
+      body = renderDigest(branding, data as DigestEmailData);
+      break;
     default:
       throw new Error(`Unknown email template: ${String(name)}`);
   }
+  return { ...body, templateVersion: EMAIL_TEMPLATE_VERSIONS[name] };
 }
 
 /** Render + send in one call — the primary entry point for flows adopting the shared layer. */

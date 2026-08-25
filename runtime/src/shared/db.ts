@@ -357,6 +357,20 @@ export interface ITask extends Document {
   // task-store.ts's updateTaskImpl on every routeExhausted:true defer; reset
   // to 0 the next time the task re-stamps `working` with a real routed model.
   deferCount?: number;
+  // Team-tier per-member budget scoping (task-82854b12) — the tenant member
+  // (User.userId) this task is attributed to, when created on behalf of a
+  // signed-in member (dashboard). Absent on system/CLI/scheduler-created
+  // tasks, which are never subject to a per-member cap. This is the field
+  // claimTask() reads to exclude a capped-out member's tasks from the
+  // claimable set — see tasks/member-budget-guard.ts.
+  requestedByUserId?: string;
+  // Task dependency graph (task-cafdd778) — upstream taskIds this task waits
+  // on. claimTask() refuses to hand out a task until EVERY listed upstream is
+  // status 'done' (DAG scheduling: "migrate DB → then build UI" plans the
+  // flat queue can't express). createTask/updateTask validate that upstreams
+  // exist (tenant-scoped) and that an edit never introduces a cycle. Absent /
+  // empty = independent task, exactly the pre-existing flat-queue behaviour.
+  dependsOn?: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -398,6 +412,11 @@ const taskSchema = new Schema<ITask>({
   deadLetteredAt: { type: Date },
   lastError: { type: String },
   deferCount: { type: Number, default: 0 },
+  requestedByUserId: { type: String },
+  // default undefined (not []) so dependency-free docs — including every
+  // pre-existing task — carry no field at all and claimTask()'s
+  // {$exists:false} fast path matches them without a migration.
+  dependsOn: { type: [String], default: undefined },
 }, { timestamps: true });
 
 // ── Task index strategy (hot path — polled every runner fire) ───────────
@@ -414,6 +433,10 @@ const taskSchema = new Schema<ITask>({
 // migration drops it.
 taskSchema.index({ tenantId: 1, status: 1, priority: 1, createdAt: 1 });
 taskSchema.index({ tenantId: 1, repo: 1, status: 1 });
+// Per-member budget scoping (task-82854b12) — claimTask()'s $nin exclusion
+// filter on requestedByUserId piggybacks the above compound index (sparse
+// residual field); a dedicated index isn't warranted until per-member caps
+// see real Team-tier traffic.
 // Legacy pre-tenancy (ADR-010) shapes — kept declared for unscoped
 // admin/migration queries; drop via migration once nothing unscoped remains.
 taskSchema.index({ repo: 1, status: 1, priority: 1 });
@@ -621,6 +644,79 @@ const scheduleSchema = new Schema<ISchedule>({
 scheduleSchema.index({ enabled: 1, nextRun: 1 });
 scheduleSchema.index({ tenantId: 1, enabled: 1, nextRun: 1 });
 
+// ── RecurringTask (first-class repeating runner jobs — task-b8ddab7d) ──
+//
+// A cron-cadenced TEMPLATE that the recurring sweep re-enqueues into the Task
+// queue as ordinary one-shot entries (source='scheduler', sourceId=recurringId)
+// for the launchd CLI runner to claim. Distinct from ISchedule: a Schedule
+// dispatches an MCP tool/agent/skill in-gateway at fire time; a RecurringTask
+// schedules WORK — it creates a queue Task the runner executes in a repo
+// worktree (e.g. nightly state rotation, weekly dep-scan) so the operator
+// stops re-adding the same one-shots by hand.
+
+/** 'skip' (default): don't enqueue while the previously fired task is still
+ *  open (not done/dead_letter) — no pileup of identical maintenance tasks.
+ *  'stack': always enqueue on cadence regardless of the previous instance. */
+export type RecurringOverlapPolicy = 'skip' | 'stack';
+export type RecurringFireStatus = 'never' | 'enqueued' | 'skipped' | 'error';
+
+export interface IRecurringTask extends Document {
+  tenantId: string;
+  recurringId: string;
+  name: string;
+  cronExpr: string;
+  /** Task template — mirrors CreateTaskInput (tasks/task-store.ts). */
+  repo: string;
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  assignedAgent?: string;
+  recommendedModel?: string;
+  notes?: string;
+  overlapPolicy: RecurringOverlapPolicy;
+  enabled: boolean;
+  nextFireAt?: Date;
+  lastFiredAt?: Date;
+  lastFireStatus: RecurringFireStatus;
+  /** taskId of the most recently enqueued one-shot — the overlap-check anchor. */
+  lastTaskId?: string;
+  lastError?: string;
+  enqueueCount: number;
+  skipCount: number;
+  errorCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const recurringTaskSchema = new Schema<IRecurringTask>({
+  tenantId: tenantField,
+  recurringId: { type: String, required: true, unique: true, index: true },
+  name: { type: String, required: true },
+  cronExpr: { type: String, required: true },
+  repo: { type: String, required: true },
+  title: { type: String, required: true },
+  description: { type: String, default: '' },
+  priority: { type: String, required: true, enum: ['P0', 'P1', 'P2', 'P3'], default: 'P2' },
+  assignedAgent: { type: String },
+  recommendedModel: { type: String },
+  notes: { type: String },
+  overlapPolicy: { type: String, required: true, enum: ['skip', 'stack'], default: 'skip' },
+  enabled: { type: Boolean, default: true, index: true },
+  nextFireAt: { type: Date, index: true },
+  lastFiredAt: { type: Date },
+  lastFireStatus: { type: String, required: true, enum: ['never', 'enqueued', 'skipped', 'error'], default: 'never' },
+  lastTaskId: { type: String },
+  lastError: { type: String },
+  enqueueCount: { type: Number, default: 0 },
+  skipCount: { type: Number, default: 0 },
+  errorCount: { type: Number, default: 0 },
+}, { timestamps: true, collection: 'recurring_tasks' });
+
+// Same index strategy as scheduleSchema: the cross-tenant due sweep reads
+// {enabled, nextFireAt}; tenant-scoped lists read {tenantId, enabled, nextFireAt}.
+recurringTaskSchema.index({ enabled: 1, nextFireAt: 1 });
+recurringTaskSchema.index({ tenantId: 1, enabled: 1, nextFireAt: 1 });
+
 // ── Notification ────────────────────────────────────────
 
 export interface INotification extends Document {
@@ -704,6 +800,12 @@ export interface INotificationPrefs extends Document {
   push: boolean;
   /** Email digest of background events. Opt-in (default off) — requires SMTP. */
   email: boolean;
+  /** Slack delivery of background events. Opt-in (default off) — requires
+   *  `slackWebhookUrl` to be set (the tenant's own Incoming Webhook). */
+  slack: boolean;
+  /** Tenant's Slack Incoming Webhook URL (https://hooks.slack.com/services/...).
+   *  Write-only from the API's perspective — never echoed back in full once set. */
+  slackWebhookUrl?: string;
   /** Event-family toggles keyed by the first dotted segment, e.g. { task: true }. */
   events: Record<string, boolean>;
   /** "HH:MM" 24h server-local time. Both set → quiet window active. */
@@ -716,6 +818,8 @@ const notificationPrefsSchema = new Schema<INotificationPrefs>({
   inApp: { type: Boolean, required: true, default: true },
   push: { type: Boolean, required: true, default: true },
   email: { type: Boolean, required: true, default: false },
+  slack: { type: Boolean, required: true, default: false },
+  slackWebhookUrl: { type: String },
   events: { type: Schema.Types.Mixed, default: {} },
   quietStart: { type: String },
   quietEnd: { type: String },
@@ -748,6 +852,21 @@ export interface IBudgetUsage extends Omit<Document, 'model'> {
    *  Batches API (50% discount applied). Used by the dashboard to compute
    *  batch share-of-traffic + realised savings. */
   batchMode?: boolean;
+  /** Cost-attribution (this change) — the repo this call was made on behalf
+   *  of, when known (e.g. `agents_invoke` carries the caller's `repo` arg).
+   *  Absent for repo-agnostic traffic (plain chat, scheduler sweeps without
+   *  a target repo). */
+  repo?: string;
+  /** Cost-attribution — the specialist/agent category this call ran under
+   *  (e.g. `solution-architect`, `dev-backend`), mirroring `agentName` but
+   *  normalised for grouping (see `router.ts` TASK_TYPE table). Absent for
+   *  non-agent traffic (plain chat completions). */
+  taskType?: string;
+  /** Cost-attribution — true for a runner-claimed autonomous agentic session
+   *  (the billable "premium" unit — same semantics as the product meter's
+   *  `task.executed` + `metadata.premium`, ADR-014 follow-up 2). False/absent
+   *  for the gateway-inline interactive lane. */
+  premium?: boolean;
   createdAt: Date;
   metadata?: Record<string, unknown>;
 }
@@ -769,6 +888,9 @@ const budgetUsageSchema = new Schema<IBudgetUsage>({
   cacheCreationInputTokens: { type: Number },
   cacheReadInputTokens: { type: Number },
   batchMode: { type: Boolean },
+  repo: { type: String },
+  taskType: { type: String },
+  premium: { type: Boolean },
   metadata: { type: Schema.Types.Mixed },
 }, { timestamps: true });
 
@@ -777,6 +899,7 @@ budgetUsageSchema.index({ channelId: 1, createdAt: -1 });
 budgetUsageSchema.index({ provider: 1, createdAt: -1 });
 budgetUsageSchema.index({ tenantId: 1, createdAt: -1 });
 budgetUsageSchema.index({ tenantId: 1, userId: 1, createdAt: -1 }); // per-member breakdown/filter
+budgetUsageSchema.index({ tenantId: 1, repo: 1, createdAt: -1 }); // cost-attribution breakdown
 
 // ── Budget Usage Rollup (Phase 5b §3.1 — daily/weekly analytics) ────
 // PHASE_5B_BUDGET_GUARDS.md §3.1 originally deferred this as "premature
@@ -859,6 +982,11 @@ export interface IBudgetCapOverride extends Document {
   monthlyHardCapUsd?: number;
   dailyCapUsd?: number;
   perChannelCapUsd?: number;
+  /** Tenant-wide off-hours runner minutes cap (usage-store.ts 'offhours.minutes'
+   *  meter), UTC calendar month. Distinct from IMemberBudgetCap's field of the
+   *  same name — that one scopes a single member, this scopes the whole tenant.
+   *  Read by tasks/tenant-budget-gate.ts at task-claim time, unset = uncapped. */
+  offHoursMinutesCapPerMonth?: number;
   updatedAt: Date;
 }
 
@@ -867,7 +995,40 @@ const budgetCapOverrideSchema = new Schema<IBudgetCapOverride>({
   monthlyHardCapUsd: { type: Number },
   dailyCapUsd: { type: Number },
   perChannelCapUsd: { type: Number },
+  offHoursMinutesCapPerMonth: { type: Number },
 }, { timestamps: { createdAt: false, updatedAt: true }, collection: 'budgetcapoverrides' });
+
+// ── Member Budget Cap (task-82854b12 — Team-tier per-member scoping) ────
+// One document per (tenant, member), written by an owner/admin via
+// POST /api/auth/members/budget-cap (core/invites.ts's setMemberBudgetCap,
+// gated behind the same `members` RBAC capability as changeMemberRole). This
+// nests the existing per-TENANT cost-aware budget cap (llm/budget-guard.ts,
+// BudgetCapOverride above) down to an individual member: a Team owner can
+// bound one member's autonomous $ spend and off-hours runner minutes without
+// touching the tenant-wide caps. A field left unset is unlimited for that
+// member (not "falls back to the tenant cap" — the tenant cap still applies
+// independently on top, via budget-guard.ts). No document at all means the
+// member is never scoped by this guard. Read by tasks/member-budget-guard.ts
+// at task-claim time; never written by the gateway itself.
+export interface IMemberBudgetCap extends Document {
+  tenantId: string;
+  userId: string;
+  monthlyHardCapUsd?: number;
+  dailyCapUsd?: number;
+  /** Off-hours runner minutes (usage-store.ts 'offhours.minutes' meter), UTC calendar month. */
+  offHoursMinutesCapPerMonth?: number;
+  updatedAt: Date;
+}
+
+const memberBudgetCapSchema = new Schema<IMemberBudgetCap>({
+  tenantId: tenantField,
+  userId: { type: String, required: true },
+  monthlyHardCapUsd: { type: Number },
+  dailyCapUsd: { type: Number },
+  offHoursMinutesCapPerMonth: { type: Number },
+}, { timestamps: { createdAt: false, updatedAt: true }, collection: 'memberbudgetcaps' });
+
+memberBudgetCapSchema.index({ tenantId: 1, userId: 1 }, { unique: true });
 
 // ── MRR Snapshot (nightly per-tenant revenue history) ────────────────
 // Closes the gap noted on dashboard /revenue and /revenue/nrr: those pages
@@ -927,6 +1088,32 @@ const spendAlertStateSchema = new Schema<ISpendAlertState>({
 }, { timestamps: true });
 
 spendAlertStateSchema.index({ tenantId: 1, period: 1 }, { unique: true });
+
+// ── Tenant Budget Gate Alert State (runner claim-time budget-exhausted alert) ──
+// Dedup watermark so the runner's tenant-level budget-exhaustion gate
+// (tasks/tenant-budget-gate.ts) emits its 'runner.budget_exhausted' notification
+// AT MOST ONCE per (tenant, window, reason) instead of on every claim-poll cycle
+// while a tenant stays over budget. `windowKey` is reason-scoped (daily reasons
+// key off the UTC day, monthly/off-hours reasons key off the UTC month) so a
+// tenant that trips the daily cap gets alerted again the next calendar day even
+// within the same billing month.
+
+export interface ITenantBudgetGateAlertState extends Document {
+  tenantId: string;
+  /** e.g. 'daily:2026-08-21' or 'monthly:2026-08' — see tenant-budget-gate.ts. */
+  windowKey: string;
+  reason: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const tenantBudgetGateAlertStateSchema = new Schema<ITenantBudgetGateAlertState>({
+  tenantId: tenantField,
+  windowKey: { type: String, required: true },
+  reason: { type: String, required: true },
+}, { timestamps: true });
+
+tenantBudgetGateAlertStateSchema.index({ tenantId: 1, windowKey: 1 }, { unique: true });
 
 
 // ── Atlas Vector Index Health (self-heal repeat-non-ok alert) ─────
@@ -1216,6 +1403,64 @@ const planDaySchema = new Schema<IPlanDay>({
 planDaySchema.index({ tenantId: 1, repo: 1, day: 1 }, { unique: true });
 planDaySchema.index({ fireAt: 1 });
 
+// ── Trash bin (soft-delete + restore for tasks/plans) ────────────────────
+// A delete of a Task or a repo's PlanDay set moves full doc snapshot(s) into
+// this collection instead of destroying them — recoverable via the
+// tasks_restore / plan_restore MCP tools until the retention purge
+// (core/data-retention.ts, TRASH_RETENTION_DAYS) hard-deletes the entry.
+// A dedicated collection rather than an in-place `deletedAt` flag on the
+// source docs: the flag variant would require every existing Task/PlanDay
+// query (claim, list, count, DAG gates, monitoring sweeps) to remember an
+// exclusion filter — the same "forgotten filter" failure mode ADR-010's
+// scoped-query helpers exist to kill. Moving the doc out of the live
+// collection makes un-deleted reads impossible by construction.
+
+export type TrashKind = 'task' | 'plan';
+
+export interface ITrashEntry extends Document {
+  tenantId: string;
+  /** `trash-<uuid>` — the handle restore/list tools address an entry by. */
+  trashId: string;
+  kind: TrashKind;
+  /** Human-readable label for the trash listing (task title / "<repo> plan"). */
+  label: string;
+  repo: string;
+  /** kind=task: the original taskId (restore-by-taskId lookup). kind=plan: unset. */
+  sourceId?: string;
+  /** Raw doc snapshot(s) — exactly one for a task, one per PlanDay for a plan. */
+  snapshots: Record<string, unknown>[];
+  /** Audit-mirrored actor identity (userId, or the actor `via` when anonymous). */
+  deletedBy?: string;
+  reason?: string;
+  deletedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const trashEntrySchema = new Schema<ITrashEntry>({
+  tenantId: tenantField,
+  trashId: { type: String, required: true, unique: true, index: true },
+  kind: { type: String, required: true, enum: ['task', 'plan'] },
+  label: { type: String, required: true },
+  repo: { type: String, required: true },
+  sourceId: { type: String },
+  // Mixed (not [Mixed]) so the raw snapshot array round-trips untyped — the
+  // docs were validated by their source schema before trashing. Writers that
+  // mutate it in place must markModified('snapshots') (restorePlan does).
+  snapshots: { type: Schema.Types.Mixed, required: true },
+  deletedBy: { type: String },
+  reason: { type: String },
+  deletedAt: { type: Date, required: true },
+}, { timestamps: true });
+
+// Trash listing (newest first per tenant) + restore-by-source lookups.
+trashEntrySchema.index({ tenantId: 1, kind: 1, deletedAt: -1 });
+trashEntrySchema.index({ tenantId: 1, sourceId: 1 });
+// Retention purge scans cross-tenant by age (data-retention.ts) — no TTL index
+// on purpose: the window is env-tunable at purge time, same posture as
+// Task/PlanDay retention.
+trashEntrySchema.index({ deletedAt: 1 });
+
 // ── Task Artifact (per-task reviewable output) ───────────
 // Structured, downloadable artifacts a runner session captures on completion —
 // git diff, build/test console output, generated reports — so an operator can
@@ -1260,6 +1505,64 @@ const artifactSchema = new Schema<IArtifact>({
 }, { timestamps: true });
 
 artifactSchema.index({ tenantId: 1, taskId: 1, createdAt: 1 });
+
+// ── Runner job history (searchable overnight-run archive) ─────
+// One document per runner fire (one ~/.ai-cli-runner/logs job log), indexed by
+// repo / task / outcome so past runs are queryable from the dashboard instead
+// of grepped off whichever Mac happened to run them. This stores the SUMMARY
+// of a run (RESULT line + a bounded error excerpt), not the raw log body —
+// the full transcript stays host-local under runner_log_rotate.sh's lifecycle,
+// and the bounded reviewable slice lives in the artifact store (session.log).
+
+export type JobHistoryStatus = 'done' | 'blocked' | 'failed' | 'no-result';
+
+export interface IRunnerJobHistory extends Document {
+  tenantId: string;
+  jobId: string;
+  repo: string;
+  taskId: string;
+  status: JobHistoryStatus;
+  /** The run's final `RESULT: ` line (redacted + capped at write time). */
+  resultLine: string;
+  /** Bounded error/postmortem excerpt (3-strikes block, tail of a failed run). */
+  errorExcerpt: string;
+  exitCode?: number;
+  machine?: string;
+  /** Model the session ran on (`usedModel` — `model` collides with Document.model()). */
+  usedModel?: string;
+  /** Source log filename on the runner host — the idempotent-ingest dedupe key. */
+  logFile?: string;
+  /** When the runner fired the job (from the log filename timestamp). */
+  startedAt: Date;
+  durationSeconds?: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const runnerJobHistorySchema = new Schema<IRunnerJobHistory>({
+  tenantId: tenantField,
+  jobId: { type: String, required: true, unique: true, index: true },
+  repo: { type: String, required: true },
+  taskId: { type: String, required: true },
+  status: { type: String, required: true, enum: ['done', 'blocked', 'failed', 'no-result'], default: 'no-result' },
+  resultLine: { type: String, required: true, default: '' },
+  errorExcerpt: { type: String, required: true, default: '' },
+  exitCode: { type: Number },
+  machine: { type: String },
+  usedModel: { type: String },
+  logFile: { type: String },
+  startedAt: { type: Date, required: true },
+  durationSeconds: { type: Number },
+}, { timestamps: true });
+
+runnerJobHistorySchema.index({ tenantId: 1, startedAt: -1 });
+runnerJobHistorySchema.index({ tenantId: 1, repo: 1, startedAt: -1 });
+runnerJobHistorySchema.index({ tenantId: 1, taskId: 1 });
+// Idempotent re-ingest: the same host log file never becomes two rows.
+runnerJobHistorySchema.index(
+  { tenantId: 1, logFile: 1 },
+  { unique: true, partialFilterExpression: { logFile: { $type: 'string' } } },
+);
 
 // ── Fleet Run (morning "agent mode -resume all" console) ─────
 // One document per fleet-wide morning sweep. The master repo aggregates each
@@ -1624,6 +1927,38 @@ inboundWebhookDeliverySchema.index({ tenantId: 1, source: 1, deliveryId: 1 }, { 
 // TTL: reap dedup records 7 days after receipt — well past any realistic redelivery window.
 inboundWebhookDeliverySchema.index({ receivedAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 });
 
+// ── TenantToolPlugin (custom MCP tool plugin registry — env-gated) ────
+// One row per tenant-registered custom MCP tool: a name + JSON-Schema input
+// contract + an HTTPS handler URL the gateway PROXIES tools/call to with a
+// per-plugin timeout. Extends the built-in tool surface at runtime without a
+// redeploy. Feature is off by default (MYAI_TENANT_TOOL_PLUGINS env gate);
+// rows are strictly tenant-scoped — a plugin never appears in another
+// tenant's tools/list and can never shadow a built-in tool (built-ins win at
+// dispatch). See runtime/src/mcp/plugin-tools.ts.
+export interface ITenantToolPlugin extends Document {
+  tenantId: string;                       // tenantField — scoped, required (ADR-010)
+  name: string;                           // snake_case tool name, unique per tenant
+  description: string;
+  inputSchema: Record<string, unknown>;   // MCP tool inputSchema (JSON Schema, type:'object')
+  handlerUrl: string;                     // HTTPS endpoint the gateway POSTs the call to
+  timeoutMs: number;                      // per-call proxy timeout (clamped at registration)
+  enabled: boolean;                       // disabled plugins are hidden + refuse dispatch
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const tenantToolPluginSchema = new Schema<ITenantToolPlugin>({
+  tenantId: tenantField,
+  name: { type: String, required: true },
+  description: { type: String, required: true },
+  inputSchema: { type: Schema.Types.Mixed, required: true },
+  handlerUrl: { type: String, required: true },
+  timeoutMs: { type: Number, required: true },
+  enabled: { type: Boolean, default: true },
+}, { timestamps: true });
+
+tenantToolPluginSchema.index({ tenantId: 1, name: 1 }, { unique: true });
+
 // ── Tenant (M1 multi-tenancy — the isolation root, ADR-010) ──
 // One row per paying account. Every scoped collection carries this row's
 // `tenantId`. Per-tenant API keys authenticate gateway requests: the caller
@@ -1708,6 +2043,16 @@ export interface ITenant extends Document {
   // regardless of how far past its retention window a row is. Support/operator
   // toggle only — no self-serve endpoint, same posture as `region` above.
   legalHold?: boolean;
+  // Operator-side data-retention purge-on-cancel (core/tenant-lifecycle.ts) —
+  // distinct from account-erasure.ts's user-initiated right-to-erasure flow
+  // (see that file's header). Set when the Stripe subscription is fully
+  // canceled (billing webhook `customer.subscription.deleted`): a grace
+  // window (CANCELLATION_PURGE_GRACE_DAYS, default 30) precedes the
+  // irreversible purge, so a resubscribe before the deadline clears this
+  // field instead. `cancellationPurgedAt` is stamped once the sweep tombstones
+  // the row (mirrors ErasureRequest.purgedAt).
+  cancellationPurgeAt?: Date;
+  cancellationPurgedAt?: Date;
   // Per-org MCP tool visibility override (Wave-2 #15, core/rbac.ts
   // `isToolVisibleForTenant`). Orthogonal to the RBAC role→capability gate:
   // `mcpToolDenylist` additionally hides an otherwise-visible tool from THIS
@@ -1757,6 +2102,8 @@ const tenantSchema = new Schema<ITenant>({
   creditBalance: { type: Number, default: 0 },       // gift/redeemable-code credit grants
   require2fa: { type: Boolean, default: false },     // per-tenant TOTP enforcement policy
   legalHold: { type: Boolean, default: false, index: true }, // data-retention purge exemption
+  cancellationPurgeAt: { type: Date, index: true },   // purge-on-cancel grace-window cutoff
+  cancellationPurgedAt: { type: Date },               // stamped once the cancellation sweep purges
   mcpToolAllowlist: { type: [String], default: undefined },  // per-org MCP tool visibility override (allow)
   mcpToolDenylist: { type: [String], default: undefined },   // per-org MCP tool visibility override (deny)
   // ADR-030 physical isolation tier. 'shared' default keeps every pre-existing
@@ -1851,9 +2198,41 @@ export interface ITenantDbBinding extends Document {
   // reimplementation (ADR-030 "Severity flags for implementers", HIGH).
   mongoUri: string;
   dbName: string;
-  status: 'provisioning' | 'migrating' | 'active' | 'suspended';
+  // ADR-032 §3.3 adds the terminal 'decommissioned' value (additive to this
+  // ADR-030 field): dedicated is the sole copy, shared-tier rows for this
+  // tenant no longer exist, and — per §2.1's routing table — this status
+  // must route identically to 'active' (dedicated-only), never fall back to
+  // shared, since shared no longer has the data at all.
+  status: 'provisioning' | 'migrating' | 'active' | 'suspended' | 'decommissioned';
   provisionedAt: Date;
   migratedAt?: Date;
+  // ADR-032 §3.3 — set only once the decommission sweep (`decommission-sweep.ts`)
+  // has bulk-deleted this tenant's shared-tier rows and flipped `status` to
+  // 'decommissioned'. Irreversible by design (§3.4) — absent until then.
+  decommissionedAt?: Date;
+  // ADR-031 §5 step 4 — persisted output of the periodic reconciliation sweep
+  // (`dual-write-reconciler.ts`), so the cutover gate can check "is the *last*
+  // sweep clean and recent" without re-running a full checksum synchronously
+  // at cutover time. Absent until the first sweep runs for this tenant.
+  lastReconciledAt?: Date;
+  lastReconcileClean?: boolean;
+  // ADR-032 §1.4 — durable poll state for the `dedicated-cluster` async
+  // provisioning flow (`tenant-provisioning-worker.ts`). Present only while
+  // `status === 'provisioning'` AND `atlasClusterName` is set; cleared on
+  // success (readiness check passes, §1.6). `dedicated-db` provisioning runs
+  // synchronously (§1.3) and never sets this field.
+  provisioning?: {
+    requestedAt: Date;
+    attempts: number;
+    nextPollAt: Date;
+    lastError?: string;
+  };
+  // ADR-032 §1.4 — `dedicated-cluster` only. Identifies the Atlas project +
+  // cluster this binding's dedicated infrastructure lives in, so the worker
+  // and `teardownTenantProvisioning` (§1.7) can re-derive Atlas Admin API
+  // targets from persisted state after a crash, never from in-memory state.
+  atlasProjectId?: string;
+  atlasClusterName?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -1866,13 +2245,96 @@ const tenantDbBindingSchema = new Schema<ITenantDbBinding>({
   status: {
     type: String,
     required: true,
-    enum: ['provisioning', 'migrating', 'active', 'suspended'],
+    enum: ['provisioning', 'migrating', 'active', 'suspended', 'decommissioned'],
     default: 'provisioning',
     index: true,
   },
   provisionedAt: { type: Date, required: true, default: Date.now },
   migratedAt: { type: Date },
+  decommissionedAt: { type: Date },
+  lastReconciledAt: { type: Date },
+  lastReconcileClean: { type: Boolean },
+  provisioning: {
+    type: new Schema({
+      requestedAt: { type: Date, required: true },
+      attempts: { type: Number, required: true, default: 0 },
+      nextPollAt: { type: Date, required: true },
+      lastError: { type: String },
+    }, { _id: false }),
+    required: false,
+  },
+  atlasProjectId: { type: String },
+  atlasClusterName: { type: String },
 }, { timestamps: true });
+
+// `tenant-provisioning-worker.ts` claim hot path (ADR-032 §1.4 step 2) — same
+// shape as `dualWriteRetryItemSchema`'s `{status, nextAttemptAt}` claim index.
+tenantDbBindingSchema.index({ status: 1, 'provisioning.nextPollAt': 1 });
+
+// ── DualWriteRetryItem (ADR-031 §2 — dual-write shadow-copy retry queue) ────
+// Durable "intent record" for a dual-write shadow-copy attempt. Lives in the
+// shared cluster alongside Tenant/TenantDbBinding — same bootstrapping reason
+// TenantDbBinding does: it is what tells the system a shadow copy is owed, so
+// it cannot itself live behind the dedicated-connection indirection it's
+// tracking. Data-model-only in this slice (this ADR's reconciliation sweep is
+// the first consumer — it enqueues self-heal 'upsert' repair items on
+// checksum/count divergence and reads this collection for the cutover gate);
+// the inline-retry dispatcher and background drain worker (`dual-write-queue.ts`
+// / `dual-write-worker.ts`) are separate queued follow-ups per ADR-031's file
+// footprint list.
+export type DualWriteRetryStatus = 'pending' | 'retrying' | 'resolved' | 'dead';
+export type DualWriteOperation = 'upsert' | 'delete';
+
+export interface IDualWriteRetryItem extends Document {
+  tenantId: string;                  // FK -> Tenant.tenantId / TenantDbBinding.tenantId
+  itemId: string;                    // stable id, "dwr_<uuid>"
+  collectionName: string;            // scoped collection label, e.g. 'tasks', 'schedules'
+  operation: DualWriteOperation;
+  documentKey: string;               // the row's stable scoped id (e.g. taskId) - NOT
+                                      // Mongo's _id, which differs across the two connections
+  payload?: Record<string, unknown>; // resolved document snapshot to upsert; absent for 'delete'
+  status: DualWriteRetryStatus;
+  attempts: number;                  // background-worker attempts only (ADR-031 §1's inline
+                                      // fast-retries are NOT counted here)
+  maxAttempts: number;                // dead-letter threshold; default 20 (ADR-031 §3)
+  nextAttemptAt: Date;                // worker claim key, same pattern as IWebhookDelivery
+  lastError?: string;
+  resolvedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const dualWriteRetryItemSchema = new Schema<IDualWriteRetryItem>({
+  tenantId: { type: String, required: true, index: true },
+  itemId: { type: String, required: true },
+  collectionName: { type: String, required: true },
+  operation: { type: String, required: true, enum: ['upsert', 'delete'] },
+  documentKey: { type: String, required: true },
+  payload: { type: Schema.Types.Mixed },
+  status: { type: String, required: true, enum: ['pending', 'retrying', 'resolved', 'dead'], default: 'pending', index: true },
+  attempts: { type: Number, required: true, default: 0 },
+  maxAttempts: { type: Number, required: true, default: 20 },
+  nextAttemptAt: { type: Date, required: true, default: () => new Date() },
+  lastError: { type: String },
+  resolvedAt: { type: Date },
+}, { timestamps: true });
+
+dualWriteRetryItemSchema.index({ tenantId: 1, itemId: 1 }, { unique: true });
+// Worker claim hot path — identical shape to webhookDeliverySchema's.
+dualWriteRetryItemSchema.index({ status: 1, nextAttemptAt: 1 });
+// Cutover gate depth check (ADR-031 §5): "are there any unresolved items for this tenant."
+dualWriteRetryItemSchema.index({ tenantId: 1, status: 1 });
+// Reconciliation sweep's per-collection/key dedup lookup (avoid re-enqueuing a
+// repair item every sweep interval while one is already pending/retrying).
+dualWriteRetryItemSchema.index({ tenantId: 1, collectionName: 1, documentKey: 1, status: 1 });
+// Resolved items are audit-adjacent, not durable state - reap 7 days after
+// resolution, same precedent as IInboundWebhookDelivery's dedup-record TTL.
+// Only applies to 'resolved'; 'dead' items are NOT TTL'd - they require
+// operator action and must not silently vanish.
+dualWriteRetryItemSchema.index(
+  { resolvedAt: 1 },
+  { expireAfterSeconds: 7 * 24 * 3600, partialFilterExpression: { status: 'resolved' } },
+);
 
 // ── Tenant Secret Key (envelope encryption, ADR-010 §3.7) ──────────
 // One per-tenant Data Encryption Key (DEK), itself wrapped ("envelope
@@ -1916,9 +2378,14 @@ export interface IUser extends Document {
   lastLoginAt?: Date;
   // Lockout (see AccountUnlock below): count of consecutive failed logins
   // since the last success/unlock; lockedUntil is the hard-wait fallback the
-  // self-serve unlock email lets a user skip.
+  // self-serve unlock email lets a user skip. lockoutCount is separate — it
+  // survives across lockout cycles (only reset on a SUCCESSFUL login) and
+  // drives the exponential backoff on lockedUntil's duration, so an attacker
+  // who keeps grinding through the unlock email each time still faces a
+  // growing wait instead of a flat 30 minutes forever.
   failedLoginAttempts?: number;
   lockedUntil?: Date | null;
+  lockoutCount?: number;
   // TOTP 2FA (core/totp.ts). `totpPendingSecret` holds the not-yet-confirmed
   // enrolment secret (set by /totp/enroll, cleared on verify-enroll success or
   // a fresh enroll call); `totpSecret` is the live, confirmed secret login
@@ -1929,6 +2396,13 @@ export interface IUser extends Document {
   totpEnabled?: boolean;
   totpRecoveryCodes?: string[];
   totpVerifiedAt?: Date | null;
+  // Email verification (M2 — signup wire-up, see core/email-verification.ts).
+  // A fresh signup starts unverified; the welcome email doubles as the
+  // verification email. Never gates login/dashboard access on its own (a
+  // locked-out-of-your-own-account failure mode we specifically avoid) — it's
+  // surfaced as a dismissible dashboard banner with a resend action instead.
+  emailVerified?: boolean;
+  emailVerifiedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -1943,11 +2417,14 @@ const userSchema = new Schema<IUser>({
   lastLoginAt: { type: Date },
   failedLoginAttempts: { type: Number, default: 0 },
   lockedUntil: { type: Date },
+  lockoutCount: { type: Number, default: 0 },
   totpSecret: { type: String, select: false },
   totpPendingSecret: { type: String, select: false },
   totpEnabled: { type: Boolean, default: false },
   totpRecoveryCodes: { type: [String], select: false, default: undefined },
   totpVerifiedAt: { type: Date },
+  emailVerified: { type: Boolean, default: false },
+  emailVerifiedAt: { type: Date },
 }, { timestamps: true });
 
 userSchema.index({ email: 1, tenantId: 1 }, { unique: true });
@@ -2171,16 +2648,25 @@ reviewApprovalSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 86400 });
 // authenticated operator and redeeming only ever grants a comp benefit, so
 // there is no credential to protect by hashing it.
 
-export type GiftCodeGrantType = 'plan_months' | 'credits';
+// `trial_days` (design-partner program, GRAND_PRODUCT §7.4): a day-granular
+// variant of `plan_months` used specifically for time-boxed trials (e.g. a
+// 60-day Solo trial) — redemption sets the tenant's subscriptionStatus to
+// 'trialing' instead of 'active', so it reads correctly as a trial rather
+// than a paid grant. `plan_months` stays month-granular for whole-month comp
+// grants (promos/partnerships); the two are intentionally separate grant
+// types rather than unifying on days, since minting a "3 month" comp code in
+// days would be a lossy/awkward operator UX.
+export type GiftCodeGrantType = 'plan_months' | 'credits' | 'trial_days';
 export type GiftCodeStatus = 'active' | 'disabled' | 'exhausted' | 'expired';
 
 export interface IGiftCode extends Document {
   codeId: string;
   code: string;                    // human-typed redemption code, e.g. "MYAI-7F3K-Q9RT"
   grantType: GiftCodeGrantType;
-  grantPlan?: TenantPlan;          // set when grantType === 'plan_months' (never 'free')
+  grantPlan?: TenantPlan;          // set when grantType === 'plan_months' | 'trial_days' (never 'free')
   grantMonths?: number;            // set when grantType === 'plan_months'
   grantCredits?: number;           // set when grantType === 'credits'
+  grantDays?: number;              // set when grantType === 'trial_days'
   maxRedemptions: number;          // distinct tenants that may redeem this code
   redemptionCount: number;
   status: GiftCodeStatus;
@@ -2235,6 +2721,196 @@ magicLinkSchema.index({ email: 1, status: 1 }); // one pending link per address
 // still purges the `magicLinks` collection immediately — see account-erasure.ts).
 magicLinkSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 86400 });
 
+// ── EmailVerification (M2 — verify the address behind a fresh signup) ──────
+// Distinct from PasswordReset (credential change) and MagicLink (passwordless
+// login): signup() auto-fires this the instant a user/tenant is provisioned
+// (core/email-verification.ts), and the dashboard's resend banner can re-fire
+// it any time the account is still unverified. Same posture as the sibling
+// token flows: only the sha256 of the raw token is stored; a resend
+// supersedes any prior pending verification for the address.
+
+export type EmailVerificationStatus = 'pending' | 'used' | 'superseded';
+
+export interface IEmailVerification extends Document {
+  verificationId: string;
+  userId: string;
+  tenantId: string;
+  email: string;             // the address the verification is locked to
+  tokenHash: string;         // sha256 hex of the raw token (NEVER the raw token)
+  status: EmailVerificationStatus;
+  expiresAt: Date;
+  usedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const emailVerificationSchema = new Schema<IEmailVerification>({
+  verificationId: { type: String, required: true, unique: true, index: true },
+  userId: { type: String, required: true, index: true },
+  tenantId: { type: String, required: true },
+  email: { type: String, required: true },
+  tokenHash: { type: String, required: true, unique: true, index: true },
+  status: { type: String, required: true, enum: ['pending', 'used', 'superseded'], default: 'pending', index: true },
+  expiresAt: { type: Date, required: true },
+  usedAt: { type: Date },
+}, { timestamps: true });
+
+emailVerificationSchema.index({ email: 1, status: 1 }); // one pending verification per address
+// TTL: reap rows 24h past expiry — same posture as MagicLink/PasswordReset.
+emailVerificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 86400 });
+
+// ── LegalConsent (click-wrap acceptance record — core/legal.ts) ─────────────
+// Append-only: one row per acceptance event (signup click-wrap or dashboard
+// re-consent after a version bump). Never updated in place — the history IS
+// the legal evidence. Latest row per tenant decides re-consent state. No TTL:
+// consent records outlive the account (erasure anonymises, never deletes).
+export interface ILegalConsent extends Document {
+  consentId: string;
+  tenantId: string;
+  /** The user who clicked — consent is recorded per tenant, attributed to a user. */
+  userId: string;
+  email?: string;
+  source: 'signup' | 'reconsent';
+  ip?: string;
+  termsVersion: string;
+  privacyVersion: string;
+  acceptableUseVersion: string;
+  acceptedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const legalConsentSchema = new Schema<ILegalConsent>({
+  consentId: { type: String, required: true, unique: true, index: true },
+  tenantId: { type: String, required: true, index: true },
+  userId: { type: String, required: true, index: true },
+  email: { type: String },
+  source: { type: String, required: true, enum: ['signup', 'reconsent'] },
+  ip: { type: String },
+  termsVersion: { type: String, required: true },
+  privacyVersion: { type: String, required: true },
+  acceptableUseVersion: { type: String, required: true },
+  acceptedAt: { type: Date, required: true },
+}, { timestamps: true });
+
+// Latest-acceptance lookup per tenant (consent status / re-consent check).
+legalConsentSchema.index({ tenantId: 1, acceptedAt: -1 });
+
+// ── FeatureFlag (core/feature-flags.ts — platform feature-flag service) ────
+// One row per flag: global state (on/off/killed) + percentage rollout +
+// per-tenant force-on/off overrides. Evaluation precedence lives in
+// core/feature-flags.ts (killed beats overrides beats rollout).
+
+export type FeatureFlagState = 'on' | 'off' | 'killed';
+
+export interface IFeatureFlagOverride {
+  tenantId: string;
+  enabled: boolean;
+}
+
+export interface IFeatureFlag extends Document {
+  key: string;
+  description?: string;
+  state: FeatureFlagState;
+  /** 0–100 — only consulted when state === 'on'. */
+  rolloutPercent: number;
+  overrides: IFeatureFlagOverride[];
+  updatedBy?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const featureFlagSchema = new Schema<IFeatureFlag>({
+  key: { type: String, required: true, unique: true, index: true },
+  description: { type: String },
+  state: { type: String, required: true, enum: ['on', 'off', 'killed'], default: 'off' },
+  rolloutPercent: { type: Number, required: true, default: 0, min: 0, max: 100 },
+  overrides: {
+    type: [new Schema<IFeatureFlagOverride>({
+      tenantId: { type: String, required: true },
+      enabled: { type: Boolean, required: true },
+    }, { _id: false })],
+    default: [],
+  },
+  updatedBy: { type: String },
+}, { timestamps: true });
+
+// ── EmailDelivery (transactional-email delivery/bounce log) ────────────────
+// One row per attempted transactional send through notifications/
+// email-service.ts — which template (and version) went where, over which
+// provider, and what happened to it. Provider webhooks (bounce, complaint,
+// delivered) land on the same row via providerMessageId, so ops can answer
+// "did the reset email for X actually arrive?" from one collection.
+
+export type EmailDeliveryStatus =
+  | 'sent'        // accepted by the transport
+  | 'failed'      // transport threw — never left the gateway
+  | 'suppressed'  // skipped: the address is on the suppression list
+  | 'delivered'   // provider confirmed delivery (webhook)
+  | 'bounced'     // provider reported a bounce (webhook)
+  | 'complained'; // recipient marked it spam (webhook)
+
+export interface IEmailDelivery extends Document {
+  deliveryId: string;
+  tenantId?: string;
+  to: string;                  // recipient address (lowercased)
+  template?: string;           // email-templates.ts template name, when rendered through one
+  templateVersion?: number;    // version of that template at send time
+  subject: string;
+  provider: string;            // transport name: resend | smtp | console | …
+  providerMessageId?: string;  // provider's own id — the webhook join key
+  status: EmailDeliveryStatus;
+  error?: string;              // transport error (status 'failed')
+  lastEventAt?: Date;          // most recent provider webhook event
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const emailDeliverySchema = new Schema<IEmailDelivery>({
+  deliveryId: { type: String, required: true, unique: true, index: true },
+  tenantId: { type: String },
+  to: { type: String, required: true },
+  template: { type: String },
+  templateVersion: { type: Number },
+  subject: { type: String, required: true },
+  provider: { type: String, required: true },
+  providerMessageId: { type: String, index: true, sparse: true },
+  status: {
+    type: String,
+    required: true,
+    enum: ['sent', 'failed', 'suppressed', 'delivered', 'bounced', 'complained'],
+    index: true,
+  },
+  error: { type: String },
+  lastEventAt: { type: Date },
+}, { timestamps: true });
+
+emailDeliverySchema.index({ to: 1, createdAt: -1 }); // per-address history lookup
+// Retention: the log is operational, not archival — reap rows after 90 days.
+emailDeliverySchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 86400 });
+
+// ── EmailSuppression (do-not-send list) ─────────────────────────────────────
+// An address lands here on a hard bounce or a spam complaint (or a manual ops
+// entry) and every future transactional send to it is skipped — repeatedly
+// mailing a bouncing address is how a sending domain gets blocklisted.
+
+export type EmailSuppressionReason = 'hard-bounce' | 'complaint' | 'manual';
+
+export interface IEmailSuppression extends Document {
+  email: string;  // lowercased, unique
+  reason: EmailSuppressionReason;
+  /** Where it came from: deliveryId of the triggering send, or an operator note. */
+  source?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const emailSuppressionSchema = new Schema<IEmailSuppression>({
+  email: { type: String, required: true, unique: true, index: true },
+  reason: { type: String, required: true, enum: ['hard-bounce', 'complaint', 'manual'] },
+  source: { type: String },
+}, { timestamps: true });
+
 const erasureRequestSchema = new Schema<IErasureRequest>({
   requestId: { type: String, required: true, unique: true, index: true },
   tenantId: { type: String, required: true, index: true },
@@ -2254,10 +2930,11 @@ erasureRequestSchema.index({ status: 1, scheduledPurgeAt: 1 }); // sweep hot pat
 const giftCodeSchema = new Schema<IGiftCode>({
   codeId: { type: String, required: true, unique: true, index: true },
   code: { type: String, required: true, unique: true, index: true },
-  grantType: { type: String, required: true, enum: ['plan_months', 'credits'] },
+  grantType: { type: String, required: true, enum: ['plan_months', 'credits', 'trial_days'] },
   grantPlan: { type: String, enum: ['free', 'solo', 'team', 'scale'] },
   grantMonths: { type: Number },
   grantCredits: { type: Number },
+  grantDays: { type: Number },
   maxRedemptions: { type: Number, required: true, default: 1 },
   redemptionCount: { type: Number, required: true, default: 0 },
   status: { type: String, required: true, enum: ['active', 'disabled', 'exhausted', 'expired'], default: 'active', index: true },
@@ -2276,6 +2953,7 @@ export interface IGiftRedemption extends Document {
   grantPlan?: TenantPlan;
   grantMonths?: number;
   grantCredits?: number;
+  grantDays?: number;
   redeemedBy?: string;             // userId who redeemed, when known
   redeemedAt: Date;
   createdAt: Date;
@@ -2287,15 +2965,99 @@ const giftRedemptionSchema = new Schema<IGiftRedemption>({
   codeId: { type: String, required: true, index: true },
   code: { type: String, required: true },
   tenantId: { type: String, required: true, index: true },
-  grantType: { type: String, required: true, enum: ['plan_months', 'credits'] },
+  grantType: { type: String, required: true, enum: ['plan_months', 'credits', 'trial_days'] },
   grantPlan: { type: String, enum: ['free', 'solo', 'team', 'scale'] },
   grantMonths: { type: Number },
   grantCredits: { type: Number },
+  grantDays: { type: Number },
   redeemedBy: { type: String },
   redeemedAt: { type: Date, required: true },
 }, { timestamps: true });
 
 giftRedemptionSchema.index({ codeId: 1, tenantId: 1 }, { unique: true }); // one redemption per tenant per code
+
+// ── Feedback (design-partner program, GRAND_PRODUCT §7.4 — core/feedback.ts) ──
+// Lightweight in-app capture surface: any signed-in member submits free-text
+// feedback (bug/idea/general) from the dashboard widget, routed to the
+// operator (email + this durable ledger for the admin list view). Distinct
+// from a support ticket system — no reply thread, just capture + notify, the
+// minimum viable loop for a design-partner cohort giving early feedback.
+
+export type FeedbackCategory = 'bug' | 'idea' | 'general';
+export type FeedbackStatus = 'new' | 'reviewed';
+
+export interface IFeedback extends Document {
+  feedbackId: string;
+  tenantId: string;
+  userId: string;
+  email: string;
+  category: FeedbackCategory;
+  message: string;
+  page?: string;              // client-side path the feedback was submitted from, e.g. "/apps"
+  status: FeedbackStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const feedbackSchema = new Schema<IFeedback>({
+  feedbackId: { type: String, required: true, unique: true, index: true },
+  tenantId: { type: String, required: true, index: true },
+  userId: { type: String, required: true },
+  email: { type: String, required: true },
+  category: { type: String, required: true, enum: ['bug', 'idea', 'general'], default: 'general' },
+  message: { type: String, required: true },
+  page: { type: String },
+  status: { type: String, required: true, enum: ['new', 'reviewed'], default: 'new', index: true },
+}, { timestamps: true });
+
+feedbackSchema.index({ tenantId: 1, createdAt: -1 });
+
+// ── ReferralCode / ReferralSignup (GROWTH — referral program, core/referrals.ts) ──
+// Every tenant gets one tracked invite code (created lazily on first lookup)
+// backing a public `/welcome?ref=<code>` self-serve signup link. When a BRAND
+// NEW tenant signs up through that link, both the referrer and the new tenant
+// ("referee") are granted a one-time credit-balance bump (env-gated —
+// REFERRAL_PROGRAM_ENABLED). Distinct from a gift code (operator-minted,
+// arbitrary grant) and a tenant invite (joins an EXISTING tenant): a referral
+// always provisions a brand-new tenant and rewards both sides. `code` is a
+// short shareable string, stored in the clear like a gift code (no credential
+// to protect).
+
+export interface IReferralCode extends Document {
+  referralCodeId: string;
+  tenantId: string;         // the referring tenant (owner of this code)
+  code: string;             // short shareable code, e.g. "R7K2M9QX"
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const referralCodeSchema = new Schema<IReferralCode>({
+  referralCodeId: { type: String, required: true, unique: true, index: true },
+  tenantId: { type: String, required: true, unique: true, index: true },
+  code: { type: String, required: true, unique: true, index: true },
+}, { timestamps: true });
+
+/** One row per referred (referee) tenant — the ledger row IS the dedupe guard,
+ *  so a tenant can be credited as a referee at most once, at its own signup. */
+export interface IReferralSignup extends Document {
+  referralId: string;
+  code: string;
+  referrerTenantId: string;
+  refereeTenantId: string;
+  referrerCredits: number;
+  refereeCredits: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const referralSignupSchema = new Schema<IReferralSignup>({
+  referralId: { type: String, required: true, unique: true, index: true },
+  code: { type: String, required: true, index: true },
+  referrerTenantId: { type: String, required: true, index: true },
+  refereeTenantId: { type: String, required: true, unique: true, index: true },
+  referrerCredits: { type: Number, required: true },
+  refereeCredits: { type: Number, required: true },
+}, { timestamps: true });
 
 // ── MigrationRecord (idempotent startup migration tracking) ──
 // One row per migration id, written once its startup run completes
@@ -2327,6 +3089,7 @@ export const hotPathSchemas = {
 export let TenantModel: Model<ITenant>;
 export let TenantApiKeyModel: Model<ITenantApiKey>;
 export let TenantDbBindingModel: Model<ITenantDbBinding>;
+export let DualWriteRetryItemModel: Model<IDualWriteRetryItem>;
 export let TenantSecretKeyModel: Model<ITenantSecretKey>;
 export let GatewaySessionModel: Model<IGatewaySession>;
 export let AIPatternModel: Model<IAIPattern>;
@@ -2341,9 +3104,11 @@ export let RunnerLeaseHistoryModel: Model<IRunnerLeaseHistory>;
 export let RunnerHeartbeatModel: Model<IRunnerHeartbeat>;
 export let FleetMaintenanceModel: Model<IFleetMaintenance>;
 export let ScheduleModel: Model<ISchedule>;
+export let RecurringTaskModel: Model<IRecurringTask>;
 export let BudgetUsageModel: Model<IBudgetUsage>;
 export let BudgetUsageRollupModel: Model<IBudgetUsageRollup>;
 export let BudgetCapOverrideModel: Model<IBudgetCapOverride>;
+export let MemberBudgetCapModel: Model<IMemberBudgetCap>;
 export let MrrSnapshotModel: Model<IMrrSnapshot>;
 export let UsageEventModel: Model<IUsageEvent>;
 export let NotificationModel: Model<INotification>;
@@ -2352,6 +3117,7 @@ export let NotificationPrefsModel: Model<INotificationPrefs>;
 export let RepoCardModel: Model<IRepoCard>;
 export let RepoModel: Model<IRepo>;
 export let PlanDayModel: Model<IPlanDay>;
+export let TrashEntryModel: Model<ITrashEntry>;
 export let FleetRunModel: Model<IFleetRun>;
 export let UserModel: Model<IUser>;
 export let UserSessionModel: Model<IUserSession>;
@@ -2359,32 +3125,53 @@ export let InviteModel: Model<IInvite>;
 export let PasswordResetModel: Model<IPasswordReset>;
 export let AccountUnlockModel: Model<IAccountUnlock>;
 export let MagicLinkModel: Model<IMagicLink>;
+export let EmailVerificationModel: Model<IEmailVerification>;
+export let EmailDeliveryModel: Model<IEmailDelivery>;
+export let EmailSuppressionModel: Model<IEmailSuppression>;
 export let ReviewApprovalModel: Model<IReviewApproval>;
 export let GiftCodeModel: Model<IGiftCode>;
 export let GiftRedemptionModel: Model<IGiftRedemption>;
+export let FeedbackModel: Model<IFeedback>;
+export let ReferralCodeModel: Model<IReferralCode>;
+export let ReferralSignupModel: Model<IReferralSignup>;
 export let ConnectorModel: Model<IConnector>;
 export let HandoffModel: Model<IHandoff>;
 export let ContinuityMetricModel: Model<IContinuityMetric>;
 export let ActivationEventModel: Model<IActivationEvent>;
 export let TenantRequestQuotaModel: Model<ITenantRequestQuota>;
 export let WebhookEndpointModel: Model<IWebhookEndpoint>;
+export let TenantToolPluginModel: Model<ITenantToolPlugin>;
 export let WebhookDeliveryModel: Model<IWebhookDelivery>;
 export let InboundWebhookDeliveryModel: Model<IInboundWebhookDelivery>;
 export let ArtifactModel: Model<IArtifact>;
+export let RunnerJobHistoryModel: Model<IRunnerJobHistory>;
 export let ErasureRequestModel: Model<IErasureRequest>;
 export let SpendAlertStateModel: Model<ISpendAlertState>;
+export let TenantBudgetGateAlertStateModel: Model<ITenantBudgetGateAlertState>;
 export let AtlasIndexHealthStateModel: Model<IAtlasIndexHealthState>;
 export let MigrationRecordModel: Model<IMigrationRecord>;
+export let LegalConsentModel: Model<ILegalConsent>;
+export let FeatureFlagModel: Model<IFeatureFlag>;
 
 // ── Connection ──────────────────────────────────────────
 
 let connection: typeof mongoose | null = null;
 let guardPluginRegistered = false;
 
+/**
+ * Driver pool size for the single shared connection, and the size any future
+ * per-tenant `dedicated-db`/`dedicated-cluster` connection (ADR-030 §2,
+ * `tenant-db-registry.ts`) MUST reuse rather than reinventing — exported so
+ * `monitoring/dedicated-pool-alerter.ts` can size the dedicated-tier
+ * connection-pool ceiling off the same number this connection actually uses,
+ * instead of a second hardcoded constant the two could silently drift apart.
+ */
+export const SHARED_CONNECTION_MAX_POOL_SIZE = 20;
+
 const CONNECT_OPTS = {
   serverSelectionTimeoutMS: 5000,
   connectTimeoutMS: 5000,
-  maxPoolSize: 20,
+  maxPoolSize: SHARED_CONNECTION_MAX_POOL_SIZE,
   minPoolSize: 2,
   maxIdleTimeMS: 30000,
 } as const;
@@ -2466,6 +3253,7 @@ export async function connectDB(): Promise<typeof mongoose> {
     TenantModel = mongoose.model<ITenant>('Tenant', tenantSchema);
     TenantApiKeyModel = mongoose.model<ITenantApiKey>('TenantApiKey', tenantApiKeySchema);
     TenantDbBindingModel = mongoose.model<ITenantDbBinding>('TenantDbBinding', tenantDbBindingSchema);
+    DualWriteRetryItemModel = mongoose.model<IDualWriteRetryItem>('DualWriteRetryItem', dualWriteRetryItemSchema);
     TenantSecretKeyModel = mongoose.model<ITenantSecretKey>('TenantSecretKey', tenantSecretKeySchema);
     GatewaySessionModel = mongoose.model<IGatewaySession>('GatewaySession', gatewaySessionSchema);
     AIPatternModel = mongoose.model<IAIPattern>('AIPattern', aiPatternSchema);
@@ -2480,9 +3268,11 @@ export async function connectDB(): Promise<typeof mongoose> {
     RunnerHeartbeatModel = mongoose.model<IRunnerHeartbeat>('RunnerHeartbeat', runnerHeartbeatSchema);
     FleetMaintenanceModel = mongoose.model<IFleetMaintenance>('FleetMaintenance', fleetMaintenanceSchema);
     ScheduleModel = mongoose.model<ISchedule>('Schedule', scheduleSchema);
+    RecurringTaskModel = mongoose.model<IRecurringTask>('RecurringTask', recurringTaskSchema);
     BudgetUsageModel = mongoose.model<IBudgetUsage>('BudgetUsage', budgetUsageSchema);
     BudgetUsageRollupModel = mongoose.model<IBudgetUsageRollup>('BudgetUsageRollup', budgetUsageRollupSchema);
     BudgetCapOverrideModel = mongoose.model<IBudgetCapOverride>('BudgetCapOverride', budgetCapOverrideSchema);
+    MemberBudgetCapModel = mongoose.model<IMemberBudgetCap>('MemberBudgetCap', memberBudgetCapSchema);
     MrrSnapshotModel = mongoose.model<IMrrSnapshot>('MrrSnapshot', mrrSnapshotSchema);
     UsageEventModel = mongoose.model<IUsageEvent>('UsageEvent', usageEventSchema);
     NotificationModel = mongoose.model<INotification>('Notification', notificationSchema);
@@ -2491,6 +3281,7 @@ export async function connectDB(): Promise<typeof mongoose> {
     RepoCardModel = mongoose.model<IRepoCard>('RepoCard', repoCardSchema);
     RepoModel = mongoose.model<IRepo>('Repo', repoSchema);
     PlanDayModel = mongoose.model<IPlanDay>('PlanDay', planDaySchema);
+    TrashEntryModel = mongoose.model<ITrashEntry>('TrashEntry', trashEntrySchema);
     FleetRunModel = mongoose.model<IFleetRun>('FleetRun', fleetRunSchema);
     UserModel = mongoose.model<IUser>('User', userSchema);
     UserSessionModel = mongoose.model<IUserSession>('UserSession', userSessionSchema);
@@ -2498,20 +3289,31 @@ export async function connectDB(): Promise<typeof mongoose> {
     PasswordResetModel = mongoose.model<IPasswordReset>('PasswordReset', passwordResetSchema);
     AccountUnlockModel = mongoose.model<IAccountUnlock>('AccountUnlock', accountUnlockSchema);
     MagicLinkModel = mongoose.model<IMagicLink>('MagicLink', magicLinkSchema);
+    EmailVerificationModel = mongoose.model<IEmailVerification>('EmailVerification', emailVerificationSchema);
+    EmailDeliveryModel = mongoose.model<IEmailDelivery>('EmailDelivery', emailDeliverySchema);
+    EmailSuppressionModel = mongoose.model<IEmailSuppression>('EmailSuppression', emailSuppressionSchema);
     ReviewApprovalModel = mongoose.model<IReviewApproval>('ReviewApproval', reviewApprovalSchema);
     GiftCodeModel = mongoose.model<IGiftCode>('GiftCode', giftCodeSchema);
     GiftRedemptionModel = mongoose.model<IGiftRedemption>('GiftRedemption', giftRedemptionSchema);
+    FeedbackModel = mongoose.model<IFeedback>('Feedback', feedbackSchema);
+    ReferralCodeModel = mongoose.model<IReferralCode>('ReferralCode', referralCodeSchema);
+    ReferralSignupModel = mongoose.model<IReferralSignup>('ReferralSignup', referralSignupSchema);
     ConnectorModel = mongoose.model<IConnector>('Connector', connectorSchema);
     HandoffModel = mongoose.model<IHandoff>('Handoff', handoffSchema);
     ContinuityMetricModel = mongoose.model<IContinuityMetric>('ContinuityMetric', continuityMetricSchema);
     ActivationEventModel = mongoose.model<IActivationEvent>('ActivationEvent', activationEventSchema);
     TenantRequestQuotaModel = mongoose.model<ITenantRequestQuota>('TenantRequestQuota', tenantRequestQuotaSchema);
     WebhookEndpointModel = mongoose.model<IWebhookEndpoint>('WebhookEndpoint', webhookEndpointSchema);
+    TenantToolPluginModel = mongoose.model<ITenantToolPlugin>('TenantToolPlugin', tenantToolPluginSchema);
     WebhookDeliveryModel = mongoose.model<IWebhookDelivery>('WebhookDelivery', webhookDeliverySchema);
     InboundWebhookDeliveryModel = mongoose.model<IInboundWebhookDelivery>('InboundWebhookDelivery', inboundWebhookDeliverySchema);
     ArtifactModel = mongoose.model<IArtifact>('Artifact', artifactSchema);
+    RunnerJobHistoryModel = mongoose.model<IRunnerJobHistory>('RunnerJobHistory', runnerJobHistorySchema);
     ErasureRequestModel = mongoose.model<IErasureRequest>('ErasureRequest', erasureRequestSchema);
+    LegalConsentModel = mongoose.model<ILegalConsent>('LegalConsent', legalConsentSchema);
+    FeatureFlagModel = mongoose.model<IFeatureFlag>('FeatureFlag', featureFlagSchema);
     SpendAlertStateModel = mongoose.model<ISpendAlertState>('SpendAlertState', spendAlertStateSchema);
+    TenantBudgetGateAlertStateModel = mongoose.model<ITenantBudgetGateAlertState>('TenantBudgetGateAlertState', tenantBudgetGateAlertStateSchema);
     AtlasIndexHealthStateModel = mongoose.model<IAtlasIndexHealthState>('AtlasIndexHealthState', atlasIndexHealthStateSchema);
     MigrationRecordModel = mongoose.model<IMigrationRecord>('MigrationRecord', migrationRecordSchema);
 

@@ -25,13 +25,35 @@
 #                          cutoff. The new raw key is shown ONCE — save it into
 #                          ~/.ai-cli-runner/tenant-keys.env yourself.
 #
-# Both default to a 60-minute grace window (env TENANT_KEY_ROTATION_GRACE_MINUTES /
-# no local-side default override needed — pass --grace-minutes to change either).
-# `--grace-minutes 0` is an immediate cutover (no old credential kept valid).
+#   master-key             — envelope-encryption master key (ADR-010 §3.7,
+#                          core/tenant-secrets.ts). Calls the gateway's
+#                          POST /api/auth/master-key/rotate (local-trust only),
+#                          which re-wraps every tenant's Data Encryption Key
+#                          with the keyring's CURRENT active MASTER_KMS_KEY.
+#                          Deliberately touches only the small wrapped-DEK row
+#                          per tenant — never the connector/OAuth secret
+#                          ciphertext itself, so rotation is cheap regardless
+#                          of secret volume. This does NOT generate a new key —
+#                          deploy the new MASTER_KMS_KEY yourself (with the old
+#                          one moved into MASTER_KMS_PREVIOUS_KEYS so in-flight
+#                          unwraps of not-yet-rotated rows still succeed),
+#                          restart/rebuild the gateway (this script never does
+#                          that — see the DEPLOY GUARD), THEN run this to sweep
+#                          every tenant onto the new key. Once the response's
+#                          `skippedAlreadyCurrent` equals the tenant-key-row
+#                          count, the old key can be dropped from env.
+#
+# `local`/`tenant` default to a 60-minute grace window (env
+# TENANT_KEY_ROTATION_GRACE_MINUTES / no local-side default override needed —
+# pass --grace-minutes to change either). `--grace-minutes 0` is an immediate
+# cutover (no old credential kept valid). `master-key` has no grace window —
+# both the old and new master key stay valid to UNWRAP throughout (old key
+# stays in MASTER_KMS_PREVIOUS_KEYS), only future WRAPS use the new one.
 #
 # Usage:
-#   myai_rotate_keys.sh local  [--grace-minutes N] [--env-file PATH]
+#   myai_rotate_keys.sh local      [--grace-minutes N] [--env-file PATH]
 #   myai_rotate_keys.sh tenant <tenantId> [--grace-minutes N] [--env live|test] [--gateway-url URL]
+#   myai_rotate_keys.sh master-key [--gateway-url URL]
 #
 # Tests: scripts/tests/test_myai_rotate_keys.sh
 set -euo pipefail
@@ -42,8 +64,9 @@ REPO_ROOT="$(cd "$HERE/.." && pwd)"
 usage() {
   cat <<'EOF'
 Usage:
-  myai_rotate_keys.sh local  [--grace-minutes N] [--env-file PATH]
+  myai_rotate_keys.sh local      [--grace-minutes N] [--env-file PATH]
   myai_rotate_keys.sh tenant <tenantId> [--grace-minutes N] [--env live|test] [--gateway-url URL]
+  myai_rotate_keys.sh master-key [--gateway-url URL]
 EOF
 }
 
@@ -155,11 +178,38 @@ PY
   echo "      ~/.ai-cli-runner/tenant-keys.env as '${tenant_id}=<rawKey>') before it's lost."
 }
 
+rotate_master_key() {
+  local gateway_url="${GATEWAY_URL:-http://localhost:${MYAI_MCP_PORT:-3100}}"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --gateway-url) gateway_url="$2"; shift 2 ;;
+      *) echo "myai rotate-keys master-key: unknown arg: $1" >&2; usage; exit 2 ;;
+    esac
+  done
+
+  # shellcheck source=lib/gateway.sh
+  . "$HERE/lib/gateway.sh"
+
+  local resp
+  resp="$(curl -sf -X POST "$gateway_url/api/auth/master-key/rotate" \
+    -H 'content-type: application/json' \
+    -H "x-gateway-local-token: $GATEWAY_LOCAL_TOKEN" \
+    -d '{}')" || { echo "master-key rotate failed — is the gateway reachable at $gateway_url?" >&2; exit 1; }
+
+  echo "$resp"
+  echo
+  echo "NOTE: this re-wraps every tenant's DEK with MASTER_KMS_KEY already"
+  echo "      loaded by the running gateway. Deploy the new key + redeploy the"
+  echo "      gateway FIRST (a master-checkout/selfheal operation, not this"
+  echo "      script) — otherwise this just re-wraps with the same key."
+}
+
 [ $# -ge 1 ] || { usage; exit 2; }
 cmd="$1"; shift
 case "$cmd" in
   local) rotate_local "$@" ;;
   tenant) rotate_tenant "$@" ;;
+  master-key) rotate_master_key "$@" ;;
   -h|--help) usage ;;
   *) echo "myai rotate-keys: unknown subcommand: $cmd" >&2; usage; exit 2 ;;
 esac

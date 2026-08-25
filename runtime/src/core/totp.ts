@@ -181,6 +181,18 @@ export function checkTotpVerifyRate(userId: string): { ok: boolean; retryAfter: 
   return checkRate(totpVerifyStore, `totp-verify:${userId}`, TOTP_VERIFY_POLICY, Date.now());
 }
 
+// IP layer alongside the per-userId layer above (same "account + IP" posture
+// as auth-rate-limit.ts): catches one source grinding codes across many
+// pending-MFA logins, which the per-userId bucket alone can't see. Applied as
+// `ipRateLimit('totp-verify', TOTP_VERIFY_IP_POLICY)` Express middleware in
+// server.ts (the pending token isn't parsed yet at that stage, so IP is the
+// only identifier available — the account layer above runs after). Looser
+// than the per-user policy for the same shared-proxy-IP reason.
+export const TOTP_VERIFY_IP_POLICY: RatePolicy = {
+  max: Number(process.env.AUTH_TOTP_VERIFY_IP_MAX) || 30,
+  windowMs: (Number(process.env.AUTH_TOTP_VERIFY_IP_WINDOW_MIN) || 15) * 60_000,
+};
+
 /** Test helper — clear the verify rate-limit store. */
 export function _resetTotpVerifyRate(): void {
   totpVerifyStore.clear();

@@ -149,7 +149,7 @@ export default async function NrrCohortPage() {
               <div className="overflow-x-auto">
                 <table className="w-full text-xs font-mono">
                   <thead>
-                    <tr className="text-zinc-500 border-b border-zinc-800">
+                    <tr className="text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))]">
                       <th className="text-left py-2 pr-4">Cohort</th>
                       <th className="text-right py-2 pr-4">Logos</th>
                       <th className="text-right py-2 pr-4">Starting MRR</th>
@@ -162,14 +162,14 @@ export default async function NrrCohortPage() {
                   </thead>
                   <tbody>
                     {report.map((p) => (
-                      <tr key={p.cohortMonth} className="border-b border-zinc-900/60">
-                        <td className="py-2 pr-4 text-zinc-300">{p.cohortMonth}</td>
-                        <td className="py-2 pr-4 text-right text-zinc-500">{p.startingLogos}</td>
-                        <td className="py-2 pr-4 text-right text-zinc-400">{fmtUsd(p.startingMrr)}</td>
+                      <tr key={p.cohortMonth} className="border-b border-[rgb(var(--border-subtle))]/60">
+                        <td className="py-2 pr-4 text-[rgb(var(--text-primary))]">{p.cohortMonth}</td>
+                        <td className="py-2 pr-4 text-right text-[rgb(var(--text-muted))]">{p.startingLogos}</td>
+                        <td className="py-2 pr-4 text-right text-[rgb(var(--text-secondary))]">{fmtUsd(p.startingMrr)}</td>
                         <td className="py-2 pr-4 text-right text-emerald-400">{p.expansionMrr > 0 ? `+${fmtUsd(p.expansionMrr)}` : '—'}</td>
                         <td className="py-2 pr-4 text-right text-amber-400">{p.contractionMrr > 0 ? `-${fmtUsd(p.contractionMrr)}` : '—'}</td>
                         <td className="py-2 pr-4 text-right text-red-400">{p.churnedMrr > 0 ? `-${fmtUsd(p.churnedMrr)} (${p.churnedLogos})` : '—'}</td>
-                        <td className="py-2 pr-4 text-right text-zinc-300">{fmtUsd(p.endingMrr)}</td>
+                        <td className="py-2 pr-4 text-right text-[rgb(var(--text-primary))]">{fmtUsd(p.endingMrr)}</td>
                         <td className={`py-2 text-right ${p.netRevenueRetention >= 1 ? 'text-emerald-400' : 'text-amber-400'}`}>{pct(p.netRevenueRetention)}</td>
                       </tr>
                     ))}
@@ -182,19 +182,19 @@ export default async function NrrCohortPage() {
       </div>
 
       <Card title="How this is computed" accent="amber">
-        <div className="p-5 text-xs text-zinc-500 space-y-2">
+        <div className="p-5 text-xs text-[rgb(var(--text-muted))] space-y-2">
           <p>
-            Each row is a <span className="text-zinc-300">signup-month cohort</span> — every tenant that started paying in that
-            calendar month. <span className="text-zinc-300">Expansion</span> is MRR gained by accounts now paying more than
-            their cohort start (upgrades/overage); <span className="text-zinc-300">contraction</span> is MRR lost by accounts
-            still paying but less (downgrades); <span className="text-zinc-300">churned</span> is MRR from accounts now fully
+            Each row is a <span className="text-[rgb(var(--text-primary))]">signup-month cohort</span> — every tenant that started paying in that
+            calendar month. <span className="text-[rgb(var(--text-primary))]">Expansion</span> is MRR gained by accounts now paying more than
+            their cohort start (upgrades/overage); <span className="text-[rgb(var(--text-primary))]">contraction</span> is MRR lost by accounts
+            still paying but less (downgrades); <span className="text-[rgb(var(--text-primary))]">churned</span> is MRR from accounts now fully
             cancelled. NRR = ending MRR ÷ starting MRR (&gt;100% = net expansion).
           </p>
-          <p className="text-zinc-600 pt-1 border-t border-zinc-800">
+          <p className="text-zinc-600 pt-1 border-t border-[rgb(var(--border-subtle))]">
             Starting MRR prefers each account&apos;s earliest persisted MRR snapshot from the nightly snapshot job, so
             expansion/contraction reflect a real trend once at least 2 daily snapshots exist. Accounts with fewer than 2
             snapshots still fall back to the current-MRR proxy (expansion/contraction read 0 for those until their history
-            builds up) — same fallback used on <code className="text-zinc-400">/revenue</code>. Churn is already exact.
+            builds up) — same fallback used on <code className="text-[rgb(var(--text-secondary))]">/revenue</code>. Churn is already exact.
           </p>
         </div>
       </Card>

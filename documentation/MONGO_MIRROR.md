@@ -207,3 +207,43 @@ restarts while Atlas/network is down and still serves memory/registry reads).
 A mid-session Atlas drop still surfaces as query errors — a live re-connect
 swap would need connection-pool juggling that isn't worth the split-brain
 risk today.
+
+## Failover drill (Atlas resilience task, on the pattern of ADR-036 §5)
+
+An untested failover is a hypothesis. `scripts/atlas_failover_drill.sh`
+proves the read-side failover above actually works — end to end, against
+real MongoDB processes, never mocked — instead of trusting it silently:
+
+```bash
+./scripts/atlas_failover_drill.sh            # run once
+./scripts/atlas_failover_drill.sh --quiet    # only the final PASS/FAIL line
+./scripts/setup_atlas_failover_drill_schedule.sh              # install quarterly (default)
+./scripts/setup_atlas_failover_drill_schedule.sh --status     # installed? last result?
+```
+
+It stands up a throwaway mongod (its own local mirror), deliberately points
+`connectDB()` at an unreachable synthetic primary (an RFC 5737 TEST-NET-1
+address — never a real host), and asserts: the connect does not throw,
+`getDbFailoverState().active` flips true, reads succeed, and writes are
+rejected with `DbReadOnlyError`. It then points a reachable mongod back at
+`MONGODB_URI` (simulating "the primary returned") and asserts recovery:
+direct connect, `active` flips back false, writes succeed again. Result is
+recorded to `~/.myai/atlas-failover-drill.last` (`PASS`/`FAIL` + timestamp),
+same convention as the other drill scripts. Never touches the shared
+myai-gateway/myai-mongo stack or a real Atlas cluster — every URI it uses
+points at a throwaway container it tears down on exit.
+
+## Atlas cluster health alerts (Atlas resilience task)
+
+`runtime/src/monitoring/atlas-cluster-health-alerter.ts` polls the Atlas
+Admin API v2 (read-only) for the M0 free-tier cluster and pushes a Telegram +
+dashboard-bell alert (same delivery as pool-capacity-alerter) on: connections
+above `MYAI_ATLAS_ALERT_CONN_PCT`% of `MYAI_ATLAS_ALERT_CONN_CAP` (default
+80% of 500), replication lag above `MYAI_ATLAS_ALERT_REPL_LAG_SECONDS`
+(default 10s), disk above `MYAI_ATLAS_ALERT_DISK_PCT`% (default 75%), and any
+cluster paused↔resumed transition. It is **inert** — no polling, no API
+calls — until `ATLAS_PUBLIC_KEY` / `ATLAS_PRIVATE_KEY` (a **read-only** Atlas
+project API key) plus `ATLAS_PROJECT_ID` / `ATLAS_CLUSTER_NAME` are set; see
+`.env.example`. These alerts detect an M0 incident, they do not fix the
+underlying tier limitation — the only real fix is an M10+ dedicated upgrade,
+an operator billing decision this module never actions on its own.

@@ -73,19 +73,19 @@ export default function BrainSearch() {
           placeholder="Search across every repo-brain (atoms + sessions)..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="flex-1 px-4 py-2 bg-zinc-950 border border-zinc-700 rounded-lg text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30"
+          className="flex-1 px-4 py-2 bg-[rgb(var(--bg-page))] border border-zinc-700 rounded-lg text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30"
         />
         <input
           type="text"
           placeholder="repo (optional)"
           value={repo}
           onChange={(e) => setRepo(e.target.value)}
-          className="w-40 px-3 py-2 bg-zinc-950 border border-zinc-700 rounded-lg text-sm text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50"
+          className="w-40 px-3 py-2 bg-[rgb(var(--bg-page))] border border-zinc-700 rounded-lg text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50"
         />
         <button
           type="submit"
           disabled={loading || !query.trim()}
-          className="gel-brand px-5 py-2 bg-teal-600 hover:bg-teal-500 disabled:bg-zinc-700 disabled:text-zinc-500 disabled:bg-none text-white text-sm font-medium rounded-lg transition-colors"
+          className="gel-brand px-5 py-2 bg-teal-600 hover:bg-teal-500 disabled:bg-zinc-700 disabled:text-[rgb(var(--text-muted))] disabled:bg-none text-white text-sm font-medium rounded-lg transition-colors"
         >
           {loading ? 'Searching...' : 'Search'}
         </button>
@@ -98,19 +98,19 @@ export default function BrainSearch() {
       )}
 
       {searched && !loading && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
           {hits.length === 0 ? (
-            <div className="p-8 text-center text-sm text-zinc-500">
+            <div className="p-8 text-center text-sm text-[rgb(var(--text-muted))]">
               No atoms or sessions matched &quot;{query}&quot;{repo && ` in repo "${repo}"`}
             </div>
           ) : (
             <>
-              <div className="px-4 py-3 border-b border-zinc-800 text-xs text-zinc-500">
+              <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))] text-xs text-[rgb(var(--text-muted))]">
                 {hits.length} result{hits.length !== 1 ? 's' : ''} for &quot;{query}&quot; — ranked across every repo-brain
               </div>
-              <div className="divide-y divide-zinc-800/50">
+              <div className="divide-y divide-[rgb(var(--border-subtle))]/50">
                 {hits.map((h, i) => (
-                  <div key={`${h.kind}-${h.path ?? h.sessionId ?? i}-${i}`} className="px-4 py-3 hover:bg-zinc-800/30 transition-colors">
+                  <div key={`${h.kind}-${h.path ?? h.sessionId ?? i}-${i}`} className="px-4 py-3 hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
                     <div className="flex items-center gap-2 mb-1.5">
                       <HitKindBadge kind={h.kind} />
                       {h.atomKind && (
@@ -126,7 +126,7 @@ export default function BrainSearch() {
                         score {h.score.toFixed(2)}
                       </span>
                     </div>
-                    <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{h.snippet}</p>
+                    <p className="text-sm text-[rgb(var(--text-primary))] leading-relaxed whitespace-pre-wrap">{h.snippet}</p>
                   </div>
                 ))}
               </div>

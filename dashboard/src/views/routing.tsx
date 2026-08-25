@@ -84,11 +84,11 @@ async function fetchRoutingConfig(): Promise<RoutingConfig | null> {
 
 function TierBadge({ tier }: { tier: string }) {
   const normalized = tier.toLowerCase();
-  let style = 'bg-zinc-700/50 text-zinc-400 border-zinc-600';
+  let style = 'bg-zinc-700/50 text-[rgb(var(--text-secondary))] border-zinc-600';
   if (normalized === 'ultra') style = 'bg-purple-500/20 text-purple-300 border-purple-500/40';
   else if (normalized === 'premium') style = 'bg-blue-500/20 text-blue-300 border-blue-500/40';
   else if (normalized === 'standard') style = 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
-  else if (normalized === 'budget') style = 'bg-zinc-500/20 text-zinc-400 border-zinc-500/30';
+  else if (normalized === 'budget') style = 'bg-zinc-500/20 text-[rgb(var(--text-secondary))] border-zinc-500/30';
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${style}`}>
       {tier}
@@ -99,7 +99,7 @@ function TierBadge({ tier }: { tier: string }) {
 function BoolChip({ value, label }: { value: boolean | undefined; label: string }) {
   if (value === undefined) return <span className="text-zinc-600 text-xs">—</span>;
   return (
-    <span className={`inline-flex items-center gap-1 text-xs font-medium ${value ? 'text-emerald-400' : 'text-zinc-500'}`}>
+    <span className={`inline-flex items-center gap-1 text-xs font-medium ${value ? 'text-emerald-400' : 'text-[rgb(var(--text-muted))]'}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${value ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
       {label}
     </span>
@@ -117,13 +117,13 @@ export default async function RoutingPage() {
         <div className="bg-red-950/30 border border-red-800/50 rounded-lg p-8 text-center">
           <div className="text-3xl mb-3">!</div>
           <h2 className="text-lg font-semibold text-red-400 mb-2">Gateway Unreachable</h2>
-          <p className="text-sm text-zinc-400">
+          <p className="text-sm text-[rgb(var(--text-secondary))]">
             Could not connect to the AI gateway at{' '}
-            <code className="text-zinc-300">{GATEWAY_URL}</code>.
+            <code className="text-[rgb(var(--text-primary))]">{GATEWAY_URL}</code>.
           </p>
-          <p className="text-xs text-zinc-500 mt-2">
+          <p className="text-xs text-[rgb(var(--text-muted))] mt-2">
             Ensure the gateway is running:{' '}
-            <code className="text-zinc-400">docker compose up -d</code>
+            <code className="text-[rgb(var(--text-secondary))]">docker compose up -d</code>
           </p>
         </div>
       </div>
@@ -175,10 +175,10 @@ export default async function RoutingPage() {
     <div className="max-w-7xl mx-auto space-y-8">
 
       {/* ── 1. Tier Configuration ─────────────────────────────── */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-800 flex items-baseline justify-between">
-          <h2 className="text-sm font-semibold text-zinc-300">Tier Configuration</h2>
-          <span className="text-xs text-zinc-500">{sortedTiers.length} tier(s)</span>
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))] flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Tier Configuration</h2>
+          <span className="text-xs text-[rgb(var(--text-muted))]">{sortedTiers.length} tier(s)</span>
         </div>
         {sortedTiers.length === 0 ? (
           <div className="p-8 text-center text-zinc-600">
@@ -188,7 +188,7 @@ export default async function RoutingPage() {
           <div className="overflow-x-auto">
             <table className="card-table w-full text-sm">
               <thead>
-                <tr className="text-left text-xs text-zinc-500 border-b border-zinc-800 uppercase tracking-wider">
+                <tr className="text-left text-xs text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
                   <th className="px-4 py-2">Tier</th>
                   <th className="px-4 py-2">Provider</th>
                   <th className="px-4 py-2">Model</th>
@@ -197,15 +197,15 @@ export default async function RoutingPage() {
                   <th className="px-4 py-2">Batchable</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                 {sortedTiers.map(([tierName, cfg]) => (
-                  <tr key={tierName} className="hover:bg-zinc-800/30">
+                  <tr key={tierName} className="hover:bg-[rgb(var(--bg-hover))]/30">
                     <td className="m-title px-4 py-2.5">
                       <TierBadge tier={tierName} />
                     </td>
-                    <td data-label="Provider" className="px-4 py-2.5 text-zinc-300 font-medium">{cfg.provider || '—'}</td>
-                    <td data-label="Model" className="px-4 py-2.5 text-zinc-400 font-mono text-xs">{cfg.model || '—'}</td>
-                    <td data-label="Chain" className="px-4 py-2.5 text-zinc-500 text-xs">{cfg.chain?.length ? cfg.chain.join(' → ') : '—'}</td>
+                    <td data-label="Provider" className="px-4 py-2.5 text-[rgb(var(--text-primary))] font-medium">{cfg.provider || '—'}</td>
+                    <td data-label="Model" className="px-4 py-2.5 text-[rgb(var(--text-secondary))] font-mono text-xs">{cfg.model || '—'}</td>
+                    <td data-label="Chain" className="px-4 py-2.5 text-[rgb(var(--text-muted))] text-xs">{cfg.chain?.length ? cfg.chain.join(' → ') : '—'}</td>
                     <td data-label="Cacheable" className="px-4 py-2.5">
                       <BoolChip value={cfg.cacheable} label={cfg.cacheable ? 'Yes' : 'No'} />
                     </td>
@@ -221,10 +221,10 @@ export default async function RoutingPage() {
       </div>
 
       {/* ── 2. Agent → Tier Mapping ──────────────────────────── */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-800 flex items-baseline justify-between">
-          <h2 className="text-sm font-semibold text-zinc-300">Agent → Tier Mapping</h2>
-          <span className="text-xs text-zinc-500">{agentEntries.length} agent(s)</span>
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))] flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Agent → Tier Mapping</h2>
+          <span className="text-xs text-[rgb(var(--text-muted))]">{agentEntries.length} agent(s)</span>
         </div>
         {agentEntries.length === 0 ? (
           <div className="p-8 text-center text-zinc-600">
@@ -234,15 +234,15 @@ export default async function RoutingPage() {
           <div className="overflow-x-auto">
             <table className="card-table w-full text-sm">
               <thead>
-                <tr className="text-left text-xs text-zinc-500 border-b border-zinc-800 uppercase tracking-wider">
+                <tr className="text-left text-xs text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
                   <th className="px-4 py-2">Agent</th>
                   <th className="px-4 py-2">Tier</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                 {agentEntries.map(([agent, tier]) => (
-                  <tr key={agent} className="hover:bg-zinc-800/30">
-                    <td className="m-title px-4 py-2.5 text-zinc-300 font-mono text-xs">{agent}</td>
+                  <tr key={agent} className="hover:bg-[rgb(var(--bg-hover))]/30">
+                    <td className="m-title px-4 py-2.5 text-[rgb(var(--text-primary))] font-mono text-xs">{agent}</td>
                     <td data-label="Tier" className="px-4 py-2.5">
                       <TierBadge tier={tier} />
                     </td>
@@ -255,10 +255,10 @@ export default async function RoutingPage() {
       </div>
 
       {/* ── 3. Channel Overrides ─────────────────────────────── */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-800 flex items-baseline justify-between">
-          <h2 className="text-sm font-semibold text-zinc-300">Channel Overrides</h2>
-          <span className="text-xs text-zinc-500">{channelEntries.length} channel(s)</span>
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))] flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Channel Overrides</h2>
+          <span className="text-xs text-[rgb(var(--text-muted))]">{channelEntries.length} channel(s)</span>
         </div>
         {channelEntries.length === 0 ? (
           <div className="p-8 text-center text-zinc-600">
@@ -268,7 +268,7 @@ export default async function RoutingPage() {
           <div className="overflow-x-auto">
             <table className="card-table w-full text-sm">
               <thead>
-                <tr className="text-left text-xs text-zinc-500 border-b border-zinc-800 uppercase tracking-wider">
+                <tr className="text-left text-xs text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
                   <th className="px-4 py-2">Channel</th>
                   <th className="px-4 py-2">Tier</th>
                   <th className="px-4 py-2">Force Cache</th>
@@ -276,7 +276,7 @@ export default async function RoutingPage() {
                   <th className="px-4 py-2">Extra Overrides</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                 {channelEntries.map(({ channel, tier, override }) => {
                   const extra = override
                     ? Object.entries(override)
@@ -285,8 +285,8 @@ export default async function RoutingPage() {
                         .join(', ')
                     : '';
                   return (
-                    <tr key={channel} className="hover:bg-zinc-800/30">
-                      <td className="m-title px-4 py-2.5 text-zinc-300 font-mono text-xs">{channel}</td>
+                    <tr key={channel} className="hover:bg-[rgb(var(--bg-hover))]/30">
+                      <td className="m-title px-4 py-2.5 text-[rgb(var(--text-primary))] font-mono text-xs">{channel}</td>
                       <td data-label="Tier" className="px-4 py-2.5">
                         {tier && tier !== '—' ? <TierBadge tier={tier} /> : <span className="text-zinc-600 text-xs">—</span>}
                       </td>
@@ -296,7 +296,7 @@ export default async function RoutingPage() {
                       <td data-label="Force batch" className="px-4 py-2.5">
                         <BoolChip value={override?.forceBatch} label={override?.forceBatch ? 'Yes' : 'No'} />
                       </td>
-                      <td data-label="Extra overrides" className="px-4 py-2.5 text-zinc-500 text-xs font-mono truncate max-w-[240px]">
+                      <td data-label="Extra overrides" className="px-4 py-2.5 text-[rgb(var(--text-muted))] text-xs font-mono truncate max-w-[240px]">
                         {extra || '—'}
                       </td>
                     </tr>
@@ -309,10 +309,10 @@ export default async function RoutingPage() {
       </div>
 
       {/* ── 4. Tool Routing ──────────────────────────────────── */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-800 flex items-baseline justify-between">
-          <h2 className="text-sm font-semibold text-zinc-300">Tool Routing</h2>
-          <span className="text-xs text-zinc-500">{toolEntries.length} tool rule(s)</span>
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))] flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Tool Routing</h2>
+          <span className="text-xs text-[rgb(var(--text-muted))]">{toolEntries.length} tool rule(s)</span>
         </div>
         {toolEntries.length === 0 ? (
           <div className="p-8 text-center text-zinc-600">
@@ -322,25 +322,25 @@ export default async function RoutingPage() {
           <div className="overflow-x-auto">
             <table className="card-table w-full text-sm">
               <thead>
-                <tr className="text-left text-xs text-zinc-500 border-b border-zinc-800 uppercase tracking-wider">
+                <tr className="text-left text-xs text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
                   <th className="px-4 py-2">Tool</th>
                   <th className="px-4 py-2">Tier</th>
                   <th className="px-4 py-2">Additional Config</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                 {toolEntries.map(([toolName, route]) => {
                   const extra = Object.entries(route)
                     .filter(([k]) => k !== 'tier')
                     .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
                     .join(', ');
                   return (
-                    <tr key={toolName} className="hover:bg-zinc-800/30">
-                      <td className="m-title px-4 py-2.5 text-zinc-300 font-mono text-xs">{toolName}</td>
+                    <tr key={toolName} className="hover:bg-[rgb(var(--bg-hover))]/30">
+                      <td className="m-title px-4 py-2.5 text-[rgb(var(--text-primary))] font-mono text-xs">{toolName}</td>
                       <td data-label="Tier" className="px-4 py-2.5">
                         {route.tier ? <TierBadge tier={route.tier} /> : <span className="text-zinc-600 text-xs">—</span>}
                       </td>
-                      <td data-label="Additional config" className="px-4 py-2.5 text-zinc-500 text-xs font-mono truncate max-w-[360px]">
+                      <td data-label="Additional config" className="px-4 py-2.5 text-[rgb(var(--text-muted))] text-xs font-mono truncate max-w-[360px]">
                         {extra || '—'}
                       </td>
                     </tr>
@@ -353,15 +353,15 @@ export default async function RoutingPage() {
       </div>
 
       {/* ── 5. Complexity Threshold ──────────────────────────── */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-        <h2 className="text-sm font-semibold text-zinc-300 mb-3">Complexity Threshold</h2>
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+        <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))] mb-3">Complexity Threshold</h2>
         {complexityThreshold != null ? (
           <div className="flex items-center gap-4">
             <div className="text-3xl font-bold text-emerald-400 font-mono">
               {complexityThreshold}
             </div>
             <div>
-              <p className="text-xs text-zinc-400">
+              <p className="text-xs text-[rgb(var(--text-secondary))]">
                 Requests with complexity score above this value are automatically routed to the next tier.
               </p>
               <p className="text-xs text-zinc-600 mt-1">

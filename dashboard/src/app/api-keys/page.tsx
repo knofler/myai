@@ -18,7 +18,7 @@ export default function ApiKeysPage() {
         <Link
           href="/developers"
           target="_blank"
-          className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-[rgb(var(--text-secondary))] hover:bg-[rgb(var(--bg-hover))] hover:text-[rgb(var(--text-primary))]"
         >
           curl quickstart ↗
         </Link>

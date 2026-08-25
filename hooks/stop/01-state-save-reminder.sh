@@ -12,7 +12,10 @@ if [ ! -f "$STATE_FILE" ]; then
 fi
 
 # Check when STATE.md was last modified
-LAST_MOD=$(stat -f "%m" "$STATE_FILE" 2>/dev/null || stat -c "%Y" "$STATE_FILE" 2>/dev/null)
+# GNU-first (AI_RULES §4): on Linux, BSD-style `stat -f "%m"` is `--file-system`
+# (a boolean flag), so it succeeds and prints a mount-point line instead of
+# failing over — the BSD form must never run first in a `||` chain.
+LAST_MOD=$(stat -c "%Y" "$STATE_FILE" 2>/dev/null || stat -f "%m" "$STATE_FILE" 2>/dev/null)
 NOW=$(date +%s)
 DIFF=$((NOW - LAST_MOD))
 

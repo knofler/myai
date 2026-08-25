@@ -9,11 +9,14 @@
  * revoked; each is single-use.
  */
 import crypto from 'node:crypto';
-import { InviteModel, TenantModel, UserModel, type IInvite, type ITenant, type IUser, type UserRole } from '../shared/db.js';
+import type { Connection } from 'mongoose';
+import { InviteModel, MemberBudgetCapModel, TenantModel, UserModel, type IInvite, type ITenant, type IUser, type UserRole } from '../shared/db.js';
 import { AuthError } from './tenant-context.js';
 import { createChildLogger } from '../shared/logger.js';
 import { recordAuditEvent } from './audit-log.js';
 import { checkEntitlement, EntitlementError } from './entitlements.js';
+import { getMemberBudgetStatusMap, type MemberBudgetStatus } from '../tasks/member-budget-guard.js';
+import { resolveScopedModel, tenantScope } from '../shared/scoped-query.js';
 
 const log = createChildLogger({ module: 'invites' });
 
@@ -238,11 +241,31 @@ export interface MemberView {
   role: UserRole;
   lastLoginAt?: Date;
   createdAt?: Date;
+  /** Team-tier per-member budget scoping (task-82854b12) — present only when
+   *  an owner/admin has set a MemberBudgetCap for this member; absent means
+   *  uncapped (the common case). Populated when `listMembers` is called with
+   *  `includeBudget: true`. */
+  budget?: MemberBudgetStatus;
 }
 
-export async function listMembers(tenantId: string): Promise<MemberView[]> {
+export interface ListMembersOptions {
+  /** Attach each capped member's current cap + period usage (task-82854b12).
+   *  Adds a bulk MemberBudgetCap lookup + per-capped-member usage aggregation
+   *  — skip for callers (e.g. access-review.ts) that only need identity/role. */
+  includeBudget?: boolean;
+  connection?: Connection;
+}
+
+export async function listMembers(tenantId: string, opts: ListMembersOptions = {}): Promise<MemberView[]> {
   const users = await UserModel.find({ tenantId }).sort({ createdAt: 1 }).limit(200).lean<IUser[]>();
-  return users.map(memberView);
+  const views = users.map(memberView);
+  if (!opts.includeBudget) return views;
+
+  const budgetByUser = await getMemberBudgetStatusMap(tenantId, views.map(v => v.userId), opts.connection);
+  return views.map(v => {
+    const budget = budgetByUser.get(v.userId);
+    return budget ? { ...v, budget } : v;
+  });
 }
 
 function memberView(
@@ -330,4 +353,97 @@ export async function changeMemberRole(input: ChangeMemberRoleInput): Promise<Me
     detail: { from: target.role, to: input.newRole },
   });
   return memberView({ ...target, role: input.newRole });
+}
+
+// ── Per-member budget cap (task-82854b12 — Team-tier gap close) ────────
+//
+// The write path behind POST /api/auth/members/budget-cap. Same actor gate
+// as changeMemberRole (`members` capability — owner/admin) and the same
+// never-touch-the-owner rule: an owner's spend is the tenant's own budget,
+// not a nested per-member ceiling. Upserts one MemberBudgetCapModel document
+// per (tenant, member); a field omitted from `input` clears that ceiling
+// (explicit `null`/`undefined` both mean "uncapped on this dimension") rather
+// than leaving a stale value in place — the caller sends the full desired
+// state, mirroring the dashboard's PATCH /api/budget-caps tenant-level cap.
+
+export interface SetMemberBudgetCapInput {
+  tenantId: string;
+  actorUserId: string;
+  actorRole: UserRole;
+  targetUserId: string;
+  monthlyHardCapUsd?: number;
+  dailyCapUsd?: number;
+  offHoursMinutesCapPerMonth?: number;
+}
+
+export async function setMemberBudgetCap(input: SetMemberBudgetCapInput): Promise<MemberView> {
+  if (input.actorRole !== 'owner' && input.actorRole !== 'admin') {
+    throw new AuthError('only an owner or admin can set a member budget cap', 403, 'FORBIDDEN');
+  }
+
+  const target = await UserModel.findOne({
+    userId: input.targetUserId,
+    tenantId: input.tenantId,
+  }).lean<IUser>();
+  if (!target) throw new AuthError('member not found', 404, 'NOT_FOUND');
+  if (target.role === 'owner') {
+    throw new AuthError('the owner cannot have a per-member budget cap — that is the tenant budget', 409, 'CONFLICT');
+  }
+
+  for (const [field, value] of Object.entries({
+    monthlyHardCapUsd: input.monthlyHardCapUsd,
+    dailyCapUsd: input.dailyCapUsd,
+    offHoursMinutesCapPerMonth: input.offHoursMinutesCapPerMonth,
+  })) {
+    if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
+      throw new AuthError(`${field} must be a non-negative number`, 400, 'BAD_REQUEST');
+    }
+  }
+
+  // The Mongo driver silently drops `undefined` values passed inside `$set`
+  // (they're never sent over the wire), which would leave a stale cap in
+  // place instead of clearing it — so an omitted field needs an explicit
+  // `$unset`, not a no-op `$set: { field: undefined }`.
+  const capFields: Record<string, number | undefined> = {
+    monthlyHardCapUsd: input.monthlyHardCapUsd,
+    dailyCapUsd: input.dailyCapUsd,
+    offHoursMinutesCapPerMonth: input.offHoursMinutesCapPerMonth,
+  };
+  const toSet: Record<string, number> = {};
+  const toUnset: Record<string, ''> = {};
+  for (const [field, value] of Object.entries(capFields)) {
+    if (value === undefined) toUnset[field] = '';
+    else toSet[field] = value;
+  }
+  const update: Record<string, unknown> = {};
+  if (Object.keys(toSet).length) update.$set = toSet;
+  if (Object.keys(toUnset).length) update.$unset = toUnset;
+
+  await resolveScopedModel(MemberBudgetCapModel).findOneAndUpdate(
+    { ...tenantScope(input.tenantId), userId: input.targetUserId },
+    update,
+    { upsert: true },
+  );
+
+  log.info(
+    { tenantId: input.tenantId, actor: input.actorUserId, target: input.targetUserId },
+    'member budget cap set',
+  );
+  recordAuditEvent({
+    tenantId: input.tenantId,
+    actor: { userId: input.actorUserId, role: input.actorRole, via: 'jwt' },
+    action: 'member.budget_cap_set',
+    target: input.targetUserId,
+    detail: {
+      monthlyHardCapUsd: input.monthlyHardCapUsd,
+      dailyCapUsd: input.dailyCapUsd,
+      offHoursMinutesCapPerMonth: input.offHoursMinutesCapPerMonth,
+    },
+  });
+
+  const [status] = await Promise.all([
+    getMemberBudgetStatusMap(input.tenantId, [input.targetUserId]).then(m => m.get(input.targetUserId)),
+  ]);
+  const view = memberView(target);
+  return status ? { ...view, budget: status } : view;
 }

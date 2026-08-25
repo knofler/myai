@@ -200,6 +200,7 @@ const schemas: Obj = {
       prUrl: { type: 'string' },
       notes: { type: 'string' },
       telegramMessageId: { type: 'integer' },
+      dependsOn: { type: 'array', items: { type: 'string' }, description: 'Upstream taskIds (DAG scheduling) — the task is unclaimable until every upstream is done' },
       startedAt: { type: 'string', format: 'date-time' },
       completedAt: { type: 'string', format: 'date-time' },
       createdAt: { type: 'string', format: 'date-time' },
@@ -267,6 +268,28 @@ const schemas: Obj = {
       },
     },
   },
+  CostAttribution: {
+    type: 'object',
+    description: 'Itemised $ cost breakdown by repo / model / task-type / premium-vs-standard lane. From llm/budget-stats.ts::getCostAttribution — the substrate for accurate overage invoicing.',
+    required: ['from', 'byRepo', 'byModel', 'byTaskType', 'byLane'],
+    properties: {
+      from: { type: 'string', format: 'date-time' },
+      to: { type: 'string', format: 'date-time' },
+      byRepo: { type: 'array', items: ref('CostAttributionGroup') },
+      byModel: { type: 'array', items: ref('CostAttributionGroup') },
+      byTaskType: { type: 'array', items: ref('CostAttributionGroup') },
+      byLane: { type: 'array', items: ref('CostAttributionGroup'), description: "key is 'premium' or 'standard'" },
+    },
+  },
+  CostAttributionGroup: {
+    type: 'object',
+    required: ['key', 'cost', 'calls'],
+    properties: {
+      key: { type: 'string', description: "Dimension value, or 'unattributed' when the field was absent on the row" },
+      cost: { type: 'number' },
+      calls: { type: 'integer' },
+    },
+  },
   BudgetUsageRow: {
     type: 'object',
     required: ['callId', 'provider', 'model', 'inputTokens', 'outputTokens', 'costUsd', 'createdAt'],
@@ -324,6 +347,28 @@ const schemas: Obj = {
       events: { type: 'integer' },
     },
   },
+  FeatureFlag: {
+    type: 'object',
+    description: 'A platform feature flag (core/feature-flags.ts) — global state + percentage rollout + per-tenant overrides. Kill-switch (state=killed) forces OFF for everyone, overrides included.',
+    required: ['key', 'state', 'rolloutPercent', 'overrides'],
+    properties: {
+      key: { type: 'string', description: 'Lowercase alphanumeric plus . _ - (max 64 chars)' },
+      description: { type: 'string' },
+      state: { type: 'string', enum: ['on', 'off', 'killed'] },
+      rolloutPercent: { type: 'number', minimum: 0, maximum: 100, description: 'Deterministic percentage rollout — only consulted when state=on' },
+      overrides: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['tenantId', 'enabled'],
+          properties: { tenantId: { type: 'string' }, enabled: { type: 'boolean' } },
+        },
+      },
+      updatedBy: { type: 'string' },
+      createdAt: { type: 'string', format: 'date-time' },
+      updatedAt: { type: 'string', format: 'date-time' },
+    },
+  },
   TenantMcpTools: {
     type: 'object',
     description: "A tenant's per-org MCP tool visibility override (core/rbac.ts OPERATOR_ONLY_TOOLS / isToolVisibleForTenant).",
@@ -341,6 +386,228 @@ const schemas: Obj = {
 
 function buildPaths(): Obj {
   return {
+    // ── Feature flags (core/feature-flags.ts) ──
+    '/api/flags': {
+      get: {
+        tags: ['Feature Flags'],
+        summary: 'List all feature flags (definitions + overrides) — operator only',
+        operationId: 'listFeatureFlags',
+        security: adminSecurity,
+        responses: {
+          '200': jsonResponse('All flags', {
+            type: 'object',
+            required: ['count', 'flags'],
+            properties: { count: { type: 'integer' }, flags: { type: 'array', items: ref('FeatureFlag') } },
+          }),
+          ...adminResponses,
+        },
+      },
+    },
+    '/api/flags/eval': {
+      get: {
+        tags: ['Feature Flags'],
+        summary: "Evaluated on/off flag map for the caller's tenant (kill-switch > tenant override > state > percentage rollout)",
+        operationId: 'evaluateFeatureFlags',
+        responses: {
+          '200': jsonResponse('Evaluated flags', {
+            type: 'object',
+            required: ['tenantId', 'flags'],
+            properties: {
+              tenantId: { type: 'string' },
+              flags: { type: 'object', additionalProperties: { type: 'boolean' }, description: 'flag key → enabled for this tenant' },
+            },
+          }),
+        },
+      },
+    },
+    '/api/flags/{key}': {
+      put: {
+        tags: ['Feature Flags'],
+        summary: 'Create or update a flag — new flags default dark (off, 0% rollout); reviving a killed flag requires an explicit state',
+        operationId: 'upsertFeatureFlag',
+        security: adminSecurity,
+        parameters: [pathParam('key', 'Flag key')],
+        requestBody: jsonBody({
+          type: 'object',
+          properties: {
+            description: { type: 'string' },
+            state: { type: 'string', enum: ['on', 'off', 'killed'] },
+            rolloutPercent: { type: 'number', minimum: 0, maximum: 100 },
+            updatedBy: { type: 'string' },
+          },
+        }),
+        responses: {
+          '200': jsonResponse('The flag after the write', ref('FeatureFlag')),
+          '400': errorResponse('Invalid key, state, or rolloutPercent (code BAD_REQUEST)'),
+          ...adminResponses,
+        },
+      },
+      delete: {
+        tags: ['Feature Flags'],
+        summary: 'Delete a flag entirely',
+        operationId: 'deleteFeatureFlag',
+        security: adminSecurity,
+        parameters: [pathParam('key', 'Flag key')],
+        responses: {
+          '200': jsonResponse('Deleted', {
+            type: 'object',
+            required: ['deleted', 'key'],
+            properties: { deleted: { type: 'boolean' }, key: { type: 'string' } },
+          }),
+          '404': errorResponse('Unknown flag (code NOT_FOUND)'),
+          ...adminResponses,
+        },
+      },
+    },
+    '/api/flags/{key}/kill': {
+      post: {
+        tags: ['Feature Flags'],
+        summary: 'Kill-switch: force the flag OFF for every tenant, overrides included, until explicitly revived',
+        operationId: 'killFeatureFlag',
+        security: adminSecurity,
+        parameters: [pathParam('key', 'Flag key')],
+        requestBody: jsonBody({ type: 'object', properties: { updatedBy: { type: 'string' } } }, false),
+        responses: {
+          '200': jsonResponse('The killed flag', ref('FeatureFlag')),
+          '404': errorResponse('Unknown flag (code NOT_FOUND)'),
+          ...adminResponses,
+        },
+      },
+    },
+    '/api/flags/{key}/override': {
+      put: {
+        tags: ['Feature Flags'],
+        summary: 'Set (enabled true/false) or clear (enabled null) a per-tenant override — ignored while the flag is killed',
+        operationId: 'setFeatureFlagOverride',
+        security: adminSecurity,
+        parameters: [pathParam('key', 'Flag key')],
+        requestBody: jsonBody({
+          type: 'object',
+          required: ['tenantId', 'enabled'],
+          properties: {
+            tenantId: { type: 'string' },
+            enabled: { type: ['boolean', 'null'], description: 'null clears the override' },
+            updatedBy: { type: 'string' },
+          },
+        }),
+        responses: {
+          '200': jsonResponse('The flag after the write', ref('FeatureFlag')),
+          '400': errorResponse('tenantId required (code BAD_REQUEST)'),
+          '404': errorResponse('Unknown flag (code NOT_FOUND)'),
+          ...adminResponses,
+        },
+      },
+    },
+    // ── Legal pack (core/legal.ts — end-user click-wrap) ──
+    '/api/legal/docs': {
+      get: {
+        tags: ['Legal'],
+        summary: 'List legal documents (terms, privacy, acceptable-use) — metadata + current versions',
+        operationId: 'listLegalDocs',
+        security: [],
+        responses: {
+          '200': jsonResponse('Document metadata', {
+            type: 'object',
+            required: ['docs', 'consentRequired'],
+            properties: {
+              docs: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  required: ['slug', 'title', 'version', 'updated'],
+                  properties: {
+                    slug: { type: 'string', enum: ['terms', 'privacy', 'acceptable-use'] },
+                    title: { type: 'string' },
+                    version: { type: 'string' },
+                    updated: { type: 'string' },
+                  },
+                },
+              },
+              consentRequired: { type: 'boolean', description: 'True when LEGAL_CONSENT_REQUIRED=1 — signup rejects without acceptTerms' },
+            },
+          }),
+        },
+      },
+    },
+    '/api/legal/docs/{slug}': {
+      get: {
+        tags: ['Legal'],
+        summary: 'Fetch one legal document as versioned markdown',
+        operationId: 'getLegalDoc',
+        security: [],
+        parameters: [{
+          name: 'slug',
+          in: 'path',
+          required: true,
+          schema: { type: 'string', enum: ['terms', 'privacy', 'acceptable-use'] },
+        }],
+        responses: {
+          '200': jsonResponse('The document', {
+            type: 'object',
+            required: ['slug', 'title', 'version', 'updated', 'markdown'],
+            properties: {
+              slug: { type: 'string' },
+              title: { type: 'string' },
+              version: { type: 'string' },
+              updated: { type: 'string' },
+              markdown: { type: 'string' },
+            },
+          }),
+          '404': jsonResponse('Unknown document', {
+            type: 'object',
+            properties: { error: { type: 'string' }, code: { type: 'string' } },
+          }),
+        },
+      },
+    },
+    '/api/legal/consent': {
+      get: {
+        tags: ['Legal'],
+        summary: 'Consent status for the caller\'s tenant (JWT session cookie) — drives the re-consent prompt',
+        operationId: 'getLegalConsentStatus',
+        responses: {
+          '200': jsonResponse('Consent status', {
+            type: 'object',
+            required: ['required', 'current', 'upToDate', 'reconsentNeeded'],
+            properties: {
+              required: { type: 'boolean' },
+              current: { type: 'object', additionalProperties: { type: 'string' } },
+              accepted: { type: 'object', nullable: true, additionalProperties: { type: 'string' } },
+              acceptedAt: { type: 'string', format: 'date-time', nullable: true },
+              upToDate: { type: 'boolean' },
+              reconsentNeeded: { type: 'boolean' },
+            },
+          }),
+          '401': jsonResponse('Not signed in', {
+            type: 'object',
+            properties: { error: { type: 'string' }, code: { type: 'string' } },
+          }),
+        },
+      },
+      post: {
+        tags: ['Legal'],
+        summary: 'Record re-consent at the current document versions (JWT session cookie)',
+        operationId: 'recordLegalConsent',
+        responses: {
+          '201': jsonResponse('Updated consent status', {
+            type: 'object',
+            required: ['required', 'current', 'upToDate', 'reconsentNeeded'],
+            properties: {
+              required: { type: 'boolean' },
+              current: { type: 'object', additionalProperties: { type: 'string' } },
+              accepted: { type: 'object', nullable: true, additionalProperties: { type: 'string' } },
+              acceptedAt: { type: 'string', format: 'date-time', nullable: true },
+              upToDate: { type: 'boolean' },
+              reconsentNeeded: { type: 'boolean' },
+            },
+          }),
+          '401': jsonResponse('Not signed in', {
+            type: 'object',
+            properties: { error: { type: 'string' }, code: { type: 'string' } },
+          }),
+        },
+      },
+    },
     // ── Health / status ──
     '/health': {
       get: {
@@ -407,6 +674,30 @@ function buildPaths(): Obj {
                 type: 'object',
                 properties: { total: { type: 'integer' }, active: { type: 'integer' } },
               },
+            },
+          }),
+        },
+      },
+    },
+
+    '/api/license/status': {
+      get: {
+        tags: ['Health'],
+        summary: 'Self-hosted license activation + air-gapped mode status (verified fully offline)',
+        operationId: 'getLicenseStatus',
+        responses: {
+          '200': jsonResponse('License status — never includes the raw LICENSE_KEY or signing key', {
+            type: 'object',
+            required: ['mode', 'airGapped', 'reason'],
+            properties: {
+              mode: { type: 'string', enum: ['unlicensed', 'valid', 'invalid', 'expired'], description: '"unlicensed" (no LICENSE_KEY set) is the normal, fully-functional community default' },
+              airGapped: { type: 'boolean', description: 'true when AIR_GAPPED=true — zero outbound calls beyond the configured LLM provider' },
+              reason: { type: 'string' },
+              org: { type: 'string', nullable: true },
+              plan: { type: 'string', enum: ['community', 'enterprise'], nullable: true },
+              seats: { type: 'integer', nullable: true, description: '-1 = unlimited' },
+              expiresAt: { type: 'string', format: 'date-time', nullable: true, description: 'null = perpetual license' },
+              features: { type: 'array', items: { type: 'string' } },
             },
           }),
         },
@@ -987,6 +1278,25 @@ function buildPaths(): Obj {
       },
     },
 
+    '/api/budgets/attribution': {
+      get: {
+        tags: ['Budgets'],
+        summary: 'Itemised $ cost breakdown by repo / model / task-type / premium-vs-standard lane',
+        operationId: 'getCostAttribution',
+        security: adminSecurity,
+        parameters: [
+          queryParam('from', 'Window start (any Date-parsable timestamp; defaults to UTC start-of-month)', { type: 'string', format: 'date-time' }),
+          queryParam('to', 'Window end (any Date-parsable timestamp)', { type: 'string', format: 'date-time' }),
+        ],
+        responses: {
+          '200': jsonResponse('Cost attribution', ref('CostAttribution')),
+          '400': errorResponse('Invalid from/to timestamp (code BAD_REQUEST)'),
+          ...adminResponses,
+          '500': errorResponse('Internal error (code INTERNAL_ERROR)'),
+        },
+      },
+    },
+
     // ── Usage meter (product events, admin) — ADR-014 S2 ──
     '/api/usage/summary': {
       get: {
@@ -1191,11 +1501,13 @@ function buildPaths(): Obj {
             source: { type: 'string', enum: ['manual', 'connect-hub', 'auto-detected', 'scheduler', 'telegram'], default: 'manual' },
             sourceId: { type: 'string' },
             notes: { type: 'string' },
+            dependsOn: { type: 'array', items: { type: 'string' }, description: 'Upstream taskIds this task waits on (DAG scheduling); upstreams must exist' },
           },
         }),
         responses: {
           '201': jsonResponse('Created task', ref('Task')),
           '400': errorResponse('repo and title required'),
+          '422': errorResponse('Invalid dependency graph (unknown upstream / cycle / self-reference)'),
           '500': errorResponse('Store error'),
         },
       },
@@ -1236,11 +1548,86 @@ function buildPaths(): Obj {
             prUrl: { type: 'string' },
             notes: { type: 'string' },
             telegramMessageId: { type: 'integer' },
+            dependsOn: { type: 'array', items: { type: 'string' }, description: 'REPLACES the upstream dependency list; [] clears it. Rejected if an upstream is unknown or the edit creates a cycle.' },
           },
         }),
         responses: {
           '200': jsonResponse('Updated task', ref('Task')),
           '404': errorResponse('Task not found'),
+          '422': errorResponse('Invalid dependency graph (unknown upstream / cycle / self-reference)'),
+          '500': errorResponse('Store error'),
+        },
+      },
+    },
+    '/api/tasks/bulk': {
+      post: {
+        tags: ['Tasks'],
+        summary: 'Apply up to 100 task mutations (create/update/cancel/reprioritize) in one call — partial application with per-op verdicts',
+        operationId: 'bulkTaskOperations',
+        'x-required-capability': 'work', // RBAC v1 (ADR-013) — same as single create/update
+        requestBody: jsonBody({
+          type: 'object',
+          required: ['operations'],
+          properties: {
+            operations: {
+              type: 'array',
+              maxItems: 100,
+              description: 'Mutations applied sequentially in array order; each succeeds or fails independently. "$N" anywhere a taskId is accepted resolves to the taskId created by op index N earlier in the batch.',
+              items: {
+                type: 'object',
+                required: ['action'],
+                properties: {
+                  action: { type: 'string', enum: ['create', 'update', 'cancel', 'reprioritize'] },
+                  taskId: { type: 'string', description: 'Target for update/cancel/reprioritize; accepts a "$N" batch ref' },
+                  repo: { type: 'string' },
+                  title: { type: 'string' },
+                  description: { type: 'string' },
+                  priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+                  assignedAgent: { type: 'string' },
+                  recommendedModel: { type: 'string' },
+                  source: { type: 'string', enum: ['manual', 'connect-hub', 'auto-detected', 'scheduler', 'telegram'] },
+                  sourceId: { type: 'string' },
+                  notes: { type: 'string' },
+                  status: { type: 'string', enum: ['pending', 'working', 'review', 'done', 'blocked', 'paused', 'dead_letter'] },
+                  prUrl: { type: 'string' },
+                  dependsOn: { type: 'array', items: { type: 'string' } },
+                  supersededBy: { type: 'string' },
+                  operatorAuthorized: { type: 'boolean' },
+                  reason: { type: 'string', description: 'cancel: recorded in the cancellation note' },
+                },
+              },
+            },
+            stopOnError: { type: 'boolean', default: false, description: 'Halt at the first failed op; remaining ops report code SKIPPED' },
+          },
+        }),
+        responses: {
+          '200': jsonResponse('Per-op verdicts + batch counters (per-op failures land here, not as HTTP errors)', {
+            type: 'object',
+            required: ['total', 'succeeded', 'failed', 'results'],
+            properties: {
+              total: { type: 'integer' },
+              succeeded: { type: 'integer' },
+              failed: { type: 'integer' },
+              stoppedAt: { type: 'integer', description: 'Index where stopOnError halted the batch (only when it did)' },
+              results: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  required: ['index', 'action', 'ok'],
+                  properties: {
+                    index: { type: 'integer' },
+                    action: { type: 'string', enum: ['create', 'update', 'cancel', 'reprioritize'] },
+                    ok: { type: 'boolean' },
+                    taskId: { type: 'string' },
+                    task: ref('Task'),
+                    error: { type: 'string' },
+                    code: { type: 'string', enum: ['VALIDATION', 'NOT_FOUND', 'REF_UNRESOLVED', 'BULK_BLOCK_GUARD', 'TASK_DEPENDENCY', 'SKIPPED', 'INTERNAL'] },
+                  },
+                },
+              },
+            },
+          }),
+          '400': errorResponse('Malformed batch (empty, over the 100-op cap, or unknown action)'),
           '500': errorResponse('Store error'),
         },
       },
@@ -1295,6 +1682,100 @@ function buildPaths(): Obj {
     },
 
     // ── Tenants (admin) ──
+    '/api/tenants': {
+      post: {
+        tags: ['Tenants'],
+        summary: 'Create a single tenant + its first API key (operator, admin-gated) — the `myai tenant create` primitive',
+        operationId: 'createTenant',
+        security: adminSecurity,
+        requestBody: jsonBody({
+          type: 'object',
+          required: ['tenantId', 'name'],
+          properties: {
+            tenantId: { type: 'string', description: 'Stable slug/uuid stamped on every scoped record' },
+            name: { type: 'string' },
+            plan: { type: 'string', enum: ['free', 'solo', 'team', 'scale'] },
+            ownerEmail: { type: 'string' },
+            env: { type: 'string', enum: ['live', 'test'], description: "Key environment prefix — defaults to 'live'" },
+          },
+        }),
+        responses: {
+          '201': jsonResponse('Created tenant + show-once raw API key', {
+            type: 'object',
+            required: ['tenantId', 'name', 'plan', 'status', 'region', 'rawKey'],
+            properties: {
+              tenantId: { type: 'string' },
+              name: { type: 'string' },
+              plan: { type: 'string' },
+              status: { type: 'string' },
+              region: { type: 'string' },
+              rawKey: { type: 'string', description: 'Show-once raw API key — never retrievable again' },
+            },
+          }),
+          '400': errorResponse('tenantId or name missing (code BAD_REQUEST)'),
+          ...adminResponses,
+        },
+      },
+      get: {
+        tags: ['Tenants'],
+        summary: 'List tenants (operator, admin-gated) — the `myai tenant list` primitive',
+        operationId: 'listTenants',
+        security: adminSecurity,
+        parameters: [
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['active', 'suspended', 'deleted'] } },
+          { name: 'plan', in: 'query', schema: { type: 'string', enum: ['free', 'solo', 'team', 'scale'] } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 }, description: 'Capped at 500' },
+        ],
+        responses: {
+          '200': jsonResponse('Tenants matching the filter (secret fields never included — apiKeyHash/apiKeyHashPrevious are select:false)', {
+            type: 'object',
+            required: ['count', 'tenants'],
+            properties: {
+              count: { type: 'integer' },
+              tenants: { type: 'array', items: { type: 'object' } },
+            },
+          }),
+          ...adminResponses,
+        },
+      },
+    },
+
+    '/api/tenants/{id}/suspend': {
+      post: {
+        tags: ['Tenants'],
+        summary: "Suspend a tenant — blocks every API-key call instantly (operator, admin-gated) — the `myai tenant suspend` primitive",
+        operationId: 'suspendTenantAdmin',
+        security: adminSecurity,
+        parameters: [pathParam('id', 'Tenant id')],
+        requestBody: jsonBody({
+          type: 'object',
+          properties: { reason: { type: 'string' } },
+        }, false),
+        responses: {
+          '200': jsonResponse('New status', { type: 'object', properties: { tenantId: { type: 'string' }, status: { type: 'string' } } }),
+          '404': errorResponse('Tenant not found (code NOT_FOUND)'),
+          '409': errorResponse('Tenant is already deleted — cannot suspend (code CONFLICT)'),
+          ...adminResponses,
+        },
+      },
+    },
+
+    '/api/tenants/{id}/reactivate': {
+      post: {
+        tags: ['Tenants'],
+        summary: 'Restore a suspended tenant to active (operator, admin-gated) — the `myai tenant reactivate` primitive',
+        operationId: 'reactivateTenantAdmin',
+        security: adminSecurity,
+        parameters: [pathParam('id', 'Tenant id')],
+        responses: {
+          '200': jsonResponse('New status', { type: 'object', properties: { tenantId: { type: 'string' }, status: { type: 'string' } } }),
+          '404': errorResponse('Tenant not found (code NOT_FOUND)'),
+          '409': errorResponse('Tenant is already deleted — cannot reactivate (code CONFLICT)'),
+          ...adminResponses,
+        },
+      },
+    },
+
     '/api/tenants/bulk-import': {
       post: {
         tags: ['Tenants'],
@@ -1437,6 +1918,42 @@ function buildPaths(): Obj {
 
     // ── Webhooks ─────────────────────────────────────────
 
+    '/api/email/events': {
+      post: {
+        tags: ['Webhooks'],
+        summary: 'Ingest email provider delivery events (bounce / complaint / delivered)',
+        operationId: 'ingestEmailEvent',
+        description: 'Normalized email-provider webhook: updates the transactional-email delivery log (matched by providerMessageId or recipient address) and auto-suppresses the address on a hard bounce or spam complaint. Env-gated: 404 unless EMAIL_EVENTS_SECRET is set; caller must present it in the x-email-events-secret header.',
+        parameters: [
+          { name: 'x-email-events-secret', in: 'header', required: true, schema: { type: 'string' } },
+        ],
+        requestBody: jsonBody({
+          type: 'object',
+          required: ['type'],
+          properties: {
+            type: { type: 'string', enum: ['bounce', 'complaint', 'delivered'] },
+            providerMessageId: { type: 'string', description: "Provider's message id from the original send (preferred join key)" },
+            email: { type: 'string', description: 'Recipient address (fallback join/suppression key)' },
+            hard: { type: 'boolean', description: 'Bounce hardness; soft bounces (false) do not suppress. Default true.' },
+          },
+        }),
+        responses: {
+          '200': jsonResponse('Event result', {
+            type: 'object',
+            properties: {
+              ok: { type: 'boolean' },
+              matched: { type: 'number', description: 'Delivery-log rows updated' },
+              suppressed: { type: 'boolean', description: 'Address added to the suppression list by this event' },
+            },
+          }),
+          '400': errorResponse('Invalid event payload'),
+          '401': errorResponse('Invalid webhook secret'),
+          '404': errorResponse('Endpoint disabled (EMAIL_EVENTS_SECRET unset)'),
+          '500': errorResponse('Internal error'),
+        },
+      },
+    },
+
     '/api/webhooks/github': {
       post: {
         tags: ['Webhooks'],
@@ -1552,7 +2069,22 @@ export function buildOpenApiSpec(): Record<string, unknown> {
         '(admin+, e.g. schedule CRUD), `members` (admin+, e.g. invites), `billing` (owner+). ' +
         'Each enforced operation is annotated with `x-required-capability`. Enforcement is gated by ' +
         'the `RBAC_ENFORCE` flag — off (default) runs in shadow mode (logs `rbac.shadow`, allows); ' +
-        'on returns 403 FORBIDDEN. Budget routes additionally require the operator `X-Admin-Token`.',
+        'on returns 403 FORBIDDEN. Budget routes additionally require the operator `X-Admin-Token`.\n\n' +
+        'Versioning (documentation/API_VERSIONING.md): every path below is also served under the ' +
+        '`/api/v1/` namespace (e.g. `/api/agents` ≡ `/api/v1/agents`) — new integrations should use ' +
+        '`/api/v1/`; the unversioned paths are a frozen legacy alias of v1. Every response carries ' +
+        '`X-API-Version`; the same header is accepted on requests to pin a version (unsupported → ' +
+        '400 UNSUPPORTED_API_VERSION). Deprecated routes announce removal via `Deprecation`/`Sunset`/' +
+        '`Link rel="sunset"` headers (RFC 8594) at least 90 days before their sunset date.',
+    },
+    'x-api-versioning': {
+      current: 'v1',
+      supported: ['v1'],
+      header: 'X-API-Version',
+      versionedBasePath: '/api/v1',
+      legacyAlias: '/api',
+      deprecationPolicy: 'documentation/API_VERSIONING.md',
+      minimumDeprecationWindowDays: 90,
     },
     servers: [{ url: 'http://localhost:3200', description: 'Local gateway' }],
     tags: [
@@ -1575,6 +2107,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
       { name: 'Notifications', description: 'Cross-channel notification delivery' },
       { name: 'Webhooks', description: 'Inbound webhook receivers (GitHub)' },
       { name: 'Alerts', description: 'Proactive health alerting' },
+      { name: 'Feature Flags', description: 'Platform feature flags — global + per-tenant, percentage rollout, kill-switch (admin-gated writes)' },
     ],
     paths: buildPaths(),
     components: {

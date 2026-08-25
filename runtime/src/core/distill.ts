@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { brainRemoteUrl, brainSyncPull, isBrainRepo, myaiHome, resolveBrainDir, slugify } from './brain.js';
 import type { BrainLogEntry } from './brain.js';
+import { recordDeltaDegrade } from './brain-health.js';
 import { SYSTEM_CONTEXT } from './tenant-context.js';
 import { getEmbeddingProvider } from '../memory/embeddings.js';
 import { cosineSimilarity } from '../memory/vector-index.js';
@@ -55,6 +56,17 @@ const DELTA_ATOM_CHARS = 900;
  * the most recent commits (already ordered that way by `git log`) survive.
  */
 const DELTA_MAX_COMMITS = 20;
+/**
+ * Hard ceiling brainDelta will NEVER exceed, scoped or not (W2.2,
+ * task-f58ce4c4): the size of the compiled working set (brief.md + working.md)
+ * — the generic stand-in used when there's no per-repo working.md to compare
+ * against (an unscoped/cross-repo delta, or a repo that hasn't been distilled
+ * yet). W2.1 found the prior SMART cap gated on `repo` being passed — an
+ * unscoped call skipped it entirely and grew unbounded as `since` got stale.
+ * This ceiling applies to EVERY raw delta before it's returned, structurally,
+ * not just the ns-scoped path.
+ */
+const DELTA_HARD_CAP_CHARS = BRIEF_CHARS + WORKING_CHARS;
 
 const PLACEHOLDER_MARK = '_Not compiled yet';
 
@@ -92,7 +104,7 @@ function requireBrain(env: NodeJS.ProcessEnv): string {
 
 // ── atom parsing (extractive, filename + frontmatter contract) ───────────────
 
-interface Atom {
+export interface Atom {
   file: string;
   /** UTC stamp prefix of the filename (sortable). */
   ts: string;
@@ -105,6 +117,19 @@ interface Atom {
   supersedes?: string;
   /** Content sha8 (the filename's trailing -<sha8>.md) — a supersession handle. */
   sha8: string;
+  /**
+   * W2.3 dedup: count of near-duplicate atoms folded into this one (embedding
+   * cosine similarity, same-topic only). Undefined = not deduped (default;
+   * also true whenever BRAIN_DISTILL_DEDUP is unset).
+   */
+  collapsedCount?: number;
+  /**
+   * Never-drop pin (frontmatter `pin: true` at write time, OR the atom's
+   * content sha8 is in the pins/ registry — see brain.ts pinAtom). Pinned
+   * atoms are exempt from supersession retirement, near-dup collapse, and
+   * budget-driven omission: they always render, first, in brief/working.
+   */
+  pinned?: boolean;
 }
 
 function stripFrontmatter(raw: string): string {
@@ -119,10 +144,25 @@ function tightenText(text: string, max: number): string {
   return flat.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
 }
 
+/**
+ * Pinned sha8s from the worktree pins/ registry (caller ensures main — the
+ * registry is committed to main, so under withMain the worktree is current).
+ */
+function worktreePinSet(dir: string): Set<string> {
+  const abs = join(dir, 'pins');
+  if (!existsSync(abs)) return new Set();
+  return new Set(
+    readdirSync(abs)
+      .map((f) => f.match(/^([0-9a-f]{8})\.md$/)?.[1])
+      .filter((s): s is string => Boolean(s)),
+  );
+}
+
 /** Read a namespace's atoms from the WORKTREE (caller ensures main), newest first. */
 function readAtoms(dir: string, relDir: string): Atom[] {
   const abs = join(dir, relDir);
   if (!existsSync(abs)) return [];
+  const pins = worktreePinSet(dir);
   return readdirSync(abs)
     .filter((f) => f.endsWith('.md'))
     .sort()
@@ -132,6 +172,7 @@ function readAtoms(dir: string, relDir: string): Atom[] {
       const slugLine = raw.match(/^slug: (.+)$/m);
       const topicLine = raw.match(/^topic: (.+)$/m);
       const supLine = raw.match(/^supersedes: (.+)$/m);
+      const sha8 = file.match(/-([0-9a-f]{8})\.md$/)?.[1] ?? '';
       return {
         file,
         ts: file.slice(0, 16),
@@ -140,7 +181,8 @@ function readAtoms(dir: string, relDir: string): Atom[] {
         // Atoms written before ADR-020 carry no topic → treated as 'general'.
         topic: topicLine ? topicLine[1].trim() : 'general',
         supersedes: supLine ? supLine[1].trim() : undefined,
-        sha8: file.match(/-([0-9a-f]{8})\.md$/)?.[1] ?? '',
+        sha8,
+        pinned: /^pin: true$/m.test(raw) || (sha8 !== '' && pins.has(sha8)) || undefined,
       };
     });
 }
@@ -169,9 +211,12 @@ function pruneSuperseded(atoms: Atom[]): { live: Atom[]; retired: Atom[] } {
     if (SHA8_RE.test(a.supersedes)) shaTargets.add(a.supersedes);
     else slugTargets.push({ slug: slugify(a.supersedes), byFile: a.file });
   }
+  // Pinned atoms are NEVER retired — the never-drop contract outranks an
+  // explicit supersession pointer (unpin first if the replacement is real).
   const isRetired = (b: Atom) =>
-    (b.sha8 !== '' && shaTargets.has(b.sha8)) ||
-    slugTargets.some((s) => s.slug === b.slug && s.byFile > b.file);
+    !b.pinned &&
+    ((b.sha8 !== '' && shaTargets.has(b.sha8)) ||
+      slugTargets.some((s) => s.slug === b.slug && s.byFile > b.file));
   const live: Atom[] = [];
   const retired: Atom[] = [];
   for (const a of atoms) (isRetired(a) ? retired : live).push(a);
@@ -214,7 +259,7 @@ export interface DistillResult {
  * NEVER a growing prose blob — the topic index is what makes "never blank"
  * cheap and keeps GOLD hard-capped (ADR-020).
  */
-function renderBrief(ns: string, handoffs: Atom[], sessions: Atom[]): string {
+function renderBrief(ns: string, handoffs: Atom[], sessions: Atom[], liveOverride?: Atom[]): string {
   const latest = handoffs[0] ?? sessions[0];
   const lines = [
     `# ${ns} — boot brief`,
@@ -229,9 +274,21 @@ function renderBrief(ns: string, handoffs: Atom[], sessions: Atom[]): string {
   // Current-status one-liner (the ADR "current branch/blockers" line).
   lines.push(tightenText(latest.body, BRIEF_ONELINE_CHARS));
 
-  // Topic index — one line per LIVE branch, most-recently-active first.
-  const { live } = pruneSuperseded([...handoffs, ...sessions]);
-  const groups = groupByTopic(live);
+  // Topic index — one line per LIVE branch, most-recently-active first. When
+  // `liveOverride` is supplied (W2.3 near-dup collapse already applied by the
+  // caller) it replaces the plain pruneSuperseded set so the TOC's per-topic
+  // counts reflect the collapsed reality, not the raw atom count.
+  const live = liveOverride ?? pruneSuperseded([...handoffs, ...sessions]).live;
+  // Never-drop pins render FIRST, before the topic TOC spends any budget — the
+  // structural guarantee that a growing store can't crowd a critical fact out
+  // of GOLD. Pinned atoms are excluded from the topic groups below (no double
+  // spend); working.md carries their fuller text.
+  const pinned = live.filter((a) => a.pinned);
+  if (pinned.length) {
+    lines.push('', '## pinned');
+    for (const a of pinned) lines.push(`- ${a.slug} — ${tightenText(a.body, 90)}`);
+  }
+  const groups = groupByTopic(live.filter((a) => !a.pinned));
   const topicOrder = topicsByRecency(groups);
   if (topicOrder.length) {
     lines.push('', '## topics');
@@ -253,13 +310,33 @@ function renderBrief(ns: string, handoffs: Atom[], sessions: Atom[]): string {
  * of the hot path (they remain in rollup.md/BRONZE) — this is the structural
  * replacement for the blunt keep-last-N cap. Capped at ~2k tokens.
  */
-function renderWorking(ns: string, handoffs: Atom[], sessions: Atom[]): string {
+function renderWorking(ns: string, handoffs: Atom[], sessions: Atom[], liveOverride?: Atom[]): string {
   const parts = [`# ${ns} — working context`, ''];
+  const { live: prunedLive, retired } = pruneSuperseded([...handoffs, ...sessions]);
+  // W2.3 near-dup collapse (already computed by the caller, embedding-scored,
+  // same-topic only) replaces the plain pruned set when supplied — collapsed
+  // atoms drop out of SILVER exactly like a supersession, but (unlike
+  // supersession) are never marked "retired": they were never wrong, just
+  // repetitive, and rollup.md (BRONZE) still carries every one of them —
+  // principle 1, never lose a session.
+  const live = liveOverride ?? prunedLive;
+  // Never-drop pins: a dedicated section rendered FIRST (before even the
+  // latest handoff, so nothing unbounded precedes it into the doc-level cap)
+  // and with NO budget break of its own — pinned atoms always survive the
+  // ~2k-token cap no matter how large the store grows. Excluded from the
+  // topic groups below so the budget isn't spent on them twice.
+  const pinned = live.filter((a) => a.pinned);
+  if (pinned.length) {
+    parts.push(`## pinned (${pinned.length})`, '');
+    for (const a of pinned) {
+      parts.push(`- ${a.ts} **${a.slug}** _(pinned)_ — ${tightenText(a.body, 400)}`);
+    }
+    parts.push('');
+  }
   if (handoffs[0]) {
     parts.push('## Latest handoff', '', handoffs[0].body.trim(), '');
   }
-  const { live, retired } = pruneSuperseded([...handoffs, ...sessions]);
-  const groups = groupByTopic(live);
+  const groups = groupByTopic(live.filter((a) => !a.pinned));
   for (const topic of topicsByRecency(groups)) {
     const draft = parts.join('\n');
     if (draft.length >= WORKING_CHARS) break;
@@ -269,7 +346,8 @@ function renderWorking(ns: string, handoffs: Atom[], sessions: Atom[]): string {
       const d = parts.join('\n');
       if (d.length >= WORKING_CHARS) break;
       const sup = a.supersedes ? ` _(supersedes ${a.supersedes})_` : '';
-      parts.push(`- ${a.ts} **${a.slug}**${sup} — ${tightenText(a.body, Math.min(400, Math.max(0, WORKING_CHARS - d.length)))}`);
+      const dedup = a.collapsedCount ? ` _(+${a.collapsedCount} similar collapsed)_` : '';
+      parts.push(`- ${a.ts} **${a.slug}**${sup}${dedup} — ${tightenText(a.body, Math.min(400, Math.max(0, WORKING_CHARS - d.length)))}`);
     }
     parts.push('');
   }
@@ -315,8 +393,19 @@ function withMain<T>(dir: string, fn: () => T): T {
  * Regenerate one namespace's compiled artifacts from its atoms and commit the
  * result to main. Extractive + deterministic — identical atoms always produce
  * identical artifacts, so a re-run is a no-op (changed:false).
+ *
+ * `opts.dedupedLive`, when supplied, is the W2.3 near-dup-collapsed live atom
+ * set (see `collapseNearDuplicates`) and replaces the plain pruneSuperseded
+ * output for GOLD (brief.md) and SILVER (working.md) — rollup.md (BRONZE)
+ * always renders from the raw, uncollapsed atoms so no session is ever lost,
+ * only de-duplicated out of the hot path. Omitted → byte-identical to the
+ * pre-W2.3 distiller.
  */
-export function distillNamespace(name: string, env: NodeJS.ProcessEnv = process.env): DistillResult {
+export function distillNamespace(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+  opts: { dedupedLive?: Atom[] } = {},
+): DistillResult {
   const dir = requireBrain(env);
   const ns = slugify(name);
   if (!ns) throw new Error('brain: namespace name required');
@@ -326,8 +415,8 @@ export function distillNamespace(name: string, env: NodeJS.ProcessEnv = process.
     const sessions = readAtoms(dir, `repos/${ns}/sessions`);
     const handoffs = readAtoms(dir, `repos/${ns}/handoffs`);
     const files = ['brief.md', 'working.md', 'rollup.md'];
-    writeFileSync(join(nsDir, 'brief.md'), renderBrief(ns, handoffs, sessions));
-    writeFileSync(join(nsDir, 'working.md'), renderWorking(ns, handoffs, sessions));
+    writeFileSync(join(nsDir, 'brief.md'), renderBrief(ns, handoffs, sessions, opts.dedupedLive));
+    writeFileSync(join(nsDir, 'working.md'), renderWorking(ns, handoffs, sessions, opts.dedupedLive));
     writeFileSync(join(nsDir, 'rollup.md'), renderRollup(ns, handoffs, sessions));
     if (git(dir, 'status', '--porcelain', '--', `repos/${ns}`) === '') {
       return { namespace: ns, changed: false, files };
@@ -336,6 +425,116 @@ export function distillNamespace(name: string, env: NodeJS.ProcessEnv = process.
     git(dir, 'commit', '-q', '-m', `brain(distill): ${ns} — compiled brief/working/rollup`);
     return { namespace: ns, changed: true, files };
   });
+}
+
+// ── W2.3 — near-duplicate atom collapse (extends ADR-020 topic index) ────────
+//
+// As W1.1-1.4 make capture unconditional, atom count per topic grows without
+// bound (591+ sessions and climbing) — a run of near-identical checkpoint/
+// session atoms (e.g. repeated "chore: update state" landings) crowds
+// genuinely distinct atoms out of the GOLD/SILVER budget purely by volume,
+// degrading principle 2 ("boot cost is flat") even though W2.1/W2.2 fixed the
+// immediate brain_delta bloat regression. This folds near-duplicate atoms
+// WITHIN THE SAME TOPIC into one representative before compilation, using the
+// same embedding provider `brain_lookup`'s ADR-020 v2 path (and the `vectors`
+// collection `memory_search`/`recall_session` are built on) already scores
+// topic branches with — no new infra. Gated off by default (BRAIN_DISTILL_DEDUP)
+// so an install with no vector-capable provider, or one where the extra
+// embed cost isn't wanted on every merge, sees the pre-W2.3 distiller
+// unchanged. Never collapses across topics, and never touches rollup.md
+// (BRONZE) — principle 1, never lose a session; collapse only shrinks the
+// hot path, exactly like supersession already does.
+
+/** ADR-020 v2 dedup gate — off by default, same posture as BRAIN_LOOKUP_EMBED. */
+function distillDedupEnabled(env: NodeJS.ProcessEnv): boolean {
+  const v = (env.BRAIN_DISTILL_DEDUP || '').trim().toLowerCase();
+  return v === '1' || v === 'true';
+}
+
+/**
+ * Minimum cosine similarity for two same-topic atoms to be treated as
+ * near-duplicates. Deliberately conservative (well above EMBED_CONFIDENCE_FLOOR's
+ * 0.35 "is this even the right branch" bar) — collapse must only ever catch
+ * near-verbatim repeats, never merely-related-but-distinct atoms.
+ */
+const DEDUP_SIMILARITY_FLOOR = Number(process.env.BRAIN_DISTILL_DEDUP_FLOOR) || 0.93;
+
+/**
+ * Fold near-duplicate atoms (same topic, cosine similarity >= DEDUP_SIMILARITY_FLOOR)
+ * into one representative — the first (newest) atom of each cluster keeps its
+ * slot, annotated with `collapsedCount`; the rest drop out of the returned
+ * array. No-op (returns `atoms` unchanged) when disabled, when there's
+ * nothing to compare, or when the embedding provider fails/degrades — same
+ * confidence-gated-upgrade posture as `embeddingMatchTopics`.
+ */
+export async function collapseNearDuplicates(
+  atoms: Atom[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Atom[]> {
+  if (!distillDedupEnabled(env) || atoms.length < 2) return atoms;
+  try {
+    const provider = getEmbeddingProvider();
+    const embeddings = await provider.embedBatch(atoms.map((a) => a.body));
+    if (provider.degraded) {
+      log.warn('brain_distill dedup embedding provider degraded (hash fallback) — skipping near-dup collapse');
+      return atoms;
+    }
+    const n = atoms.length;
+    const clusterOf = new Array<number>(n).fill(-1);
+    let nextCluster = 0;
+    for (let i = 0; i < n; i++) {
+      if (clusterOf[i] !== -1) continue;
+      clusterOf[i] = nextCluster;
+      for (let j = i + 1; j < n; j++) {
+        // Pinned atoms never fold into a cluster (and never absorb others) —
+        // the never-drop contract keeps them verbatim in the hot path.
+        if (clusterOf[j] !== -1 || atoms[j].topic !== atoms[i].topic || atoms[i].pinned || atoms[j].pinned) continue;
+        if (cosineSimilarity(embeddings[i], embeddings[j]) >= DEDUP_SIMILARITY_FLOOR) clusterOf[j] = clusterOf[i];
+      }
+      nextCluster++;
+    }
+    const clusterSize = new Map<number, number>();
+    for (const c of clusterOf) clusterSize.set(c, (clusterSize.get(c) ?? 0) + 1);
+    const seen = new Set<number>();
+    const out: Atom[] = [];
+    for (let i = 0; i < n; i++) {
+      const c = clusterOf[i];
+      if (seen.has(c)) continue; // folded into this cluster's representative (index i's earlier member)
+      seen.add(c);
+      const size = clusterSize.get(c) ?? 1;
+      out.push(size > 1 ? { ...atoms[i], collapsedCount: size - 1 } : atoms[i]);
+    }
+    return out;
+  } catch (err) {
+    log.warn({ err }, 'brain_distill dedup failed — skipping near-dup collapse');
+    return atoms;
+  }
+}
+
+/**
+ * W2.3 async entry point: compute the near-dup collapse over a namespace's
+ * live atoms, then distill using the collapsed set. Two synchronous
+ * `withMain` critical sections around one async (network/model) step in
+ * between — reading atoms needs main checked out; the embedding call does
+ * not touch the brain repo at all, so it's safe to run with main released.
+ * Falls straight through to the plain `distillNamespace` when dedup is
+ * disabled, so the common case pays zero extra cost.
+ */
+export async function distillNamespaceWithDedup(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DistillResult> {
+  if (!distillDedupEnabled(env)) return distillNamespace(name, env);
+  const dir = requireBrain(env);
+  const ns = slugify(name);
+  if (!ns) throw new Error('brain: namespace name required');
+  const { handoffs, sessions } = withMain(dir, () => ({
+    handoffs: readAtoms(dir, `repos/${ns}/handoffs`),
+    sessions: readAtoms(dir, `repos/${ns}/sessions`),
+  }));
+  const { live } = pruneSuperseded([...handoffs, ...sessions]);
+  const dedupedLive = await collapseNearDuplicates(live, env);
+  return distillNamespace(ns, env, { dedupedLive });
 }
 
 /**
@@ -356,6 +555,29 @@ export function distillAfterMerge(env: NodeJS.ProcessEnv = process.env): Distill
       .filter((ns): ns is string => Boolean(ns)),
   );
   return [...touched].map((ns) => distillNamespace(ns, env));
+}
+
+/**
+ * W2.3 async twin of `distillAfterMerge` — same touched-namespace discovery,
+ * but routes each namespace through `distillNamespaceWithDedup`. This is what
+ * `brain_merge` calls; disabled (the default), it's byte-for-byte the same
+ * work as `distillAfterMerge`.
+ */
+export async function distillAfterMergeWithDedup(env: NodeJS.ProcessEnv = process.env): Promise<DistillResult[]> {
+  if (!distillDedupEnabled(env)) return distillAfterMerge(env);
+  const dir = requireBrain(env);
+  const head = git(dir, 'rev-parse', 'main');
+  const base = gitOk(dir, 'rev-parse', '--verify', '--quiet', `${head}^1`) ? `${head}^1` : null;
+  if (!base) return [];
+  const touched = new Set(
+    git(dir, 'diff', '--name-only', base, head)
+      .split('\n')
+      .map((p) => p.match(/^repos\/([^/]+)\//)?.[1])
+      .filter((ns): ns is string => Boolean(ns)),
+  );
+  const results: DistillResult[] = [];
+  for (const ns of touched) results.push(await distillNamespaceWithDedup(ns, env));
+  return results;
 }
 
 // ── serving the compiled artifacts (no-server read path) ─────────────────────
@@ -710,6 +932,13 @@ export interface BrainDeltaResult {
   cappedToWorking?: boolean;
   /** Compiled working set (only present when `cappedToWorking` is true). */
   working?: string;
+  /**
+   * Hard-budget auto-degrade fired (W2.2) but no per-repo working set existed
+   * to degrade TO (unscoped/cross-repo delta, or the repo hasn't been
+   * distilled yet) — the raw atoms/commits were truncated in place instead.
+   * Mutually exclusive with `cappedToWorking`.
+   */
+  cappedHard?: boolean;
   /** Approx token cost of the returned payload (~4 chars/token). */
   tokenEstimate: number;
 }
@@ -868,22 +1097,45 @@ export function brainDelta(
   // never capped just because a namespace's working.md happens to be small
   // too — this only fires once the raw payload is genuinely bloated relative
   // to what a returning boot should ever cost.
-  if (ns && r.tokenEstimate > DELTA_BUDGET_CHARS / 4) {
-    const working = readCompiledWorking(ns, env);
-    if (working !== undefined) {
-      const workingTok = estimateText(working);
-      if (r.tokenEstimate > workingTok) {
-        const capped: BrainDeltaResult = {
-          sha,
-          since: resolved,
-          brief: readCompiledBrief(ns, env),
-          working,
-          cappedToWorking: true,
-          tokenEstimate: 0,
-        };
-        capped.tokenEstimate = estimate(capped);
-        return capped;
+  //
+  // W2.2 (task-f58ce4c4, structurally closing the W2.1 gap): this check used
+  // to be gated on `ns` being set — an unscoped call (repo omitted, by design
+  // or by caller bug, exactly what W2.1 found) skipped it ENTIRELY and could
+  // grow without bound as `since` got stale. It now runs unconditionally: a
+  // scoped delta still degrades to that repo's actual compiled brief+working;
+  // an unscoped delta (or one whose repo was never distilled, so there's no
+  // working.md to compare against) instead gets hard-truncated in place
+  // against the generic DELTA_HARD_CAP_CHARS ceiling — either way, brain_delta
+  // can never structurally return more than the compiled working set again.
+  if (r.tokenEstimate > DELTA_BUDGET_CHARS / 4) {
+    const working = ns ? readCompiledWorking(ns, env) : undefined;
+    if (working !== undefined && r.tokenEstimate > estimateText(working)) {
+      recordDeltaDegrade({ at: new Date().toISOString(), repo: ns, rawTokens: r.tokenEstimate, mode: 'working' }, env);
+      const capped: BrainDeltaResult = {
+        sha,
+        since: resolved,
+        brief: readCompiledBrief(ns!, env),
+        working,
+        cappedToWorking: true,
+        tokenEstimate: 0,
+      };
+      capped.tokenEstimate = estimate(capped);
+      return capped;
+    }
+    if (working === undefined && r.tokenEstimate > DELTA_HARD_CAP_CHARS / 4) {
+      recordDeltaDegrade({ at: new Date().toISOString(), repo: ns, rawTokens: r.tokenEstimate, mode: 'hard' }, env);
+      // Drop newest-sorted atoms from the tail first (oldest survive — same
+      // "story reads forward" ordering as the build loop above), then commits,
+      // until the serialized payload is back under the hard ceiling.
+      while (r.atoms!.length && estimate(r) > DELTA_HARD_CAP_CHARS / 4) {
+        r.atoms!.pop();
       }
+      if (estimate(r) > DELTA_HARD_CAP_CHARS / 4) {
+        r.commits = r.commits!.slice(0, 1);
+      }
+      r.truncated = true;
+      r.cappedHard = true;
+      r.tokenEstimate = estimate(r);
     }
   }
 

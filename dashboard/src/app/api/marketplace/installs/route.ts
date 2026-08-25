@@ -3,9 +3,11 @@
 //   GET  → the calling tenant's installs (cookie-scoped, ADR-010)
 //   POST { slug, version? } → new install, driven through the specced gates:
 //          canInstall (listing published + version published) then the
-//          free-tier gate (paid pricing models → 402 until Stripe wiring
-//          lands). Free installs charge nothing and append no ledger rows —
-//          ADR-019 §4: `free` short-circuits all commerce.
+//          free-tier gate (paid pricing models → 402; use
+//          POST /api/marketplace/checkout instead, which starts a Stripe
+//          Checkout Session — ADR-019 §4 / checklist #3). Free installs
+//          charge nothing and append no ledger rows — ADR-019 §4: `free`
+//          short-circuits all commerce.
 import { NextRequest, NextResponse } from 'next/server';
 import { createInstall, listInstallsForTenant } from '@/lib/marketplace-store';
 import { DEFAULT_TENANT_ID, TENANT_COOKIE } from '@/lib/tenant-cookie';

@@ -127,6 +127,16 @@ export interface ListingVersion {
   createdAt: string;
 }
 
+/**
+ * Per-install auto-update preference (ADR-034 §3). `manual` (the default —
+ * every `Install` starts here) means even a diff-clean PATCH sits as a
+ * pending approval; `patch-auto` opts the install into silent PATCH-track
+ * apply, still gated by ADR-034 §2's capability-diff safety net. Auto-track
+ * eligibility is opt-in — there is no tenant-wide switch, only this per-
+ * install one.
+ */
+export type InstallUpdatePolicy = 'manual' | 'patch-auto';
+
 // ── Commerce axis ─────────────────────────────────────────
 
 export interface Install {
@@ -138,6 +148,15 @@ export interface Install {
   installedBy: string;          // userId
   pricePaidUsd: number;         // amount charged at install (0 for free)
   billingRef?: string;          // link to the billing/Stripe record
+  updatePolicy: InstallUpdatePolicy; // ADR-034 §3 — default 'manual'
+  /**
+   * A newer published version currently awaiting the tenant's explicit
+   * approval — set for any MINOR/MAJOR bump, or a PATCH the capability diff
+   * escalated (ADR-034 §2). `undefined` when nothing is pending, or a
+   * previously-pending version was withdrawn (e.g. yanked before approval,
+   * ADR-034 §4).
+   */
+  pendingVersion?: string;
   installedAt: string;
   updatedAt: string;
 }

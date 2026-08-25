@@ -19,6 +19,8 @@
     "test:coverage": "vitest run --coverage --exclude tests/unit/fleet-overview.test.ts --exclude tests/unit/obfuscate.test.ts --exclude tests/unit/recall-session.test.ts --exclude tests/unit/totp-mfa.test.ts",
     "eval:recall": "tsx src/eval/run-recall-eval.ts",
     "eval:recall:check": "tsx src/eval/run-recall-eval.ts --check",
+    "eval:brain-search": "tsx src/eval/run-brain-search-eval.ts",
+    "eval:brain-search:check": "tsx src/eval/run-brain-search-eval.ts --check",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist"
   },

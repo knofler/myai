@@ -10,12 +10,56 @@
  * them into a single ranked list, so "what have we done about X" doesn't
  * require knowing which repo-brain holds the answer.
  */
-import { isBrainRepo, resolveBrainDir } from './brain.js';
-import { scanAtoms, type ScannedAtom } from './entity.js';
+import { isBrainRepo, listPins, resolveBrainDir } from './brain.js';
+import { scanAtoms, stampToIso, type ScannedAtom } from './entity.js';
 import { recallSession } from '../memory/vector-store.js';
 
 const DEFAULT_ATOM_SCAN = 500;
 const SNIPPET_CHARS = 220;
+
+// ── age-decay recall weighting ────────────────────────────────────────────────
+//
+// Raw term-frequency ranks a stale atom that merely repeats the query term
+// above a fresh one that actually answers it. The decay weight multiplies the
+// keyword score by an exponential half-life over the atom's age, FLOORED so
+// old atoms fade in the ranking but never vanish (the store deletes nothing —
+// same principle as supersession/BRONZE). Pinned atoms (frontmatter `pin: true`
+// or the pins/ registry, see brain.ts) never decay: a load-bearing fact stays
+// fully recallable no matter how old it is.
+
+/** Days for a recall score to halve (env BRAIN_RECALL_HALF_LIFE_DAYS). */
+const DECAY_HALF_LIFE_DAYS = 30;
+/** Weight floor — stale atoms sink to this, never to zero (env BRAIN_RECALL_DECAY_FLOOR). */
+const DECAY_FLOOR = 0.15;
+const DAY_MS = 86_400_000;
+
+function decayConfig(env: NodeJS.ProcessEnv): { halfLifeDays: number; floor: number } {
+  const halfLife = Number(env.BRAIN_RECALL_HALF_LIFE_DAYS);
+  const floor = Number(env.BRAIN_RECALL_DECAY_FLOOR);
+  return {
+    halfLifeDays: Number.isFinite(halfLife) && halfLife > 0 ? halfLife : DECAY_HALF_LIFE_DAYS,
+    floor: Number.isFinite(floor) && floor >= 0 && floor <= 1 ? floor : DECAY_FLOOR,
+  };
+}
+
+/**
+ * Age-decay multiplier for one atom: 1.0 for pinned atoms, `0.5^(age/halfLife)`
+ * floored at DECAY_FLOOR otherwise. Unparseable/future stamps → 1.0 (an atom is
+ * never penalized for a malformed timestamp — conservative).
+ */
+export function recallAgeWeight(
+  written: string,
+  opts: { pinned?: boolean; now?: Date } = {},
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  if (opts.pinned) return 1;
+  const iso = stampToIso(written);
+  if (!iso) return 1;
+  const ageMs = (opts.now ?? new Date()).getTime() - Date.parse(iso);
+  if (!Number.isFinite(ageMs) || ageMs <= 0) return 1;
+  const { halfLifeDays, floor } = decayConfig(env);
+  return Math.max(floor, 0.5 ** (ageMs / (halfLifeDays * DAY_MS)));
+}
 
 export interface BrainSearchHit {
   kind: 'atom' | 'session';
@@ -23,6 +67,10 @@ export interface BrainSearchHit {
   score: number;
   snippet: string;
   written: string;
+  /** Atom hits only: never-drop pin (frontmatter or pins/ registry) — exempt from age decay. */
+  pinned?: boolean;
+  /** Atom hits only: the age-decay multiplier applied to the keyword score. */
+  decay?: number;
   /** Atom hits only: session | handoff | memory. */
   atomKind?: 'session' | 'handoff' | 'memory';
   /** Atom hits only: repo-relative path in the brain store. */
@@ -101,18 +149,29 @@ export function searchAtoms(
   const atomLimit = Math.min(Math.max(Math.trunc(opts.atomLimit || DEFAULT_ATOM_SCAN), 1), 5000);
   const { atoms, truncated } = scanAtoms(dir, { repo: opts.repo, atomLimit });
 
+  // Pins registry (content-addressed sha8s on main) — pinned atoms never decay.
+  const pinSet = new Set(listPins(env).map((p) => p.sha8));
+  const now = new Date();
+
   const scored = atoms
-    .map((atom) => ({ atom, score: scoreAtom(atom, terms) }))
-    .filter(({ score }) => score > 0)
+    .map((atom) => {
+      const raw = scoreAtom(atom, terms);
+      const pinned = Boolean(atom.pinned) || (atom.sha8 !== '' && pinSet.has(atom.sha8));
+      const decay = recallAgeWeight(atom.written, { pinned, now }, env);
+      return { atom, raw, pinned, decay, score: raw * decay };
+    })
+    .filter(({ raw }) => raw > 0)
     .sort((a, b) => b.score - a.score || b.atom.written.localeCompare(a.atom.written));
 
   const limit = Math.min(Math.max(Math.trunc(opts.limit || 10), 1), 100);
-  const hits: BrainSearchHit[] = scored.slice(0, limit).map(({ atom, score }) => ({
+  const hits: BrainSearchHit[] = scored.slice(0, limit).map(({ atom, score, pinned, decay }) => ({
     kind: 'atom',
     repo: atom.repo,
     score,
     snippet: snippetFor(atom.body, terms),
     written: atom.written,
+    pinned: pinned || undefined,
+    decay,
     atomKind: atom.atomKind,
     path: atom.path,
   }));

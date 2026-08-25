@@ -194,12 +194,12 @@ export default async function RevenuePage() {
                 return (
                   <div key={p.plan}>
                     <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="text-zinc-300">{PLAN_LABEL[p.plan]}</span>
-                      <span className="font-mono text-zinc-500">
+                      <span className="text-[rgb(var(--text-primary))]">{PLAN_LABEL[p.plan]}</span>
+                      <span className="font-mono text-[rgb(var(--text-muted))]">
                         {fmtUsd(p.mrr)}/mo · {p.logos} {p.logos === 1 ? 'logo' : 'logos'} · {share}%
                       </span>
                     </div>
-                    <div className="h-4 bg-zinc-950 rounded overflow-hidden">
+                    <div className="h-4 bg-[rgb(var(--bg-page))] rounded overflow-hidden">
                       <div className="h-full rounded bg-gradient-to-r from-teal-500/80 to-emerald-400/80" style={{ width: `${Math.max(w, 2)}%` }} />
                     </div>
                     <p className="text-[10px] text-zinc-600 mt-1 font-mono">
@@ -233,12 +233,12 @@ export default async function RevenuePage() {
         </Card>
 
         <Card title="How these are computed" accent="amber">
-          <div className="p-5 text-xs text-zinc-500 space-y-2">
-            <p><span className="text-zinc-300">MRR</span> sums the monthly-normalized price of every tenant on a paid plan with an <code className="text-zinc-400">active</code>/<code className="text-zinc-400">trialing</code> Stripe subscription. Annual plans contribute annual ÷ 12; <code className="text-zinc-400">past_due</code> (dunning grace) is excluded — matching the entitlement gate.</p>
-            <p><span className="text-zinc-300">NRR &amp; churn</span> compare the paying cohort at the start of the {WINDOW_DAYS}-day window against where those same accounts are now (expansion, contraction, and churn included).</p>
-            <p><span className="text-zinc-300">Blended LTV</span> = ARPA ÷ monthly logo-churn rate.</p>
-            <p className="text-zinc-600 pt-1 border-t border-zinc-800">
-              Starting MRR prefers the real snapshot from the nightly MRR-snapshot job closest to the window start; tenants with fewer than 2 persisted snapshots fall back to a reconstruction from current subscription state. Pricing defaults come from the roadmap and are overridable via <code className="text-zinc-400">MYAI_PRICE_*</code> env vars.
+          <div className="p-5 text-xs text-[rgb(var(--text-muted))] space-y-2">
+            <p><span className="text-[rgb(var(--text-primary))]">MRR</span> sums the monthly-normalized price of every tenant on a paid plan with an <code className="text-[rgb(var(--text-secondary))]">active</code>/<code className="text-[rgb(var(--text-secondary))]">trialing</code> Stripe subscription. Annual plans contribute annual ÷ 12; <code className="text-[rgb(var(--text-secondary))]">past_due</code> (dunning grace) is excluded — matching the entitlement gate.</p>
+            <p><span className="text-[rgb(var(--text-primary))]">NRR &amp; churn</span> compare the paying cohort at the start of the {WINDOW_DAYS}-day window against where those same accounts are now (expansion, contraction, and churn included).</p>
+            <p><span className="text-[rgb(var(--text-primary))]">Blended LTV</span> = ARPA ÷ monthly logo-churn rate.</p>
+            <p className="text-zinc-600 pt-1 border-t border-[rgb(var(--border-subtle))]">
+              Starting MRR prefers the real snapshot from the nightly MRR-snapshot job closest to the window start; tenants with fewer than 2 persisted snapshots fall back to a reconstruction from current subscription state. Pricing defaults come from the roadmap and are overridable via <code className="text-[rgb(var(--text-secondary))]">MYAI_PRICE_*</code> env vars.
             </p>
           </div>
         </Card>
@@ -250,8 +250,8 @@ export default async function RevenuePage() {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between">
-      <span className="text-zinc-400">{label}</span>
-      <span className="text-zinc-200">{value}</span>
+      <span className="text-[rgb(var(--text-secondary))]">{label}</span>
+      <span className="text-[rgb(var(--text-primary))]">{value}</span>
     </div>
   );
 }

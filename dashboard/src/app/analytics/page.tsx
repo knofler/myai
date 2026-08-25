@@ -15,6 +15,7 @@ import { getActiveTenant, tenantFilter } from '@/lib/tenant';
 import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
 import AutoRefresh from '@/components/auto-refresh';
+import Link from 'next/link';
 
 export const dynamic = 'force-dynamic';
 
@@ -372,7 +373,7 @@ export default async function AnalyticsPage() {
           accent="amber"
         >
           <div className="p-5 space-y-4">
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[rgb(var(--text-muted))]">
               Real token burn metered from every gateway call this month.{' '}
               <span className="text-amber-400">Cache-read dominates raw volume</span> — the compiled
               context re-read on every turn, billed at the cheap cached tier but enormous in count.
@@ -381,7 +382,7 @@ export default async function AnalyticsPage() {
               <EmptyState>No metered spend yet this month — burn fills in as calls flow through the gateway.</EmptyState>
             ) : (
               <>
-                <div className="flex h-3 w-full rounded overflow-hidden bg-zinc-950">
+                <div className="flex h-3 w-full rounded overflow-hidden bg-[rgb(var(--bg-page))]">
                   {burnRows.filter((r) => r.value > 0).map((r) => (
                     <div key={r.label} className={r.color} style={{ width: `${(r.value / burnTotal) * 100}%` }} title={`${r.label}: ${fmtTokens(r.value)}`} />
                   ))}
@@ -392,20 +393,20 @@ export default async function AnalyticsPage() {
                     return (
                       <div key={r.label} className="flex items-center gap-3 text-xs">
                         <span className={`w-2.5 h-2.5 rounded-sm ${r.color} shrink-0`} />
-                        <span className="text-zinc-300 w-24">{r.label}</span>
-                        <span className="font-mono text-zinc-400 w-16 text-right">{fmtTokens(r.value)}</span>
+                        <span className="text-[rgb(var(--text-primary))] w-24">{r.label}</span>
+                        <span className="font-mono text-[rgb(var(--text-secondary))] w-16 text-right">{fmtTokens(r.value)}</span>
                         <span className="font-mono text-zinc-600 w-12 text-right">{pct < 10 ? pct.toFixed(1) : Math.round(pct)}%</span>
                         <span className="text-zinc-600 truncate hidden sm:block">{r.note}</span>
                       </div>
                     );
                   })}
                 </div>
-                <div className="pt-3 border-t border-zinc-800">
+                <div className="pt-3 border-t border-[rgb(var(--border-subtle))]">
                   <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="text-zinc-400">Rolling {ROLLING_WINDOW_HOURS}h output vs budget</span>
-                    <span className="font-mono text-zinc-300">{fmtTokens(rollingOutput)} / {fmtTokens(ROLLING_OUTPUT_BUDGET)} · {rollingPct}%</span>
+                    <span className="text-[rgb(var(--text-secondary))]">Rolling {ROLLING_WINDOW_HOURS}h output vs budget</span>
+                    <span className="font-mono text-[rgb(var(--text-primary))]">{fmtTokens(rollingOutput)} / {fmtTokens(ROLLING_OUTPUT_BUDGET)} · {rollingPct}%</span>
                   </div>
-                  <div className="h-2 bg-zinc-950 rounded-full overflow-hidden">
+                  <div className="h-2 bg-[rgb(var(--bg-page))] rounded-full overflow-hidden">
                     <div className={`h-full rounded-full ${rollingColor}`} style={{ width: `${Math.max(rollingPct, 1)}%` }} />
                   </div>
                 </div>
@@ -421,36 +422,36 @@ export default async function AnalyticsPage() {
           accent="emerald"
         >
           <div className="p-5">
-            <p className="text-xs text-zinc-500 mb-4">
-              Every session start the brain serves a compiled <code className="text-zinc-400">context_boot</code> brief
-              or <code className="text-zinc-400">brain_delta</code> diff instead of re-reading the full state files.
+            <p className="text-xs text-[rgb(var(--text-muted))] mb-4">
+              Every session start the brain serves a compiled <code className="text-[rgb(var(--text-secondary))]">context_boot</code> brief
+              or <code className="text-[rgb(var(--text-secondary))]">brain_delta</code> diff instead of re-reading the full state files.
               Served vs the legacy file-boot baseline:
             </p>
             <div className="flex items-center gap-6">
               <div className="text-center shrink-0">
                 <p className="text-5xl font-bold text-emerald-400">{bootSavedPct > 0 ? `${bootSavedPct}%` : '—'}</p>
-                <p className="text-xs text-zinc-500 mt-1">fewer tokens per boot</p>
+                <p className="text-xs text-[rgb(var(--text-muted))] mt-1">fewer tokens per boot</p>
                 {bootMultiplier > 1 && <p className="text-xs text-zinc-600 mt-1 font-mono">×{bootMultiplier} cheaper</p>}
               </div>
               <div className="flex-1 space-y-3">
                 <div>
                   <div className="flex justify-between text-xs mb-1">
-                    <span className="text-zinc-400">Legacy file-boot</span>
-                    <span className="font-mono text-zinc-300">~{fmtTokens(legacyAvg)}{legacyMeasured ? '' : ' est.'}</span>
+                    <span className="text-[rgb(var(--text-secondary))]">Legacy file-boot</span>
+                    <span className="font-mono text-[rgb(var(--text-primary))]">~{fmtTokens(legacyAvg)}{legacyMeasured ? '' : ' est.'}</span>
                   </div>
-                  <div className="h-4 bg-zinc-950 rounded overflow-hidden"><div className="h-full rounded bg-zinc-600" style={{ width: '100%' }} /></div>
+                  <div className="h-4 bg-[rgb(var(--bg-page))] rounded overflow-hidden"><div className="h-full rounded bg-zinc-600" style={{ width: '100%' }} /></div>
                 </div>
                 <div>
                   <div className="flex justify-between text-xs mb-1">
-                    <span className="text-zinc-400">Brain-delta boot</span>
+                    <span className="text-[rgb(var(--text-secondary))]">Brain-delta boot</span>
                     <span className="font-mono text-emerald-400">{brainAvg > 0 ? `~${fmtTokens(brainAvg)}` : '—'}</span>
                   </div>
-                  <div className="h-4 bg-zinc-950 rounded overflow-hidden"><div className="h-full rounded bg-gradient-to-r from-teal-500/80 to-emerald-400/80" style={{ width: `${brainBarPct}%` }} /></div>
+                  <div className="h-4 bg-[rgb(var(--bg-page))] rounded overflow-hidden"><div className="h-full rounded bg-gradient-to-r from-teal-500/80 to-emerald-400/80" style={{ width: `${brainBarPct}%` }} /></div>
                 </div>
               </div>
             </div>
-            <div className="pt-3 mt-4 border-t border-zinc-800 flex items-center justify-between text-xs">
-              <span className="text-zinc-400">Cold-start tokens saved</span>
+            <div className="pt-3 mt-4 border-t border-[rgb(var(--border-subtle))] flex items-center justify-between text-xs">
+              <span className="text-[rgb(var(--text-secondary))]">Cold-start tokens saved</span>
               <span className="font-mono text-emerald-400">{fmtTokens(contMonth.tokens)} this month · {fmtTokens(contAll.tokens)} all-time</span>
             </div>
           </div>
@@ -482,7 +483,7 @@ export default async function AnalyticsPage() {
                 const isToday = d.date === dates[dates.length - 1];
                 return (
                   <div key={d.date} className="flex-1 flex flex-col items-center gap-1 group">
-                    <span className="text-[10px] font-mono text-zinc-500 group-hover:text-zinc-300">{d.count > 0 ? d.count : ''}</span>
+                    <span className="text-[10px] font-mono text-[rgb(var(--text-muted))] group-hover:text-[rgb(var(--text-primary))]">{d.count > 0 ? d.count : ''}</span>
                     <div className="w-full flex items-end justify-center" style={{ height: '110px' }}>
                       <div
                         className={`w-full rounded-t ${isToday ? 'bg-teal-400/70' : 'bg-teal-600/40'} group-hover:bg-teal-400/70 transition-colors`}
@@ -504,17 +505,17 @@ export default async function AnalyticsPage() {
         <Card title="Plan progress per repo" meta={`${planRepos.length} repos planned`}>
           <div className="p-5 space-y-3 max-h-[26rem] overflow-y-auto">
             {planRepos.length === 0 ? (
-              <EmptyState>No 10-day plans yet. Set one with <code className="text-zinc-400">schedule plan</code>.</EmptyState>
+              <EmptyState>No 10-day plans yet. Set one with <code className="text-[rgb(var(--text-secondary))]">schedule plan</code>.</EmptyState>
             ) : (
               planRepos.map(([repo, { done, total }]) => {
                 const pct = total > 0 ? Math.round((done / total) * 100) : 0;
                 return (
                   <div key={repo}>
                     <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="font-mono text-zinc-300 truncate">{repo}</span>
-                      <span className="text-zinc-500">{done}/{total} · {pct}%</span>
+                      <span className="font-mono text-[rgb(var(--text-primary))] truncate">{repo}</span>
+                      <span className="text-[rgb(var(--text-muted))]">{done}/{total} · {pct}%</span>
                     </div>
-                    <div className="h-2 bg-zinc-950 rounded-full overflow-hidden">
+                    <div className="h-2 bg-[rgb(var(--bg-page))] rounded-full overflow-hidden">
                       <div className="h-full rounded-full bg-gradient-to-r from-teal-500/70 to-emerald-400/70" style={{ width: `${pct}%` }} />
                     </div>
                   </div>
@@ -528,32 +529,32 @@ export default async function AnalyticsPage() {
         <Card title="Runner activity" meta={`${schedules.filter((s) => s.enabled).length} schedules enabled`} accent="blue">
           <div className="p-5 space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-lg bg-zinc-950/60 border border-zinc-800 p-3">
-                <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Sessions</p>
-                <p className="text-2xl font-bold text-zinc-100 mt-1">{sessionTotal}</p>
-                <p className="text-xs text-zinc-500 mt-1">{sessionClosed} closed</p>
+              <div className="rounded-lg bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] p-3">
+                <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider">Sessions</p>
+                <p className="text-2xl font-bold text-[rgb(var(--text-primary))] mt-1">{sessionTotal}</p>
+                <p className="text-xs text-[rgb(var(--text-muted))] mt-1">{sessionClosed} closed</p>
               </div>
-              <div className="rounded-lg bg-zinc-950/60 border border-zinc-800 p-3">
-                <p className="text-[11px] text-zinc-500 uppercase tracking-wider">Schedule runs</p>
-                <p className="text-2xl font-bold text-zinc-100 mt-1">{totalRuns}</p>
-                <p className="text-xs text-zinc-500 mt-1">{totalErrs} errors</p>
+              <div className="rounded-lg bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] p-3">
+                <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider">Schedule runs</p>
+                <p className="text-2xl font-bold text-[rgb(var(--text-primary))] mt-1">{totalRuns}</p>
+                <p className="text-xs text-[rgb(var(--text-muted))] mt-1">{totalErrs} errors</p>
               </div>
             </div>
             <div>
               <div className="flex items-center justify-between text-xs mb-1">
-                <span className="text-zinc-400">Runner success rate</span>
-                <span className="text-zinc-300">{runnerRate}%</span>
+                <span className="text-[rgb(var(--text-secondary))]">Runner success rate</span>
+                <span className="text-[rgb(var(--text-primary))]">{runnerRate}%</span>
               </div>
-              <div className="h-2 bg-zinc-950 rounded-full overflow-hidden">
+              <div className="h-2 bg-[rgb(var(--bg-page))] rounded-full overflow-hidden">
                 <div className={`h-full rounded-full ${runnerRate >= 90 ? 'bg-emerald-400/70' : 'bg-yellow-400/70'}`} style={{ width: `${runnerRate}%` }} />
               </div>
             </div>
             <div>
               <div className="flex items-center justify-between text-xs mb-1">
-                <span className="text-zinc-400">Task success rate</span>
-                <span className="text-zinc-300">{successRate}%</span>
+                <span className="text-[rgb(var(--text-secondary))]">Task success rate</span>
+                <span className="text-[rgb(var(--text-primary))]">{successRate}%</span>
               </div>
-              <div className="h-2 bg-zinc-950 rounded-full overflow-hidden">
+              <div className="h-2 bg-[rgb(var(--bg-page))] rounded-full overflow-hidden">
                 <div className={`h-full rounded-full ${successRate >= 90 ? 'bg-emerald-400/70' : 'bg-yellow-400/70'}`} style={{ width: `${successRate}%` }} />
               </div>
             </div>
@@ -569,11 +570,11 @@ export default async function AnalyticsPage() {
             const isToday = d._id === dates[dates.length - 1];
             return (
               <div key={d._id} className="flex items-center gap-3 text-xs font-mono">
-                <span className={`w-14 text-right ${isToday ? 'text-teal-400' : 'text-zinc-500'}`}>{d._id.slice(5)}</span>
-                <div className="flex-1 h-4 bg-zinc-950 rounded overflow-hidden relative">
+                <span className={`w-14 text-right ${isToday ? 'text-teal-400' : 'text-[rgb(var(--text-muted))]'}`}>{d._id.slice(5)}</span>
+                <div className="flex-1 h-4 bg-[rgb(var(--bg-page))] rounded overflow-hidden relative">
                   <div className={`absolute left-0 top-0 h-full rounded ${isToday ? 'bg-teal-400/60' : 'bg-zinc-600'}`} style={{ width: `${w}%` }} />
                 </div>
-                <span className={`w-16 text-right ${d.cost > 0 ? 'text-zinc-300' : 'text-zinc-700'}`}>{d.cost > 0 ? fmtUsd(d.cost) : '—'}</span>
+                <span className={`w-16 text-right ${d.cost > 0 ? 'text-[rgb(var(--text-primary))]' : 'text-zinc-700'}`}>{d.cost > 0 ? fmtUsd(d.cost) : '—'}</span>
                 <span className="w-10 text-right text-zinc-600">{d.calls > 0 ? d.calls : ''}</span>
               </div>
             );
@@ -592,10 +593,10 @@ export default async function AnalyticsPage() {
           accent="emerald"
         >
           <div className="p-5">
-            <p className="text-xs text-zinc-500 mb-5">
+            <p className="text-xs text-[rgb(var(--text-muted))] mb-5">
               Tokens-to-productive per session start. The legacy path re-reads the full state files every boot
-              (CLAUDE.md, STATE.md, handoff, rules); the brain path serves a compiled <code className="text-zinc-400">context_boot</code> brief
-              or <code className="text-zinc-400">brain_delta</code> diff instead.{' '}
+              (CLAUDE.md, STATE.md, handoff, rules); the brain path serves a compiled <code className="text-[rgb(var(--text-secondary))]">context_boot</code> brief
+              or <code className="text-[rgb(var(--text-secondary))]">brain_delta</code> diff instead.{' '}
               {legacyMeasured
                 ? 'Legacy bar is measured from live file sizes at serve time.'
                 : 'Legacy bar is the documented ~60k estimate until a measured baseline lands.'}
@@ -604,23 +605,23 @@ export default async function AnalyticsPage() {
               <div className="flex-1 space-y-4">
                 <div>
                   <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="text-zinc-400">Today — legacy file-read boot</span>
-                    <span className="font-mono text-zinc-300">
+                    <span className="text-[rgb(var(--text-secondary))]">Today — legacy file-read boot</span>
+                    <span className="font-mono text-[rgb(var(--text-primary))]">
                       ~{fmtTokens(legacyAvg)}{legacyMeasured ? '' : ' est.'}
                     </span>
                   </div>
-                  <div className="h-5 bg-zinc-950 rounded overflow-hidden">
+                  <div className="h-5 bg-[rgb(var(--bg-page))] rounded overflow-hidden">
                     <div className="h-full rounded bg-zinc-600" style={{ width: '100%' }} />
                   </div>
                 </div>
                 <div>
                   <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="text-zinc-400">Brain — context_boot / brain_delta</span>
+                    <span className="text-[rgb(var(--text-secondary))]">Brain — context_boot / brain_delta</span>
                     <span className="font-mono text-emerald-400">
                       {brainAvg > 0 ? `~${fmtTokens(brainAvg)}` : '—'}
                     </span>
                   </div>
-                  <div className="h-5 bg-zinc-950 rounded overflow-hidden">
+                  <div className="h-5 bg-[rgb(var(--bg-page))] rounded overflow-hidden">
                     <div className="h-full rounded bg-gradient-to-r from-teal-500/80 to-emerald-400/80" style={{ width: `${brainBarPct}%` }} />
                   </div>
                 </div>
@@ -629,7 +630,7 @@ export default async function AnalyticsPage() {
                 {bootMultiplier > 1 ? (
                   <>
                     <p className="text-4xl font-bold text-emerald-400">×{bootMultiplier}</p>
-                    <p className="text-xs text-zinc-500 mt-1">cheaper per session start</p>
+                    <p className="text-xs text-[rgb(var(--text-muted))] mt-1">cheaper per session start</p>
                     <p className="text-xs text-zinc-600 mt-2 font-mono">−{fmtTokens(legacyAvg - brainAvg)}/boot</p>
                   </>
                 ) : (
@@ -651,10 +652,13 @@ export default async function AnalyticsPage() {
           accent="emerald"
         >
           <div className="p-5">
-            <p className="text-xs text-zinc-500 mb-5">
-              The onboarding funnel, first-touch per tenant: <code className="text-zinc-400">signup → init → first brain boot → first brain delta → continuity aha</code>.
+            <p className="text-xs text-[rgb(var(--text-muted))] mb-5">
+              The onboarding funnel, first-touch per tenant: <code className="text-[rgb(var(--text-secondary))]">signup → init → first brain boot → first brain delta → continuity aha</code>.
               Privacy-respecting — no third-party tracker; every step is derived from data already flowing through the gateway.
-              Bars show the share of signed-up tenants that reached each step.
+              Bars show the share of signed-up tenants that reached each step.{' '}
+              <Link href="/analytics/funnel" className="text-teal-400 hover:text-teal-300">
+                Per-stage drop-off + signup cohorts →
+              </Link>
             </p>
             {!funnelHasData ? (
               <p className="text-xs text-zinc-600 text-center py-6">
@@ -665,13 +669,13 @@ export default async function AnalyticsPage() {
                 {funnel.map((f, i) => (
                   <div key={f.step}>
                     <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="text-zinc-300">{f.label}</span>
-                      <span className="font-mono text-zinc-500">
+                      <span className="text-[rgb(var(--text-primary))]">{f.label}</span>
+                      <span className="font-mono text-[rgb(var(--text-muted))]">
                         {f.tenants} {f.tenants === 1 ? 'tenant' : 'tenants'} · {f.pctOfSignup}%
                         {i > 0 && <span className="text-zinc-600"> · {f.stepConversion}% step conv.</span>}
                       </span>
                     </div>
-                    <div className="h-4 bg-zinc-950 rounded overflow-hidden">
+                    <div className="h-4 bg-[rgb(var(--bg-page))] rounded overflow-hidden">
                       <div
                         className={`h-full rounded ${i === funnel.length - 1 ? 'bg-gradient-to-r from-teal-500/80 to-emerald-400/80' : 'bg-teal-600/50'}`}
                         style={{ width: `${Math.max(f.pctOfSignup, f.tenants > 0 ? 2 : 0)}%` }}
@@ -679,8 +683,8 @@ export default async function AnalyticsPage() {
                     </div>
                   </div>
                 ))}
-                <div className="pt-3 mt-1 border-t border-zinc-800 flex items-center justify-between">
-                  <span className="text-xs text-zinc-400">Activation rate (reached continuity aha)</span>
+                <div className="pt-3 mt-1 border-t border-[rgb(var(--border-subtle))] flex items-center justify-between">
+                  <span className="text-xs text-[rgb(var(--text-secondary))]">Activation rate (reached continuity aha)</span>
                   <span className="text-2xl font-bold text-emerald-400">{activationRate}%</span>
                 </div>
               </div>
@@ -699,9 +703,9 @@ export default async function AnalyticsPage() {
           accent="blue"
         >
           <div className="p-5">
-            <p className="text-xs text-zinc-500 mb-5">
+            <p className="text-xs text-[rgb(var(--text-muted))] mb-5">
               The plain sellable-product question, distinct from the continuity-aha funnel above:
-              <code className="text-zinc-400"> signup → init → first task shipped → retained (2nd task shipped)</code>.
+              <code className="text-[rgb(var(--text-secondary))]"> signup → init → first task shipped → retained (2nd task shipped)</code>.
               This is how self-serve onboarding conversion is tracked — did a signup get real product value, and did they come back for more?
             </p>
             {!selfServeHasData ? (
@@ -713,13 +717,13 @@ export default async function AnalyticsPage() {
                 {selfServeFunnel.map((f, i) => (
                   <div key={f.key}>
                     <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="text-zinc-300">{f.label}</span>
-                      <span className="font-mono text-zinc-500">
+                      <span className="text-[rgb(var(--text-primary))]">{f.label}</span>
+                      <span className="font-mono text-[rgb(var(--text-muted))]">
                         {f.tenants} {f.tenants === 1 ? 'tenant' : 'tenants'} · {f.pctOfSignup}%
                         {i > 0 && <span className="text-zinc-600"> · {f.stepConversion}% step conv.</span>}
                       </span>
                     </div>
-                    <div className="h-4 bg-zinc-950 rounded overflow-hidden">
+                    <div className="h-4 bg-[rgb(var(--bg-page))] rounded overflow-hidden">
                       <div
                         className={`h-full rounded ${i === selfServeFunnel.length - 1 ? 'bg-gradient-to-r from-teal-500/80 to-cyan-400/80' : 'bg-teal-600/50'}`}
                         style={{ width: `${Math.max(f.pctOfSignup, f.tenants > 0 ? 2 : 0)}%` }}
@@ -727,8 +731,8 @@ export default async function AnalyticsPage() {
                     </div>
                   </div>
                 ))}
-                <div className="pt-3 mt-1 border-t border-zinc-800 flex items-center justify-between">
-                  <span className="text-xs text-zinc-400">Conversion rate (retained ÷ signed up)</span>
+                <div className="pt-3 mt-1 border-t border-[rgb(var(--border-subtle))] flex items-center justify-between">
+                  <span className="text-xs text-[rgb(var(--text-secondary))]">Conversion rate (retained ÷ signed up)</span>
                   <span className="text-2xl font-bold text-teal-400">{conversionRate}%</span>
                 </div>
               </div>
@@ -741,8 +745,8 @@ export default async function AnalyticsPage() {
       <div className="mt-8">
         <Card title="Continuity — cold-start tokens saved" meta={`${fmtTokens(contMonth.tokens)} this month · ${contMonth.boots} boots · ~${fmtTokens(contAvg)}/boot`} accent="emerald">
           <div className="p-5">
-            <p className="text-xs text-zinc-500 mb-4">
-              Every <code className="text-zinc-400">context_boot</code> / <code className="text-zinc-400">memory_context</code> block the gateway serves is context an agent did not have to be re-taught by hand. Bars show tokens served per day ({N}d).
+            <p className="text-xs text-[rgb(var(--text-muted))] mb-4">
+              Every <code className="text-[rgb(var(--text-secondary))]">context_boot</code> / <code className="text-[rgb(var(--text-secondary))]">memory_context</code> block the gateway serves is context an agent did not have to be re-taught by hand. Bars show tokens served per day ({N}d).
             </p>
             <div className="flex items-end gap-1 h-32">
               {contSeries.map((d) => {
@@ -750,7 +754,7 @@ export default async function AnalyticsPage() {
                 const isToday = d._id === dates[dates.length - 1];
                 return (
                   <div key={d._id} className="flex-1 flex flex-col items-center gap-1 group">
-                    <span className="text-[10px] font-mono text-zinc-500 group-hover:text-zinc-300">{d.tokens > 0 ? fmtTokens(d.tokens) : ''}</span>
+                    <span className="text-[10px] font-mono text-[rgb(var(--text-muted))] group-hover:text-[rgb(var(--text-primary))]">{d.tokens > 0 ? fmtTokens(d.tokens) : ''}</span>
                     <div className="w-full flex items-end justify-center" style={{ height: '84px' }}>
                       <div
                         className={`w-full rounded-t ${isToday ? 'bg-emerald-400/70' : 'bg-emerald-600/40'} group-hover:bg-emerald-400/70 transition-colors`}
@@ -775,15 +779,15 @@ export default async function AnalyticsPage() {
           accent="blue"
         >
           <div className="p-5">
-            <p className="text-xs text-zinc-500 mb-4">
-              Every MCP tool call is timed at the gateway <code className="text-zinc-400">executeTool</code> chokepoint.
+            <p className="text-xs text-[rgb(var(--text-muted))] mb-4">
+              Every MCP tool call is timed at the gateway <code className="text-[rgb(var(--text-secondary))]">executeTool</code> chokepoint.
               Per-tool p95 / p99 over the recent sample window, slowest first. Resets on gateway restart.
             </p>
             {perfTools.length === 0 ? (
               <EmptyState>No calls metered yet — latency fills in as tools are invoked (needs a gateway rebuild to activate the meter).</EmptyState>
             ) : (
               <div className="space-y-1">
-                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-600 pb-1 border-b border-zinc-800">
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-600 pb-1 border-b border-[rgb(var(--border-subtle))]">
                   <span className="flex-1">Tool</span>
                   <span className="w-12 text-right">calls</span>
                   <span className="w-14 text-right">p95</span>
@@ -792,10 +796,10 @@ export default async function AnalyticsPage() {
                 </div>
                 {perfTools.map((t) => (
                   <div key={t.tool} className="flex items-center gap-2 text-xs font-mono">
-                    <span className="flex-1 truncate text-zinc-300">{t.tool}</span>
-                    <span className="w-12 text-right text-zinc-500">{t.count}</span>
-                    <span className={`w-14 text-right ${t.p95Ms >= slowThreshold ? 'text-amber-400' : 'text-zinc-300'}`}>{t.p95Ms}ms</span>
-                    <span className="w-14 text-right text-zinc-500">{t.p99Ms}ms</span>
+                    <span className="flex-1 truncate text-[rgb(var(--text-primary))]">{t.tool}</span>
+                    <span className="w-12 text-right text-[rgb(var(--text-muted))]">{t.count}</span>
+                    <span className={`w-14 text-right ${t.p95Ms >= slowThreshold ? 'text-amber-400' : 'text-[rgb(var(--text-primary))]'}`}>{t.p95Ms}ms</span>
+                    <span className="w-14 text-right text-[rgb(var(--text-muted))]">{t.p99Ms}ms</span>
                     <span className={`w-12 text-right ${t.slow > 0 ? 'text-amber-400' : 'text-zinc-700'}`}>{t.slow}</span>
                   </div>
                 ))}
@@ -810,8 +814,8 @@ export default async function AnalyticsPage() {
           accent="amber"
         >
           <div className="p-5">
-            <p className="text-xs text-zinc-500 mb-4">
-              The most recent tool calls at or over the slow threshold (<code className="text-zinc-400">MYAI_SLOW_QUERY_MS</code>, default 500ms), newest first.
+            <p className="text-xs text-[rgb(var(--text-muted))] mb-4">
+              The most recent tool calls at or over the slow threshold (<code className="text-[rgb(var(--text-secondary))]">MYAI_SLOW_QUERY_MS</code>, default 500ms), newest first.
             </p>
             {slowQueries.length === 0 ? (
               <EmptyState>No slow calls recorded — every metered call has been under {slowThreshold}ms.</EmptyState>
@@ -820,7 +824,7 @@ export default async function AnalyticsPage() {
                 {slowQueries.map((q, i) => (
                   <div key={`${q.tool}-${q.at}-${i}`} className="flex items-center gap-3 text-xs font-mono">
                     <span className={`w-14 text-right ${q.error ? 'text-red-400' : 'text-amber-400'}`}>{q.ms}ms</span>
-                    <span className="flex-1 truncate text-zinc-300">{q.tool}{q.error && <span className="text-red-400"> ⚠</span>}</span>
+                    <span className="flex-1 truncate text-[rgb(var(--text-primary))]">{q.tool}{q.error && <span className="text-red-400"> ⚠</span>}</span>
                   </div>
                 ))}
               </div>

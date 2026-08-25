@@ -79,6 +79,27 @@ simulation: host A writes + merges sessions and pushes; host B uses ONLY
 `git clone`/`git pull` + file reads (no runtime sourced) and asserts the
 compiled brief/working files, atom content, and freshness are all readable.
 
+### `myai boot [--offline] [--working]` — the same read, automated (BRAIN W4.3)
+
+`myai boot` (`scripts/myai_boot.sh`) is the deterministic, zero-LLM-token
+session boot — and its "brain" step IS this layer's manual recipe, scripted:
+it locates the current repo's namespace (`repos/<slug>` off `brain_dir()`)
+and `cat`s `brief.md` straight off disk — no HTTP call, no MCP round-trip, no
+Docker. `--working` also prints the fuller `working.md`.
+
+`--offline` goes one step further for the travelling-operator case (no
+gateway, no runner machine reachable at all): it skips the git fetch and the
+two gateway-backed banner steps (schedule/remote-control) entirely, so the
+whole boot is guaranteed to complete even with the stack fully down, instead
+of degrading to bounded (4s) curl timeouts per gateway-backed step.
+
+**Test:** `scripts/tests/test_myai_boot_offline.sh` — seeds an isolated brain
+with a compiled brief carrying a marker, points `MCP_PORT` at a closed port,
+and asserts `myai boot --offline` exits 0, prints the marker (proving the
+disk read, not a gateway call), and skips the schedule/remote banners; a
+second run without `--offline` confirms the brief still surfaces in the
+default path.
+
 ## `myai doctor` — offline preflight
 
 `myai doctor` (bin/myai.cjs) now reports, warn-only (offline is a *supported*

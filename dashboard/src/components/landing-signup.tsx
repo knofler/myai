@@ -10,27 +10,48 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useTenant } from '@/lib/tenant-context';
+import { ConsentCheckbox } from '@/components/consent-checkbox';
 
 export function LandingSignup() {
   const router = useRouter();
   const { signup } = useTenant();
+  // GROWTH — referral program: a tracked invite link lands here as
+  // `/welcome?ref=<code>`. Read directly off `window.location` (rather than
+  // `useSearchParams`, which forces a Suspense boundary on this page) once at
+  // mount and threaded through to signup; an absent/invalid code is a no-op
+  // on the gateway.
+  const [referralCode] = useState<string | undefined>(() =>
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('ref') || undefined : undefined,
+  );
+  // Design-partner program (GRAND_PRODUCT §7.4): a `?trial=<code>` link
+  // redeems a trial_days gift code at signup (e.g. a 60-day Solo trial).
+  // Same read-once-at-mount posture as referralCode above.
+  const [trialCode] = useState<string | undefined>(() =>
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('trial') || undefined : undefined,
+  );
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // Click-wrap consent — required before the form submits. Forwarded as
+  // acceptTerms so the gateway records the accepted document versions +
+  // timestamp per tenant (core/legal.ts).
+  const [agreed, setAgreed] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newKey, setNewKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [trialEndsAt, setTrialEndsAt] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const { apiKey } = await signup({ name: name.trim(), email: email.trim(), password });
+      const { apiKey, trialEndsAt: endsAt } = await signup({ name: name.trim(), email: email.trim(), password, referralCode, trialCode, acceptTerms: agreed });
       setNewKey(apiKey ?? null); // always present here (no inviteToken)
+      setTrialEndsAt(endsAt ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'signup failed');
     } finally {
@@ -50,18 +71,23 @@ export function LandingSignup() {
   }
 
   const inputCls =
-    'w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-100 placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
+    'w-full px-3 py-2 rounded-lg bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
 
   if (newKey) {
     return (
       <div className="gel-surface p-5 rounded-2xl border border-amber-700/40">
-        <h3 className="text-lg font-semibold text-zinc-100">You&apos;re in. 🎉</h3>
-        <p className="text-sm text-zinc-400 mt-1">
+        <h3 className="text-lg font-semibold text-[rgb(var(--text-primary))]">You&apos;re in. 🎉</h3>
+        {trialEndsAt && (
+          <p className="text-sm text-teal-300 mt-1">
+            Design-partner trial active — Solo tier through {new Date(trialEndsAt).toLocaleDateString()}.
+          </p>
+        )}
+        <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">
           Your account is ready and you&apos;re signed in. This is your tenant API key for connecting a tool or the
-          CLI — copy it now, it is shown <strong className="text-zinc-200">only once</strong> and cannot be retrieved
+          CLI — copy it now, it is shown <strong className="text-[rgb(var(--text-primary))]">only once</strong> and cannot be retrieved
           later.
         </p>
-        <code className="block mt-4 px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-teal-300 break-all font-mono select-all">
+        <code className="block mt-4 px-3 py-2 rounded-lg bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] text-xs text-teal-300 break-all font-mono select-all">
           {newKey}
         </code>
         <button
@@ -76,7 +102,7 @@ export function LandingSignup() {
         </p>
         <button
           onClick={() => router.push('/')}
-          className="mt-4 w-full px-3 py-2 rounded-lg border border-zinc-800 text-sm text-zinc-200 hover:border-zinc-700 transition"
+          className="mt-4 w-full px-3 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
         >
           Open my dashboard →
         </button>
@@ -85,10 +111,10 @@ export function LandingSignup() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="gel-surface p-5 rounded-2xl border border-zinc-800 space-y-3">
+    <form onSubmit={onSubmit} className="gel-surface p-5 rounded-2xl border border-[rgb(var(--border-subtle))] space-y-3">
       <div>
-        <h3 className="text-lg font-semibold text-zinc-100">Start free in 30 seconds</h3>
-        <p className="text-sm text-zinc-500 mt-0.5">No credit card. Sign in with your email after.</p>
+        <h3 className="text-lg font-semibold text-[rgb(var(--text-primary))]">Start free in 30 seconds</h3>
+        <p className="text-sm text-[rgb(var(--text-muted))] mt-0.5">No credit card. Sign in with your email after.</p>
       </div>
 
       {error && (
@@ -98,7 +124,7 @@ export function LandingSignup() {
       )}
 
       <label className="block">
-        <span className="block text-xs text-zinc-500 mb-1">Organisation name</span>
+        <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Organisation name</span>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -108,7 +134,7 @@ export function LandingSignup() {
         />
       </label>
       <label className="block">
-        <span className="block text-xs text-zinc-500 mb-1">Email</span>
+        <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Email</span>
         <input
           type="email"
           autoComplete="email"
@@ -120,7 +146,7 @@ export function LandingSignup() {
         />
       </label>
       <label className="block">
-        <span className="block text-xs text-zinc-500 mb-1">Password</span>
+        <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Password</span>
         <input
           type="password"
           autoComplete="new-password"
@@ -132,16 +158,17 @@ export function LandingSignup() {
           required
         />
       </label>
+      <ConsentCheckbox checked={agreed} onChange={setAgreed} />
       <button
         type="submit"
-        disabled={busy || !name.trim() || !email.trim() || password.length < 8}
+        disabled={busy || !name.trim() || !email.trim() || password.length < 8 || !agreed}
         className="gel-brand w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-teal-100 hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition"
       >
         {busy ? 'Creating your account…' : 'Create my account →'}
       </button>
       <p className="text-center text-xs text-zinc-600">
         Already have an account?{' '}
-        <Link href="/login" className="text-teal-400 hover:text-teal-300">
+        <Link href="/operator-login" className="text-teal-400 hover:text-teal-300">
           Sign in
         </Link>
       </p>

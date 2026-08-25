@@ -83,15 +83,15 @@ export function DataTable({
   };
 
   return (
-    <section className="gel-surface bg-zinc-900/70 border border-zinc-800 rounded-xl overflow-hidden">
-      <div className="px-4 py-3 border-b border-zinc-800/80 flex flex-wrap items-center gap-3">
-        <h2 className="text-sm font-semibold text-zinc-200">{title}</h2>
+    <section className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))]/80 flex flex-wrap items-center gap-3">
+        <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">{title}</h2>
         {searchable && (
           <div className="flex-1 min-w-[200px] max-w-md">
             <SearchInput value={query} onChange={setQuery} placeholder={searchPlaceholder} />
           </div>
         )}
-        <span className="ml-auto text-xs text-zinc-500">
+        <span className="ml-auto text-xs text-[rgb(var(--text-muted))]">
           {meta ?? `${visible.length}${query ? ` of ${rows.length}` : ''} rows`}
         </span>
       </div>
@@ -103,7 +103,7 @@ export function DataTable({
         <>
         {/* Mobile (below md): one tappable card per row, key fields up top,
             secondary fields revealed on tap. Zero horizontal scroll. */}
-        <div className="md:hidden divide-y divide-zinc-800/50">
+        <div className="md:hidden divide-y divide-[rgb(var(--border-subtle))]/50">
           {visible.map((r) => {
             const badges = r.cells.map((c, i) => ({ c, role: mobileRole(columns[i], i), col: columns[i] })).filter((x) => x.role === 'badge');
             const title = r.cells.map((c, i) => ({ c, role: mobileRole(columns[i], i) })).find((x) => x.role === 'title');
@@ -113,10 +113,10 @@ export function DataTable({
               <details key={r.id} className="group px-4 py-3">
                 <summary className="tap-press flex items-start gap-2 cursor-pointer list-none min-h-[44px] [&::-webkit-details-marker]:hidden">
                   <div className="flex flex-wrap items-center gap-1.5 shrink-0">{badges.map((b, i) => <span key={i}>{b.c}</span>)}</div>
-                  <div className="min-w-0 flex-1 text-sm text-zinc-100">
+                  <div className="min-w-0 flex-1 text-sm text-[rgb(var(--text-primary))]">
                     {title?.c}
                     {metas.length > 0 && (
-                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[rgb(var(--text-muted))]">
                         {metas.map((m, i) => <span key={i} className="inline-flex items-center gap-1">{m.c}</span>)}
                       </div>
                     )}
@@ -126,11 +126,11 @@ export function DataTable({
                   )}
                 </summary>
                 {details.length > 0 && (
-                  <div className="mt-2.5 pl-1 space-y-1.5 border-t border-zinc-800/60 pt-2.5">
+                  <div className="mt-2.5 pl-1 space-y-1.5 border-t border-[rgb(var(--border-subtle))]/60 pt-2.5">
                     {details.map((d, i) => (
                       <div key={i} className="flex items-baseline justify-between gap-3 text-xs">
                         <span className="text-[10px] uppercase tracking-wider text-zinc-600 shrink-0">{d.col?.label}</span>
-                        <span className="text-right text-zinc-300 min-w-0">{d.c}</span>
+                        <span className="text-right text-[rgb(var(--text-primary))] min-w-0">{d.c}</span>
                       </div>
                     ))}
                   </div>
@@ -143,7 +143,7 @@ export function DataTable({
         <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-[11px] text-zinc-500 border-b border-zinc-800 uppercase tracking-wider">
+              <tr className="text-left text-[11px] text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
                 {columns.map((c) => (
                   <th
                     key={c.label}
@@ -154,7 +154,7 @@ export function DataTable({
                     tabIndex={c.sortKey ? 0 : undefined}
                     role={c.sortKey ? 'button' : undefined}
                     aria-sort={c.sortKey && sortKey === c.sortKey ? (desc ? 'descending' : 'ascending') : undefined}
-                    className={`px-4 py-2.5 font-medium select-none ${c.sortKey ? 'cursor-pointer hover:text-zinc-300 focus:outline-none focus:text-teal-300' : ''} ${
+                    className={`px-4 py-2.5 font-medium select-none ${c.sortKey ? 'cursor-pointer hover:text-[rgb(var(--text-primary))] focus:outline-none focus:text-teal-300' : ''} ${
                       c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : ''
                     } ${c.className ?? ''}`}
                   >
@@ -164,9 +164,9 @@ export function DataTable({
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800/50">
+            <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
               {visible.map((r) => (
-                <tr key={r.id} className="hover:bg-zinc-800/30 transition-colors">
+                <tr key={r.id} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
                   {r.cells.map((cell, i) => (
                     <td
                       key={i}

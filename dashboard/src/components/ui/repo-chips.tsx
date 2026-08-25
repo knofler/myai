@@ -11,11 +11,13 @@ export interface RepoChip {
   count: number; // pending ("queue") task count for this repo
 }
 
-/** Build a /work href preserving the current tab and setting (or clearing) the repo. */
-export function chipHref(base: string, tab: string | undefined, repo?: string): string {
+/** Build a /work href preserving the current tab (and any extra filter params,
+ *  e.g. ?priority=/?agent= from a saved view) and setting (or clearing) the repo. */
+export function chipHref(base: string, tab: string | undefined, repo?: string, extra?: Record<string, string | undefined>): string {
   const params = new URLSearchParams();
   if (tab && tab !== 'queue') params.set('tab', tab);
   if (repo) params.set('repo', repo);
+  for (const [k, v] of Object.entries(extra ?? {})) if (v) params.set(k, v);
   const qs = params.toString();
   return qs ? `${base}?${qs}` : base;
 }
@@ -25,11 +27,13 @@ export function RepoChips({
   active,
   tab,
   base = '/work',
+  extra,
 }: {
   repos: RepoChip[];
   active?: string;
   tab?: string;
   base?: string;
+  extra?: Record<string, string | undefined>;
 }) {
   if (repos.length === 0) return null;
   const total = repos.reduce((sum, r) => sum + r.count, 0);
@@ -39,16 +43,16 @@ export function RepoChips({
     <div className="flex flex-wrap items-center gap-1.5 mt-4" role="group" aria-label="Filter by repo">
       <span className="text-[11px] uppercase tracking-wider text-zinc-600 mr-1">Repo</span>
       <Link
-        href={chipHref(base, tab)}
+        href={chipHref(base, tab, undefined, extra)}
         aria-current={allActive ? 'true' : undefined}
         className={`tap-press inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border transition-[color,border-color,transform] ${
           allActive
             ? 'bg-teal-500/15 border-teal-500/40 text-teal-300 font-medium'
-            : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 active:border-teal-500/40'
+            : 'bg-[rgb(var(--bg-surface))]/60 border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hover:border-zinc-700 active:border-teal-500/40'
         }`}
       >
         All
-        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${allActive ? 'bg-teal-500/20 text-teal-200' : 'bg-zinc-800 text-zinc-500'}`}>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${allActive ? 'bg-teal-500/20 text-teal-200' : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]'}`}>
           {total}
         </span>
       </Link>
@@ -57,16 +61,16 @@ export function RepoChips({
         return (
           <Link
             key={r.repo}
-            href={chipHref(base, tab, r.repo)}
+            href={chipHref(base, tab, r.repo, extra)}
             aria-current={isActive ? 'true' : undefined}
             className={`tap-press inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border transition-[color,border-color,transform] ${
               isActive
                 ? 'bg-teal-500/15 border-teal-500/40 text-teal-300 font-medium'
-                : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 active:border-teal-500/40'
+                : 'bg-[rgb(var(--bg-surface))]/60 border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hover:border-zinc-700 active:border-teal-500/40'
             }`}
           >
             <span className="font-mono">{r.repo}</span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${isActive ? 'bg-teal-500/20 text-teal-200' : 'bg-zinc-800 text-zinc-500'}`}>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${isActive ? 'bg-teal-500/20 text-teal-200' : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]'}`}>
               {r.count}
             </span>
           </Link>

@@ -34,6 +34,19 @@ interface ShadowDenialSummaryRow {
   count: number;
   lastAt: number;
 }
+interface AuditChainIssue {
+  file: string;
+  line: number;
+  eventId?: string;
+  reason: 'hash-mismatch' | 'prevhash-mismatch' | 'unchained';
+}
+interface AuditChainVerifyResult {
+  ok: boolean;
+  filesChecked: number;
+  eventsChecked: number;
+  corruptLines: number;
+  issues: AuditChainIssue[];
+}
 
 const ACTIONS = [
   '', 'role.change', 'member.remove', 'invite.create', 'invite.revoke',
@@ -43,10 +56,10 @@ const ACTIONS = [
 const ROLE_COLS = ['viewer', 'member', 'admin', 'owner', 'system', 'operator'];
 
 function Th({ children }: { children: React.ReactNode }) {
-  return <th className="text-left font-medium text-zinc-300 px-3 py-2 border-b border-zinc-800 whitespace-nowrap">{children}</th>;
+  return <th className="text-left font-medium text-[rgb(var(--text-primary))] px-3 py-2 border-b border-[rgb(var(--border-subtle))] whitespace-nowrap">{children}</th>;
 }
 function Td({ children }: { children: React.ReactNode }) {
-  return <td className="px-3 py-2 border-b border-zinc-900 text-zinc-400 align-top">{children}</td>;
+  return <td className="px-3 py-2 border-b border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] align-top">{children}</td>;
 }
 
 export default function AuditViewer() {
@@ -57,6 +70,9 @@ export default function AuditViewer() {
   const [action, setAction] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [verifyResult, setVerifyResult] = useState<AuditChainVerifyResult | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
 
   const loadAudit = useCallback(async () => {
     setLoading(true);
@@ -81,6 +97,27 @@ export default function AuditViewer() {
       setLoading(false);
     }
   }, [action]);
+
+  const runVerify = useCallback(async () => {
+    setVerifying(true);
+    setVerifyError(null);
+    try {
+      const res = await fetch('/api/auth/audit/verify', { cache: 'no-store' });
+      if (res.status === 403) {
+        setVerifyError('You need owner or admin access to verify the audit chain.');
+        setVerifyResult(null);
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setVerifyResult(json as AuditChainVerifyResult);
+    } catch (err) {
+      setVerifyError('Failed to verify the audit chain.');
+      console.error(err);
+    } finally {
+      setVerifying(false);
+    }
+  }, []);
 
   useEffect(() => { void loadAudit(); }, [loadAudit]);
 
@@ -121,29 +158,69 @@ export default function AuditViewer() {
       {/* ── Audit log ─────────────────────────────────────────────── */}
       <section>
         <div className="flex flex-wrap items-center gap-3 mb-4">
-          <h2 className="text-lg font-semibold text-zinc-200 mr-auto">Audit log</h2>
+          <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))] mr-auto">Audit log</h2>
           <select
             value={action}
             onChange={(e) => setAction(e.target.value)}
-            className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-300"
+            className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded px-2 py-1 text-sm text-[rgb(var(--text-primary))]"
             aria-label="Filter by action"
           >
             {ACTIONS.map((a) => (
               <option key={a || 'all'} value={a}>{a || 'All actions'}</option>
             ))}
           </select>
-          <a href={exportHref('json')} className="text-sm text-teal-300 hover:underline border border-zinc-800 rounded px-3 py-1">Export JSON</a>
-          <a href={exportHref('csv')} className="text-sm text-teal-300 hover:underline border border-zinc-800 rounded px-3 py-1">Export CSV</a>
+          <a href={exportHref('json')} className="text-sm text-teal-300 hover:underline border border-[rgb(var(--border-subtle))] rounded px-3 py-1">Export JSON</a>
+          <a href={exportHref('csv')} className="text-sm text-teal-300 hover:underline border border-[rgb(var(--border-subtle))] rounded px-3 py-1">Export CSV</a>
+          <button
+            type="button"
+            onClick={() => void runVerify()}
+            disabled={verifying}
+            className="text-sm text-teal-300 hover:underline border border-[rgb(var(--border-subtle))] rounded px-3 py-1 disabled:opacity-50"
+          >
+            {verifying ? 'Verifying…' : 'Verify chain'}
+          </button>
         </div>
+
+        {verifyError ? (
+          <p className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2 mb-4">{verifyError}</p>
+        ) : verifyResult ? (
+          <div
+            className={`text-sm rounded px-3 py-2 mb-4 border ${
+              verifyResult.ok
+                ? 'text-emerald-400 border-emerald-900/50 bg-emerald-950/20'
+                : 'text-red-400 border-red-900/50 bg-red-950/20'
+            }`}
+          >
+            {verifyResult.ok ? (
+              <p>
+                Chain intact — {verifyResult.eventsChecked} event(s) across {verifyResult.filesChecked} file(s) verified, no gaps or mutations detected.
+              </p>
+            ) : (
+              <div>
+                <p className="font-medium mb-1">
+                  Tamper detected — {verifyResult.issues.length} issue(s) found across {verifyResult.eventsChecked} event(s) checked.
+                </p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  {verifyResult.issues.map((issue, i) => (
+                    <li key={`${issue.file}:${issue.line}:${i}`}>
+                      <code className="text-xs">{issue.file}:{issue.line}</code> — {issue.reason}
+                      {issue.eventId ? ` (${issue.eventId})` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        ) : null}
 
         {error ? (
           <p className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2">{error}</p>
         ) : loading ? (
-          <p className="text-sm text-zinc-500">Loading…</p>
+          <p className="text-sm text-[rgb(var(--text-muted))]">Loading…</p>
         ) : events.length === 0 ? (
-          <p className="text-sm text-zinc-500">No audit events yet. Privileged actions and access denials will appear here.</p>
+          <p className="text-sm text-[rgb(var(--text-muted))]">No audit events yet. Privileged actions and access denials will appear here.</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-zinc-800">
+          <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr>
@@ -159,11 +236,11 @@ export default function AuditViewer() {
                 {events.map((e) => (
                   <tr key={e.eventId}>
                     <Td>{e.createdAt.replace('T', ' ').replace(/\.\d+Z$/, 'Z')}</Td>
-                    <Td><span className="text-zinc-300">{e.action}</span></Td>
+                    <Td><span className="text-[rgb(var(--text-primary))]">{e.action}</span></Td>
                     <Td>{e.actor?.userId ?? '—'}</Td>
                     <Td>{e.actor?.role ?? '—'}</Td>
                     <Td>{e.target ?? '—'}</Td>
-                    <Td>{e.detail ? <code className="text-xs text-zinc-500">{JSON.stringify(e.detail)}</code> : '—'}</Td>
+                    <Td>{e.detail ? <code className="text-xs text-[rgb(var(--text-muted))]">{JSON.stringify(e.detail)}</code> : '—'}</Td>
                   </tr>
                 ))}
               </tbody>
@@ -175,12 +252,12 @@ export default function AuditViewer() {
       {/* ── Permission matrix ─────────────────────────────────────── */}
       {grid.length > 0 && (
         <section>
-          <h2 className="text-lg font-semibold text-zinc-200 mb-1">Permissions</h2>
-          <p className="text-sm text-zinc-500 mb-4">
+          <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))] mb-1">Permissions</h2>
+          <p className="text-sm text-[rgb(var(--text-muted))] mb-4">
             Which roles may perform each action on each resource. Derived from the role capability
             lattice — the server-side matrix is the real boundary.
           </p>
-          <div className="overflow-x-auto rounded-lg border border-zinc-800">
+          <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr>
@@ -197,7 +274,7 @@ export default function AuditViewer() {
                     <Td>{row.action}</Td>
                     <Td><code className="text-xs text-teal-300">{row.capability}</code></Td>
                     {ROLE_COLS.map((r) => (
-                      <td key={r} className="px-3 py-2 border-b border-zinc-900 text-center">
+                      <td key={r} className="px-3 py-2 border-b border-[rgb(var(--border-subtle))] text-center">
                         {row.roles[r]
                           ? <span className="text-emerald-400" aria-label="allowed">✓</span>
                           : <span className="text-zinc-700" aria-label="denied">—</span>}
@@ -213,17 +290,17 @@ export default function AuditViewer() {
 
       {/* ── Shadow denials ────────────────────────────────────────── */}
       <section>
-        <h2 className="text-lg font-semibold text-zinc-200 mb-1">Shadow denials (would-block if enforced)</h2>
-        <p className="text-sm text-zinc-500 mb-4">
+        <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))] mb-1">Shadow denials (would-block if enforced)</h2>
+        <p className="text-sm text-[rgb(var(--text-muted))] mb-4">
           RBAC_ENFORCE is currently off, so nothing below is actually blocking a caller — this is a soak view of
           what would 403 the moment enforcement is switched on, grouped by tool/route.
         </p>
         {shadowError ? (
           <p className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2">{shadowError}</p>
         ) : shadowSummary.length === 0 ? (
-          <p className="text-sm text-zinc-500">No shadow denials recorded yet.</p>
+          <p className="text-sm text-[rgb(var(--text-muted))]">No shadow denials recorded yet.</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-zinc-800">
+          <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr>
@@ -237,7 +314,7 @@ export default function AuditViewer() {
               <tbody>
                 {shadowSummary.map((row) => (
                   <tr key={row.action}>
-                    <Td><span className="text-zinc-300">{row.action}</span></Td>
+                    <Td><span className="text-[rgb(var(--text-primary))]">{row.action}</span></Td>
                     <Td><code className="text-xs text-teal-300">{row.capability}</code></Td>
                     <Td>{row.count}</Td>
                     <Td>

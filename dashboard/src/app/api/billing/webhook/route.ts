@@ -4,9 +4,16 @@
 // (no JSON re-encode), then maps the event to the tenant and updates it:
 //   checkout.session.completed                 → link customer/subscription, activate
 //   customer.subscription.created|updated      → sync status + period end + plan
-//   customer.subscription.deleted              → mark canceled, drop to free
+//   customer.subscription.deleted              → mark canceled, drop to free, schedule the
+//                                                 data-retention purge-on-cancel grace window
+//                                                 (gateway's core/tenant-lifecycle.ts sweep
+//                                                 hard-deletes the tenant past cancellationPurgeAt)
 //   invoice.payment_failed                     → dunning: past_due + retry email; auto-downgrade on final
 //   invoice.payment_succeeded                  → recovery: clear the dunning failure count
+//
+// A resubscribe (checkout.session.completed / subscription back to
+// active|trialing) before the purge grace window elapses clears
+// `cancellationPurgeAt` — see the `entitling` branch below.
 //
 // Tenant resolution order: client_reference_id / metadata.tenantId (set at
 // checkout) → existing stripeCustomerId. Idempotent: re-delivered events
@@ -42,9 +49,16 @@ import {
   resolveWebhookObjectId,
   type ProcessedEventStore,
 } from '@/lib/webhook-idempotency';
+import { completeMarketplaceCharge } from '@/lib/marketplace-store';
+import type { PricingModel } from '@/lib/marketplace-billing';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+// Same env var + default as the gateway's core/tenant-lifecycle.ts — the two
+// processes must agree on the grace window even though this route can't
+// import that module directly (separate Next.js build).
+const CANCELLATION_PURGE_GRACE_DAYS = Number(process.env.CANCELLATION_PURGE_GRACE_DAYS) || 30;
 
 interface StripeObj {
   id?: string;
@@ -61,6 +75,11 @@ interface StripeObj {
   attempt_count?: number;
   // Present on subscription objects — the active coupon/discount, if any.
   discount?: { coupon?: { id?: string; name?: string; percent_off?: number; amount_off?: number } } | null;
+  // Present on Checkout Session objects — total actually charged, in cents
+  // (ADR-019 marketplace checkout: the ground truth for `grossUsd`, not the
+  // listing's advertised price, so discounts/promos are reflected exactly).
+  amount_total?: number;
+  payment_intent?: string;
 }
 interface StripeEvent {
   id?: string;
@@ -144,6 +163,44 @@ export async function POST(req: Request) {
       }
     }
 
+    // ADR-019 §4 charge-trigger — a marketplace listing checkout (started by
+    // POST /api/marketplace/checkout) completing. Routed here BEFORE the
+    // tenant-plan lookup/switch below: `metadata.listingId` only exists on a
+    // marketplace Checkout Session, never on a platform-subscription one, so
+    // this branch and the tenant-plan branch are mutually exclusive by
+    // construction — a marketplace purchase never touches
+    // `tenant.plan`/`subscriptionStatus`. Installs stay in the in-memory
+    // marketplace store (marketplace-store.ts); the ledger append is now
+    // persisted (marketplace-ledger-store.ts → the `PayoutLedgerEntry` Mongoose
+    // model, ADR-019 checklist #1) — neither touches the Tenant model, so no
+    // tenant lookup is needed here.
+    if (event.type === 'checkout.session.completed' && obj.metadata?.listingId) {
+      const entryId = obj.payment_intent || obj.subscription || obj.id || '';
+      const result = await completeMarketplaceCharge({
+        tenantId: obj.metadata.tenantId ?? obj.client_reference_id ?? '',
+        userId: obj.metadata.userId ?? 'unknown',
+        listingId: obj.metadata.listingId,
+        version: obj.metadata.version ?? '',
+        pricingModel: (obj.metadata.pricingModel as PricingModel) ?? 'one_time',
+        grossUsd: typeof obj.amount_total === 'number' ? obj.amount_total / 100 : 0,
+        entryId,
+        occurredAt: event.created ? new Date(event.created * 1000).toISOString() : new Date().toISOString(),
+      });
+      await markApplied();
+      if (!result.ok) {
+        console.error('[billing/webhook] marketplace charge completion failed:', result.error);
+        // Ack anyway — Stripe retries won't fix a listing/version/gate error;
+        // it needs an operator, not a redelivery storm.
+        return NextResponse.json({ received: true, marketplace: true, error: result.error });
+      }
+      return NextResponse.json({
+        received: true,
+        marketplace: true,
+        installId: result.value.install.installId,
+        ledgerEntryId: result.value.ledgerEntryId,
+      });
+    }
+
     const tenant = await findTenant(obj);
     if (!tenant) {
       // Ack so Stripe stops retrying; nothing to do for an unmapped event.
@@ -160,6 +217,7 @@ export async function POST(req: Request) {
         tenant.billingInterval = resolveInterval(obj);
         tenant.subscriptionStatus = 'active';
         tenant.paymentFailureCount = 0; // fresh subscription clears any prior dunning state
+        tenant.cancellationPurgeAt = undefined; // resubscribe cancels any pending purge-on-cancel
         break;
       }
       case 'customer.subscription.created':
@@ -181,12 +239,20 @@ export async function POST(req: Request) {
           tenant.discount = discountSummary(obj) ?? undefined;
           // Recovery: a subscription back to active/trialing clears the dunning counter.
           tenant.paymentFailureCount = 0;
+          // ...and cancels any pending purge-on-cancel — this tenant is paying again.
+          tenant.cancellationPurgeAt = undefined;
         }
         break;
       }
       case 'customer.subscription.deleted': {
         tenant.subscriptionStatus = 'canceled';
         tenant.plan = 'free';
+        // Data-retention purge-on-cancel (gateway's core/tenant-lifecycle.ts
+        // `runCancellationPurgeSweep`, seeded daily): the tenant keeps working
+        // on the free plan during the grace window — same posture as a
+        // pending account-erasure request — then the sweep hard-deletes its
+        // tasks/plans/schedules/directory/audit data past this deadline.
+        tenant.cancellationPurgeAt = new Date(Date.now() + CANCELLATION_PURGE_GRACE_DAYS * 86_400_000);
         break;
       }
       case 'invoice.payment_failed': {

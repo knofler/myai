@@ -10,13 +10,15 @@
  * alerts, not per-task activity (which would be noisy and costly).
  *
  * Delivery is gated by the tenant's notification preferences (Phase 7):
- *   - a muted event family skips SSE + push + email but is STILL recorded to history,
+ *   - a muted event family skips SSE + push + email + slack but is STILL recorded to history,
  *   - `inApp: false` silences SSE, `push: false` silences web push,
- *     `email: false` silences email (opt-in, off by default),
- *   - quiet hours suppress the out-of-app channels (push + email) only (no phone
- *     buzz or inbox ping overnight; the in-app feed and history are unaffected).
- * Web push (Phase 6) and email both fire only when the tenant has no live SSE
- * connection — an open dashboard already showed the toast.
+ *     `email: false` silences email (opt-in, off by default), `slack: false`
+ *     silences Slack (opt-in, off by default — also requires a webhook URL),
+ *   - quiet hours suppress the out-of-app channels (push + email + slack) only
+ *     (no phone buzz or inbox ping overnight; the in-app feed and history are
+ *     unaffected).
+ * Web push (Phase 6), email, and Slack all fire only when the tenant has no
+ * live SSE connection — an open dashboard already showed the toast.
  *
  * Storm control (see {@link ./dedup.js}): identical (tenantId, type, subject)
  * events within a window collapse into one history row with an "xN" counter,
@@ -33,6 +35,7 @@ import { recordNotification } from './notifier.js';
 import { getPreferences, eventEnabled, isQuietHours } from './preferences.js';
 import { sendPushIfInactive } from './web-push.js';
 import { sendEmailIfInactive } from './email-notify.js';
+import { sendSlackIfInactive } from './slack-notify.js';
 import { registerEvent, shouldDeliverToChannel } from './dedup.js';
 
 const log = createChildLogger({ module: 'notify-service' });
@@ -87,6 +90,9 @@ async function handleEvent(event: NotifyEvent): Promise<void> {
     }
     if (prefs.email && shouldDeliverToChannel(event.tenantId, event.type, subject, 'email')) {
       await sendEmailIfInactive(event.tenantId, event);
+    }
+    if (prefs.slack && shouldDeliverToChannel(event.tenantId, event.type, subject, 'slack')) {
+      await sendSlackIfInactive(event.tenantId, event, prefs.slackWebhookUrl);
     }
   }
 

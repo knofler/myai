@@ -30,6 +30,12 @@ const OUTBOUND: { dest: string; when: string; purpose: string }[] = [
   { dest: 'GitHub', when: 'your own gh / git remotes', purpose: 'The normal git workflow, driven by you' },
 ];
 
+const RETENTION_HOSTED: { collection: string; window: string; env: string }[] = [
+  { collection: 'Task rows (terminal: done / dead_letter)', window: '90 days', env: 'TASK_RETENTION_DAYS' },
+  { collection: 'PlanDay rows (terminal: done)', window: '180 days', env: 'PLAN_RETENTION_DAYS' },
+  { collection: 'Audit log day-files', window: '400 days', env: 'AUDIT_RETENTION_DAYS' },
+];
+
 const THREATS: { threat: string; mitigation: string }[] = [
   { threat: 'Spoofing local access (X-Forwarded-For)', mitigation: 'Loopback decided from the raw socket address only' },
   { threat: 'Spoofing / guessing a tenant API key', mitigation: 'Full-entropy keys, SHA-256 at rest, constant-time compare' },
@@ -41,23 +47,23 @@ const THREATS: { threat: string; mitigation: string }[] = [
 ];
 
 function Th({ children }: { children: React.ReactNode }) {
-  return <th className="text-left font-medium text-zinc-300 px-3 py-2 border-b border-zinc-800">{children}</th>;
+  return <th className="text-left font-medium text-[rgb(var(--text-primary))] px-3 py-2 border-b border-[rgb(var(--border-subtle))]">{children}</th>;
 }
 function Td({ children }: { children: React.ReactNode }) {
-  return <td className="px-3 py-2 border-b border-zinc-900 text-zinc-400 align-top">{children}</td>;
+  return <td className="px-3 py-2 border-b border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] align-top">{children}</td>;
 }
 
 export default function SecurityPage() {
   return (
     <LegalShell
       title="Security & Data Locality"
-      updated="2026-07-18"
+      updated="2026-08-16"
       intro={
         <>
-          <strong className="text-zinc-200">The headline guarantee: your context never leaves your machine.</strong>{' '}
+          <strong className="text-[rgb(var(--text-primary))]">The headline guarantee: your context never leaves your machine.</strong>{' '}
           Every byte of agent memory — session state, handoffs, brain atoms, the embedded recall corpus — lives in a
           database container on your hardware and is embedded by a model running in-process on your CPU. In the default
-          configuration, myAI makes <strong className="text-zinc-200">zero outbound network calls</strong>. This page is
+          configuration, myAI makes <strong className="text-[rgb(var(--text-primary))]">zero outbound network calls</strong>. This page is
           a plain-English summary of{' '}
           <a
             href="https://github.com/knofler/myai/blob/main/SECURITY.md"
@@ -73,7 +79,7 @@ export default function SecurityPage() {
     >
       <Section heading="1. What stays local, always">
         <p>myAI is self-hosted and user-owned. Nothing below ever leaves your hardware in the default configuration.</p>
-        <div className="overflow-x-auto rounded-lg border border-zinc-800">
+        <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr>
@@ -97,11 +103,11 @@ export default function SecurityPage() {
 
       <Section heading="2. The exhaustive outbound surface">
         <p>
-          Nothing below is contacted unless <strong className="text-zinc-200">you</strong> put a credential in{' '}
+          Nothing below is contacted unless <strong className="text-[rgb(var(--text-primary))]">you</strong> put a credential in{' '}
           <code className="text-teal-300">.env</code>. No credential → no call. There is no telemetry, no phone-home, no
           silent upload — and none of these destinations ever receive your memory corpus.
         </p>
-        <div className="overflow-x-auto rounded-lg border border-zinc-800">
+        <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr>
@@ -123,7 +129,59 @@ export default function SecurityPage() {
         </div>
       </Section>
 
-      <Section heading="3. Ports, tokens & authentication">
+      <Section heading="3. BYO-model-key posture">
+        <p>
+          myAI does not sell inference. There is no default LLM key baked into the product, no proxy that routes your
+          prompts through our infrastructure, and no usage-based inference billing on our side. Every model call is made{' '}
+          <strong className="text-[rgb(var(--text-primary))]">from your machine, with your own API key, directly to the provider you
+          chose</strong> — we never see the key, the prompt, or the response, because we don&apos;t operate any request path
+          between you and the model vendor. That keeps our COGS on inference at zero and means your prompts stay governed
+          by your own agreement with your own model vendor. The only thing we ever hold is the minimal hosted account and
+          billing record for a paid subscription tier — see the{' '}
+          <a href="/privacy" className="text-teal-300 hover:underline">
+            Privacy Policy
+          </a>{' '}
+          for that list — never inference traffic.
+        </p>
+      </Section>
+
+      <Section heading="4. Retention windows">
+        <p>
+          Your local memory corpus is retained until <strong className="text-[rgb(var(--text-primary))]">you</strong> delete it —
+          there is no server-side copy to separately purge. State-file rotation moves older sessions into a local archive
+          rather than deleting them, and the brain store is git-versioned, so it persists per your own repo history.
+        </p>
+        <p>
+          Hosted account/control-plane data (only relevant if you run the multi-tenant gateway) ages out on fixed,
+          env-configurable windows, unless a tenant is flagged for legal hold:
+        </p>
+        <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr>
+                <Th>Collection</Th>
+                <Th>Default window</Th>
+                <Th>Env override</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {RETENTION_HOSTED.map((r) => (
+                <tr key={r.collection}>
+                  <Td>{r.collection}</Td>
+                  <Td>{r.window}</Td>
+                  <Td>{r.env}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p>
+          User-initiated right-to-erasure requests purge after a 14-day grace window; a billing-driven cancellation purge
+          runs after 30 days and additionally wipes the audit trail. Full detail is in SECURITY.md §2.
+        </p>
+      </Section>
+
+      <Section heading="5. Ports, tokens & authentication">
         <p>
           The database is host-published on <code className="text-teal-300">127.0.0.1:27200</code> only. Set{' '}
           <code className="text-teal-300">HOST_BIND=127.0.0.1</code> to lock the whole stack to the local machine.
@@ -137,7 +195,7 @@ export default function SecurityPage() {
         </ul>
       </Section>
 
-      <Section heading="4. Memory export is secret-scanned">
+      <Section heading="6. Memory export is secret-scanned">
         <p>
           The one bundle designed to leave the machine (migration, backup, hand-off) is scanned with the same secret
           patterns the commit hook enforces, and matches are redacted in place before anything is written. If the
@@ -145,8 +203,8 @@ export default function SecurityPage() {
         </p>
       </Section>
 
-      <Section heading="5. Threat model (summary)">
-        <div className="overflow-x-auto rounded-lg border border-zinc-800">
+      <Section heading="7. Threat model (summary)">
+        <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr>
@@ -164,21 +222,46 @@ export default function SecurityPage() {
             </tbody>
           </table>
         </div>
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-[rgb(var(--text-muted))]">
           Full STRIDE analysis, ports diagram, and the hardening checklist are in SECURITY.md.
         </p>
       </Section>
 
-      <Section heading="6. Always-on safety hooks">
+      <Section heading="8. Guardrail model — how autonomous agents are kept on a leash">
         <p>
-          These run independent of permission mode (bypass/YOLO does not disable them): no direct pushes to main; no
-          credentials, <code className="text-teal-300">.env</code>, <code className="text-teal-300">.pem</code>, or{' '}
-          <code className="text-teal-300">.key</code> in commits; critical framework files can&apos;t be deleted or
-          blanked; npm runs in containers only; and the shared gateway deploys only from the master checkout.
+          The autonomous runner executes code changes, commits, and pushes without a human watching every action.
+          Guardrails hold regardless of permission mode (interactive, timed YOLO, or god-mode YOLO):
         </p>
+        <ul className="list-disc pl-5 space-y-2">
+          <li>
+            <strong className="text-[rgb(var(--text-primary))]">Hooks are always-on, not a permission-mode feature</strong> — no
+            direct pushes to main; no credentials, <code className="text-teal-300">.env</code>,{' '}
+            <code className="text-teal-300">.pem</code>, or <code className="text-teal-300">.key</code> in commits; critical
+            framework files can&apos;t be deleted or blanked; npm runs in containers only; the shared gateway deploys only
+            from the master checkout. YOLO mode does not disable any of these.
+          </li>
+          <li>
+            <strong className="text-[rgb(var(--text-primary))]">Autonomy is scoped, not unlimited</strong> — timed YOLO
+            auto-expires; god-mode YOLO auto-deactivates on the next commit or plan completion. Destructive git operations
+            (force-push, hard reset, branch deletion) stay behind explicit confirmation even inside YOLO.
+          </li>
+          <li>
+            <strong className="text-[rgb(var(--text-primary))]">Failure is bounded</strong> — a 3-strikes rule stops an agent
+            that fails the same fix three times running, rather than retrying forever against production state.
+          </li>
+          <li>
+            <strong className="text-[rgb(var(--text-primary))]">Every task runs in an isolated worktree</strong>, so a
+            runaway task can only merge output through the same test-branch → PR path every human contributor uses.
+          </li>
+          <li>
+            <strong className="text-[rgb(var(--text-primary))]">Fully auditable after the fact</strong> — runner transcripts,
+            git history, and the gateway&apos;s task audit trail answer &ldquo;what did the autonomous runner do
+            overnight.&rdquo;
+          </li>
+        </ul>
       </Section>
 
-      <Section heading="7. Vulnerability disclosure">
+      <Section heading="9. Vulnerability disclosure">
         <p>
           Report privately via{' '}
           <a
@@ -189,7 +272,7 @@ export default function SecurityPage() {
           >
             GitHub Security Advisories
           </a>{' '}
-          and click <strong className="text-zinc-200">&quot;Report a vulnerability&quot;</strong> — title it{' '}
+          and click <strong className="text-[rgb(var(--text-primary))]">&quot;Report a vulnerability&quot;</strong> — title it{' '}
           <code className="text-teal-300">[SECURITY] myAI</code>. This is the supported private channel; there is no
           email intake. Response targets: acknowledgement within 72 hours, triage within 7 days, fix or documented
           mitigation for confirmed issues within 30 days. Good-faith research against your own installation is welcome

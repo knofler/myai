@@ -14,16 +14,16 @@ interface RuleItem {
 
 function RuleContent({ rule, bare = false }: { rule: RuleItem; bare?: boolean }) {
   return (
-    <div className={bare ? '' : 'bg-zinc-900 border border-zinc-800 rounded-lg'}>
-      <div className={bare ? 'pb-4 border-b border-zinc-800' : 'px-6 py-4 border-b border-zinc-800'}>
+    <div className={bare ? '' : 'bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg'}>
+      <div className={bare ? 'pb-4 border-b border-[rgb(var(--border-subtle))]' : 'px-6 py-4 border-b border-[rgb(var(--border-subtle))]'}>
         <div className="flex items-center gap-2 mb-1">
           <CategoryBadge category={rule.category} />
         </div>
-        {!bare && <h2 className="text-lg font-semibold text-zinc-100">{rule.name}</h2>}
-        <p className="text-xs text-zinc-500">{rule.description}</p>
+        {!bare && <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))]">{rule.name}</h2>}
+        <p className="text-xs text-[rgb(var(--text-muted))]">{rule.description}</p>
       </div>
       <pre
-        className={`text-xs text-zinc-400 overflow-x-auto whitespace-pre-wrap break-words ${
+        className={`text-xs text-[rgb(var(--text-secondary))] overflow-x-auto whitespace-pre-wrap break-words ${
           bare ? 'pt-4' : 'p-6 max-h-[70vh] overflow-y-auto'
         }`}
       >
@@ -48,14 +48,14 @@ export function RuleViewer({ rules }: { rules: RuleItem[] }) {
             className={`tap-press w-full text-left p-3 rounded-lg border ${
               selected === r._id
                 ? 'bg-emerald-500/10 border-emerald-500/30'
-                : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700 active:border-emerald-500/40'
+                : 'bg-[rgb(var(--bg-surface))] border-[rgb(var(--border-subtle))] hover:border-zinc-700 active:border-emerald-500/40'
             }`}
           >
             <div className="flex items-center gap-2 mb-1">
               <CategoryBadge category={r.category} />
             </div>
-            <p className="font-medium text-sm text-zinc-200">{r.name}</p>
-            <p className="text-xs text-zinc-500 line-clamp-2 mt-0.5">{r.description}</p>
+            <p className="font-medium text-sm text-[rgb(var(--text-primary))]">{r.name}</p>
+            <p className="text-xs text-[rgb(var(--text-muted))] line-clamp-2 mt-0.5">{r.description}</p>
           </button>
         ))}
       </div>

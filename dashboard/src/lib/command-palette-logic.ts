@@ -56,6 +56,7 @@ const NAV_RAW: Array<Omit<PaletteEntry, 'id' | 'kind' | 'keywords'> & { keywords
   { label: 'Brain — Provenance', hint: 'code ↔ memory links', href: '/brain?tab=provenance', keywords: 'brain provenance blame code memory links' },
   { label: 'Your Context', hint: 'view · download · port', href: '/context', keywords: 'context portable download upload import export bundle vectors memory own lock-in' },
   { label: 'Analytics', hint: 'throughput · cost · runner', href: '/analytics', keywords: 'analytics throughput cost trend runner sessions plan progress success rate metrics' },
+  { label: 'Velocity', hint: 'shipped/week · cycle time · trend', href: '/velocity', keywords: 'velocity delivery shipped per week cycle time throughput trend repo report' },
   { label: 'Documentation — Repo READMEs', hint: 'rendered markdown', href: '/documentation', keywords: 'documentation docs readme markdown repo' },
   { label: 'Documentation — Framework Docs', hint: 'AI_RULES, routing, keywords', href: '/documentation?tab=framework', keywords: 'documentation framework rules routing keywords design system' },
   { label: 'Showcase', hint: 'public marketing page', href: '/showcase', keywords: 'showcase marketing public scorecard shipped roadmap' },
@@ -103,6 +104,19 @@ export function buildRepoEntries(repos: string[]): PaletteEntry[] {
     hint: 'work queue',
     keywords: `jump repo ${repo}`.toLowerCase(),
     href: `/work?repo=${encodeURIComponent(repo)}`,
+  }));
+}
+
+/** One "jump to plan" entry per known repo, deduped and sorted — same repo list as buildRepoEntries, filtered onto the Plans tab. */
+export function buildPlanEntries(repos: string[]): PaletteEntry[] {
+  const unique = Array.from(new Set(repos.filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  return unique.map((repo) => ({
+    id: `plan-${repo}`,
+    kind: 'repo',
+    label: `Jump to plan: ${repo}`,
+    hint: '10-day plan',
+    keywords: `jump plan ${repo} 10-day roadmap`.toLowerCase(),
+    href: `/work?tab=plans&repo=${encodeURIComponent(repo)}`,
   }));
 }
 

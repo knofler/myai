@@ -35,7 +35,7 @@ export default function NewAppPage() {
   const [result, setResult] = useState<NewAppResult | null>(null);
 
   const inputCls =
-    'w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-100 placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
+    'w-full px-3 py-2 rounded-lg bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -67,21 +67,21 @@ export default function NewAppPage() {
     return (
       <div className="max-w-md mx-auto mt-10">
         <h1 className="text-2xl font-bold text-brand-orange tracking-tight">App queued 🚀</h1>
-        <p className="text-sm text-zinc-400 mt-1">{result.message}</p>
-        <div className="gel-surface mt-5 p-4 rounded-xl border border-zinc-800 space-y-2 text-sm">
+        <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">{result.message}</p>
+        <div className="gel-surface mt-5 p-4 rounded-xl border border-[rgb(var(--border-subtle))] space-y-2 text-sm">
           <div className="flex justify-between">
-            <span className="text-zinc-500">Repo</span>
+            <span className="text-[rgb(var(--text-muted))]">Repo</span>
             <span className="font-mono text-teal-300">{result.repoName}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-zinc-500">Task</span>
-            <span className="font-mono text-zinc-300 text-xs">{result.taskId}</span>
+            <span className="text-[rgb(var(--text-muted))]">Task</span>
+            <span className="font-mono text-[rgb(var(--text-primary))] text-xs">{result.taskId}</span>
           </div>
         </div>
-        <p className="text-[11px] text-zinc-500 mt-3">
+        <p className="text-[11px] text-[rgb(var(--text-muted))] mt-3">
           The agentFlow pipeline scaffolds and builds this app on the next off-hours runner window. Track it on{' '}
           <Link href="/work" className="text-teal-400 hover:text-teal-300">Work → Up Next</Link> and review with{' '}
-          <code className="text-zinc-400">ship it</code>.
+          <code className="text-[rgb(var(--text-secondary))]">ship it</code>.
         </p>
         <div className="flex gap-2 mt-5">
           <button
@@ -98,7 +98,7 @@ export default function NewAppPage() {
               setGithubSlug('');
               setPriority('P2');
             }}
-            className="gel-surface px-3 py-2 rounded-lg border border-zinc-800 text-sm text-zinc-200 hover:border-zinc-700 transition"
+            className="gel-surface px-3 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
           >
             New another
           </button>
@@ -111,7 +111,7 @@ export default function NewAppPage() {
   return (
     <div className="max-w-md mx-auto mt-10">
       <h1 className="text-2xl font-bold text-brand-orange tracking-tight">New App</h1>
-      <p className="text-sm text-zinc-500 mt-1">
+      <p className="text-sm text-[rgb(var(--text-muted))] mt-1">
         Describe the app. It is registered in your directory and the agentFlow pipeline scaffolds + builds it on the
         next off-hours run.
       </p>
@@ -124,7 +124,7 @@ export default function NewAppPage() {
 
       <form onSubmit={onSubmit} className="mt-4 space-y-3">
         <label className="block">
-          <span className="block text-xs text-zinc-500 mb-1">App name</span>
+          <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">App name</span>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -135,7 +135,7 @@ export default function NewAppPage() {
           />
         </label>
         <label className="block">
-          <span className="block text-xs text-zinc-500 mb-1">What should it do?</span>
+          <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">What should it do?</span>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
@@ -146,7 +146,7 @@ export default function NewAppPage() {
           />
         </label>
         <label className="block">
-          <span className="block text-xs text-zinc-500 mb-1">GitHub repo (optional)</span>
+          <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">GitHub repo (optional)</span>
           <input
             value={githubSlug}
             onChange={(e) => setGithubSlug(e.target.value)}
@@ -155,7 +155,7 @@ export default function NewAppPage() {
           />
         </label>
         <label className="block">
-          <span className="block text-xs text-zinc-500 mb-1">Priority</span>
+          <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Priority</span>
           <select value={priority} onChange={(e) => setPriority(e.target.value)} className={inputCls}>
             {PRIORITIES.map((p) => (
               <option key={p.value} value={p.value}>
@@ -174,7 +174,7 @@ export default function NewAppPage() {
           </button>
           <Link
             href="/apps"
-            className="gel-surface px-3 py-2 rounded-lg border border-zinc-800 text-sm text-zinc-200 hover:border-zinc-700 transition"
+            className="gel-surface px-3 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
           >
             Cancel
           </Link>

@@ -73,15 +73,15 @@ interface GaugeProps {
 function Gauge({ label, value, cap, thresholds }: GaugeProps) {
   const percentage = pct(value, cap);
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
+    <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
       <div className="flex items-baseline justify-between mb-2">
-        <h3 className="text-sm text-zinc-400 uppercase tracking-wider">{label}</h3>
-        <span className="text-xs text-zinc-500 font-mono">{percentage.toFixed(0)}%</span>
+        <h3 className="text-sm text-[rgb(var(--text-secondary))] uppercase tracking-wider">{label}</h3>
+        <span className="text-xs text-[rgb(var(--text-muted))] font-mono">{percentage.toFixed(0)}%</span>
       </div>
-      <div className="text-2xl font-bold text-zinc-100 mb-3">
-        {fmtUsd(value)} <span className="text-sm text-zinc-500 font-normal">/ {fmtUsd(cap)}</span>
+      <div className="text-2xl font-bold text-[rgb(var(--text-primary))] mb-3">
+        {fmtUsd(value)} <span className="text-sm text-[rgb(var(--text-muted))] font-normal">/ {fmtUsd(cap)}</span>
       </div>
-      <div className="relative h-2 bg-zinc-800 rounded-full overflow-hidden">
+      <div className="relative h-2 bg-[rgb(var(--bg-hover))] rounded-full overflow-hidden">
         <div
           className={`absolute left-0 top-0 h-full rounded-full ${barColor(percentage)}`}
           style={{ width: `${percentage}%` }}
@@ -187,21 +187,21 @@ export default async function BudgetsPage() {
   return (
     <div>
       <div className="mb-6 flex items-baseline justify-between">
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm text-[rgb(var(--text-muted))]">
           Spend audit + budget guard status. Month starts {monthStart.toISOString().slice(0, 10)} UTC.
         </p>
         <div className={`text-xs font-mono px-2 py-1 rounded ${
           env.enabled
             ? 'bg-emerald-500/10 text-emerald-400'
-            : 'bg-zinc-800 text-zinc-500'
+            : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]'
         }`}>
           {env.enabled ? 'GUARDS ENABLED' : 'GUARDS DISABLED'}
         </div>
       </div>
 
       {!env.enabled && (
-        <div className="mb-6 bg-zinc-900 border border-zinc-800 rounded-lg p-4 text-sm text-zinc-400">
-          Budget guards are disabled. Set <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300">BUDGETS_ENABLED=1</code> in <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300">/tmp/.myai-host-env</code> and rebuild the gateway to enable. Spend is still recorded for visibility.
+        <div className="mb-6 bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-4 text-sm text-[rgb(var(--text-secondary))]">
+          Budget guards are disabled. Set <code className="bg-[rgb(var(--bg-hover))] px-1.5 py-0.5 rounded text-[rgb(var(--text-primary))]">BUDGETS_ENABLED=1</code> in <code className="bg-[rgb(var(--bg-hover))] px-1.5 py-0.5 rounded text-[rgb(var(--text-primary))]">/tmp/.myai-host-env</code> and rebuild the gateway to enable. Spend is still recorded for visibility.
         </div>
       )}
 
@@ -213,13 +213,13 @@ export default async function BudgetsPage() {
           cap={monthlyHardCapUsd}
           thresholds={[env.downgradeOpusThreshold, env.downgradeSonnetThreshold]}
         />
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-          <h3 className="text-sm text-zinc-400 uppercase tracking-wider mb-2">This month</h3>
-          <div className="text-2xl font-bold text-zinc-100">
+        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+          <h3 className="text-sm text-[rgb(var(--text-secondary))] uppercase tracking-wider mb-2">This month</h3>
+          <div className="text-2xl font-bold text-[rgb(var(--text-primary))]">
             {numFmt.format(totalCallsThisMonth)}
-            <span className="text-sm text-zinc-500 font-normal"> calls</span>
+            <span className="text-sm text-[rgb(var(--text-muted))] font-normal"> calls</span>
           </div>
-          <p className="text-xs text-zinc-500 mt-3">
+          <p className="text-xs text-[rgb(var(--text-muted))] mt-3">
             Avg {totalCallsThisMonth > 0 ? fmtUsd(totalCostThisMonth / totalCallsThisMonth) : '$0.00'} / call
           </p>
         </div>
@@ -228,16 +228,16 @@ export default async function BudgetsPage() {
       {perChannelCapUsd != null && perChannelEntries.length > 0 && (
         <div className="mb-8">
           <h2 className="text-lg font-semibold mb-3">Per-channel spend</h2>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
+          <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-4 space-y-3">
             {perChannelEntries.map(c => {
               const p = pct(c.cost, perChannelCapUsd!);
               return (
                 <div key={c._id}>
                   <div className="flex justify-between text-xs mb-1">
-                    <span className="font-mono text-zinc-300">{c._id}</span>
-                    <span className="text-zinc-500">{fmtUsd(c.cost)} / {fmtUsd(perChannelCapUsd!)}</span>
+                    <span className="font-mono text-[rgb(var(--text-primary))]">{c._id}</span>
+                    <span className="text-[rgb(var(--text-muted))]">{fmtUsd(c.cost)} / {fmtUsd(perChannelCapUsd!)}</span>
                   </div>
-                  <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                  <div className="h-1.5 bg-[rgb(var(--bg-hover))] rounded-full overflow-hidden">
                     <div
                       className={`h-full ${barColor(p)}`}
                       style={{ width: `${p}%` }}
@@ -278,14 +278,14 @@ export default async function BudgetsPage() {
       <div>
         <h2 className="text-lg font-semibold mb-3">Top 20 most expensive calls this month</h2>
         {topExpensive.length === 0 ? (
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-8 text-center text-zinc-500 text-sm">
+          <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-8 text-center text-[rgb(var(--text-muted))] text-sm">
             No spend recorded this month.
           </div>
         ) : (
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+          <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
             <table className="card-table w-full text-sm">
               <thead>
-                <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+                <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
                   <th className="px-4 py-3">When</th>
                   <th className="px-4 py-3">Agent</th>
                   <th className="px-4 py-3">Provider / Model</th>
@@ -294,30 +294,30 @@ export default async function BudgetsPage() {
                   <th className="px-4 py-3 text-right">Cost</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                 {topExpensive.map((row) => {
                   const r = row as Record<string, unknown>;
                   const created = r.createdAt ? new Date(r.createdAt as Date) : null;
                   return (
-                    <tr key={String(r._id)} className="hover:bg-zinc-800/30 transition-colors">
-                      <td className="m-title px-4 py-2 text-xs text-zinc-500">
+                    <tr key={String(r._id)} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                      <td className="m-title px-4 py-2 text-xs text-[rgb(var(--text-muted))]">
                         {created ? created.toLocaleString() : '-'}
                       </td>
-                      <td data-label="Agent" className="px-4 py-2 text-zinc-300">{(r.agentName as string) || '-'}</td>
-                      <td data-label="Provider / model" className="px-4 py-2 text-xs text-zinc-400">
-                        <span className="text-zinc-500">{r.provider as string}</span>
+                      <td data-label="Agent" className="px-4 py-2 text-[rgb(var(--text-primary))]">{(r.agentName as string) || '-'}</td>
+                      <td data-label="Provider / model" className="px-4 py-2 text-xs text-[rgb(var(--text-secondary))]">
+                        <span className="text-[rgb(var(--text-muted))]">{r.provider as string}</span>
                         {' / '}
                         {r.model as string}
                       </td>
-                      <td data-label="Channel" className="px-4 py-2 text-xs font-mono text-zinc-500">
+                      <td data-label="Channel" className="px-4 py-2 text-xs font-mono text-[rgb(var(--text-muted))]">
                         {(r.channelId as string) ?? '-'}
                       </td>
-                      <td data-label="In / out" className="px-4 py-2 text-right text-xs text-zinc-400 font-mono">
+                      <td data-label="In / out" className="px-4 py-2 text-right text-xs text-[rgb(var(--text-secondary))] font-mono">
                         {numFmt.format((r.inputTokens as number) ?? 0)}
                         {' / '}
                         {numFmt.format((r.outputTokens as number) ?? 0)}
                       </td>
-                      <td data-label="Cost" className="px-4 py-2 text-right text-zinc-200 font-mono">
+                      <td data-label="Cost" className="px-4 py-2 text-right text-[rgb(var(--text-primary))] font-mono">
                         {fmtUsd((r.costUsd as number) ?? 0)}
                       </td>
                     </tr>
@@ -339,29 +339,29 @@ interface BreakdownRow { _id: string | null; cost: number; calls: number }
 
 function BreakdownTable({ title, rows, totalCost }: { title: string; rows: BreakdownRow[]; totalCost: number }) {
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-      <div className="px-4 py-3 border-b border-zinc-800">
+    <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))]">
         <h3 className="text-sm font-semibold">{title}</h3>
       </div>
       {rows.length === 0 ? (
-        <div className="p-6 text-center text-xs text-zinc-500">No data</div>
+        <div className="p-6 text-center text-xs text-[rgb(var(--text-muted))]">No data</div>
       ) : (
         <table className="card-table w-full text-sm">
-          <tbody className="divide-y divide-zinc-800/50">
+          <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
             {rows.slice(0, 8).map((r) => {
               const share = totalCost > 0 ? (r.cost / totalCost) * 100 : 0;
               return (
-                <tr key={r._id ?? '(none)'} className="hover:bg-zinc-800/30">
-                  <td className="m-title px-4 py-2 text-xs text-zinc-300 truncate max-w-[140px]">
+                <tr key={r._id ?? '(none)'} className="hover:bg-[rgb(var(--bg-hover))]/30">
+                  <td className="m-title px-4 py-2 text-xs text-[rgb(var(--text-primary))] truncate max-w-[140px]">
                     {r._id ?? '(none)'}
                   </td>
-                  <td data-label="Calls" className="px-4 py-2 text-right text-xs text-zinc-500 font-mono">
+                  <td data-label="Calls" className="px-4 py-2 text-right text-xs text-[rgb(var(--text-muted))] font-mono">
                     {r.calls}
                   </td>
-                  <td data-label="Cost" className="px-4 py-2 text-right text-xs text-zinc-200 font-mono">
+                  <td data-label="Cost" className="px-4 py-2 text-right text-xs text-[rgb(var(--text-primary))] font-mono">
                     ${r.cost.toFixed(2)}
                   </td>
-                  <td data-label="Share" className="px-4 py-2 text-right text-xs text-zinc-500 font-mono w-12">
+                  <td data-label="Share" className="px-4 py-2 text-right text-xs text-[rgb(var(--text-muted))] font-mono w-12">
                     {share.toFixed(0)}%
                   </td>
                 </tr>

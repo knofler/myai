@@ -32,8 +32,12 @@ STALE_MIN=$(jq -r '.autosave.stale_minutes // 30' "$CONFIG" 2>/dev/null)
 echo "$STALE_MIN" | grep -qE '^[0-9]+$' || STALE_MIN=30
 STALE_SEC=$(( STALE_MIN * 60 ))
 
+# GNU FIRST (473a19a, fleet-wide rule): on Linux `stat -f "%m"` is
+# --file-system and SUCCEEDS, printing the mount point — so a BSD-first
+# `||` chain never reaches the GNU form and the age math silently breaks.
+# Do not reorder these.
 NOW=$(date +%s)
-HMTIME=$(stat -f "%m" "$HANDOFF" 2>/dev/null || stat -c "%Y" "$HANDOFF" 2>/dev/null)
+HMTIME=$(stat -c "%Y" "$HANDOFF" 2>/dev/null || stat -f "%m" "$HANDOFF" 2>/dev/null)
 echo "$HMTIME" | grep -qE '^[0-9]+$' || exit 0
 
 [ "$(autosave_stop_stale "$NOW" "$HMTIME" "$STALE_SEC")" = "STALE" ] || exit 0

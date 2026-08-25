@@ -4,6 +4,7 @@
 // tenant's brain store only (ADR-010 directory isolation).
 
 import { callGateway } from './gateway';
+import { fetchBrainExploreFromRemote } from './brain-git-remote';
 
 export interface BrainAtomMeta {
   path: string;
@@ -73,8 +74,17 @@ export interface BrainExplore {
  *  reads / per-stash previews / provenance blame walk it never renders. */
 export type BrainSection = 'atoms' | 'stashes' | 'provenance';
 
-export function fetchBrainExplore(sections?: BrainSection[]): Promise<BrainExplore | null> {
-  return callGateway<BrainExplore>('brain_explore', sections ? { sections } : {});
+/**
+ * Prefers the gateway (`brain_explore` MCP tool — full local read, the fast
+ * path on any deployment that can reach it). When the gateway is unreachable
+ * (GATEWAY_MCP_URL still on its Docker-internal default, e.g. on Vercel) and
+ * BRAIN_GIT_REMOTE is configured, falls back to reading the brain straight
+ * from its own git remote (brain-git-remote.ts) — no gateway required.
+ */
+export async function fetchBrainExplore(sections?: BrainSection[]): Promise<BrainExplore | null> {
+  const viaGateway = await callGateway<BrainExplore>('brain_explore', sections ? { sections } : {});
+  if (viaGateway) return viaGateway;
+  return fetchBrainExploreFromRemote(sections);
 }
 
 // ── Brain health — composite index (BRAIN health-score) ─────────────────────

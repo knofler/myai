@@ -248,6 +248,43 @@ function generateCliReference() {
   return md.join('\n');
 }
 
+// Resolve the primitive constants that runtime/src/mcp/tools.ts imports, so a
+// tool description can interpolate the exact constant the gateway enforces
+// (`${MAX_BULK_OPS}`) instead of a hand-copied number that drifts the day
+// someone changes the cap.
+//
+// Deliberately narrow, and it never executes the imported module: it follows
+// relative imports only and lifts `export const NAME = <primitive literal>`
+// straight out of the source text. A constant built by a function call or an
+// expression stays unresolved, so TOOL_DEFINITIONS still throws on genuinely
+// computed values.
+function resolveImportedConstants(toolsSrc) {
+  const ctx = {};
+  const toolsDir = path.join(REPO_ROOT, 'runtime', 'src', 'mcp');
+  const importRe = /import\s+(?!type\s)\{([^}]+)\}\s+from\s+'(\.[^']+)'/g;
+  let im;
+  while ((im = importRe.exec(toolsSrc)) !== null) {
+    const names = im[1]
+      .split(',')
+      .map((s) => s.trim().replace(/^type\s+/, '').split(/\s+as\s+/).pop().trim())
+      .filter((n) => /^[A-Za-z_$][\w$]*$/.test(n));
+    // TS imports carry the emitted '.js' specifier; the source of truth is '.ts'.
+    const modPath = path.resolve(toolsDir, im[2].replace(/\.js$/, '.ts'));
+    if (!fs.existsSync(modPath)) continue;
+    const modSrc = fs.readFileSync(modPath, 'utf8');
+    for (const name of names) {
+      if (name in ctx) continue;
+      const lit = modSrc.match(
+        new RegExp(
+          `export\\s+const\\s+${name}\\b[^=\\n]*=\\s*(-?\\d[\\d_]*(?:\\.\\d+)?|'[^'\\n]*'|"[^"\\n]*"|true|false)\\s*;`,
+        ),
+      );
+      if (lit) ctx[name] = vm.runInNewContext('(' + lit[1] + ')', {});
+    }
+  }
+  return ctx;
+}
+
 function extractToolDefinitions() {
   const src = fs.readFileSync(path.join(REPO_ROOT, 'runtime', 'src', 'mcp', 'tools.ts'), 'utf8');
   const marker = 'TOOL_DEFINITIONS: McpToolDef[] = [';
@@ -257,10 +294,14 @@ function extractToolDefinitions() {
   const close = src.indexOf('\n];', open);
   if (close === -1) throw new Error('TOOL_DEFINITIONS closing "];" not found');
   const arrayText = src.slice(open, close + 2); // "[ ... ]"
-  // The array is pure object literals (strings, arrays, nested objects) — safe
-  // to evaluate in an empty vm context. If someone adds a computed value this
-  // throws, which is exactly the signal we want in CI.
-  const tools = vm.runInNewContext('(' + arrayText + ')', {});
+  // The array is object literals plus, occasionally, a description that
+  // interpolates an imported cap (e.g. `Apply up to ${MAX_BULK_OPS} …`). Those
+  // must interpolate rather than hard-code the number, or the documented cap
+  // silently drifts from the constant the gateway actually enforces — so seed
+  // the sandbox with the imported *literal* constants. Anything genuinely
+  // computed is still unresolved and still throws, which remains the signal we
+  // want in CI.
+  const tools = vm.runInNewContext('(' + arrayText + ')', resolveImportedConstants(src));
 
   // Map each tool to its section header comment ("// ── MEMORY / RAG ──…")
   const sections = [];
@@ -342,6 +383,10 @@ const NAV = [
   { title: 'Home', file: 'index.html' },
   { title: 'Quickstart', file: 'quickstart.html' },
   { title: 'Concepts', file: 'concepts.html' },
+  { title: 'Brain', file: 'brain.html' },
+  { title: 'Gateway', file: 'gateway.html' },
+  { title: 'Keywords', file: 'keywords.html' },
+  { title: 'Self-host guide', file: 'self-host.html' },
   { title: 'Walkthroughs', file: 'media.html' },
   { title: 'Comparisons', file: 'compare.html' },
   { title: 'CLI reference', file: 'reference/cli.html' },

@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 const inputCls =
-  'px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-100 placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
+  'px-3 py-2 rounded-lg bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
 
 type GrantType = 'plan_months' | 'credits';
 type GrantPlan = 'solo' | 'team' | 'scale';
@@ -43,8 +43,8 @@ function statusBadgeCls(status: GiftCodeStatus): string {
     case 'active': return 'bg-emerald-500/10 text-emerald-400';
     case 'exhausted': return 'bg-teal-500/10 text-teal-400';
     case 'disabled': return 'bg-red-500/10 text-red-400';
-    case 'expired': return 'bg-zinc-800 text-zinc-500';
-    default: return 'bg-zinc-800 text-zinc-500';
+    case 'expired': return 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]';
+    default: return 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]';
   }
 }
 
@@ -151,14 +151,14 @@ export default function GiftCodesPanel() {
 
   return (
     <div className="max-w-4xl space-y-6">
-      <form onSubmit={mint} className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-zinc-200 mb-4">Mint a gift code</h3>
+      <form onSubmit={mint} className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-[rgb(var(--text-primary))] mb-4">Mint a gift code</h3>
 
         {mintError && (
           <div className="mb-4 bg-red-950/30 border border-red-800/50 rounded-lg p-3 text-xs text-red-300">
             {mintError}
             {mintError.toLowerCase().includes('admin_disabled') ? (
-              <> — set <code className="bg-zinc-800 px-1 rounded">ADMIN_API_TOKEN</code> on the dashboard and gateway to enable this panel.</>
+              <> — set <code className="bg-[rgb(var(--bg-hover))] px-1 rounded">ADMIN_API_TOKEN</code> on the dashboard and gateway to enable this panel.</>
             ) : null}
           </div>
         )}
@@ -171,7 +171,7 @@ export default function GiftCodesPanel() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
           <div>
-            <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">Grant type</label>
+            <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Grant type</label>
             <select
               className={`${inputCls} w-full`}
               value={grantType}
@@ -185,7 +185,7 @@ export default function GiftCodesPanel() {
           {grantType === 'plan_months' ? (
             <>
               <div>
-                <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">Plan</label>
+                <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Plan</label>
                 <select
                   className={`${inputCls} w-full`}
                   value={grantPlan}
@@ -197,7 +197,7 @@ export default function GiftCodesPanel() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">Months</label>
+                <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Months</label>
                 <input
                   type="number"
                   min={1}
@@ -210,7 +210,7 @@ export default function GiftCodesPanel() {
             </>
           ) : (
             <div>
-              <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">Credits</label>
+              <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Credits</label>
               <input
                 type="number"
                 min={1}
@@ -223,7 +223,7 @@ export default function GiftCodesPanel() {
           )}
 
           <div>
-            <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">Max redemptions</label>
+            <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Max redemptions</label>
             <input
               type="number"
               min={1}
@@ -234,7 +234,7 @@ export default function GiftCodesPanel() {
           </div>
 
           <div>
-            <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">Expires in (days, optional)</label>
+            <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Expires in (days, optional)</label>
             <input
               type="number"
               min={1}
@@ -246,7 +246,7 @@ export default function GiftCodesPanel() {
           </div>
 
           <div>
-            <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">Custom code (optional)</label>
+            <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Custom code (optional)</label>
             <input
               className={`${inputCls} w-full font-mono`}
               value={customCode}
@@ -256,7 +256,7 @@ export default function GiftCodesPanel() {
           </div>
         </div>
 
-        <label className="block text-xs text-zinc-500 uppercase tracking-wider mb-2">Note (optional)</label>
+        <label className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Note (optional)</label>
         <input
           className={`${inputCls} w-full mb-4`}
           value={note}
@@ -273,9 +273,9 @@ export default function GiftCodesPanel() {
         </button>
       </form>
 
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-800 flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold text-zinc-200">Gift codes</h3>
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))] flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Gift codes</h3>
           <div className="flex flex-wrap items-center gap-2">
             <input
               className={`${inputCls} text-xs py-1.5`}
@@ -291,7 +291,7 @@ export default function GiftCodesPanel() {
                   className={`px-2.5 py-1 rounded text-xs transition-colors ${
                     statusFilter === f.id
                       ? 'bg-teal-600 text-white'
-                      : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                      : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-secondary))] hover:bg-zinc-700'
                   }`}
                 >
                   {f.label}
@@ -308,13 +308,13 @@ export default function GiftCodesPanel() {
         )}
 
         {loading ? (
-          <div className="p-6 text-center text-xs text-zinc-500">Loading…</div>
+          <div className="p-6 text-center text-xs text-[rgb(var(--text-muted))]">Loading…</div>
         ) : filtered.length === 0 ? (
-          <div className="p-6 text-center text-xs text-zinc-500">No gift codes match.</div>
+          <div className="p-6 text-center text-xs text-[rgb(var(--text-muted))]">No gift codes match.</div>
         ) : (
           <table className="card-table w-full text-sm">
             <thead>
-              <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+              <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
                 <th className="px-4 py-3">Code</th>
                 <th className="px-4 py-3">Grant</th>
                 <th className="px-4 py-3">Status</th>
@@ -324,21 +324,21 @@ export default function GiftCodesPanel() {
                 <th className="px-4 py-3" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800/50">
+            <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
               {filtered.map((c) => (
-                <tr key={c.codeId} className="hover:bg-zinc-800/30 transition-colors">
-                  <td data-label="Code" className="px-4 py-2 font-mono text-zinc-200">{c.code}</td>
-                  <td data-label="Grant" className="px-4 py-2 text-xs text-zinc-400">{grantSummary(c)}</td>
+                <tr key={c.codeId} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                  <td data-label="Code" className="px-4 py-2 font-mono text-[rgb(var(--text-primary))]">{c.code}</td>
+                  <td data-label="Grant" className="px-4 py-2 text-xs text-[rgb(var(--text-secondary))]">{grantSummary(c)}</td>
                   <td data-label="Status" className="px-4 py-2">
                     <span className={`text-xs px-1.5 py-0.5 rounded ${statusBadgeCls(c.status)}`}>{c.status}</span>
                   </td>
-                  <td data-label="Redemptions" className="px-4 py-2 text-right text-xs text-zinc-400 font-mono">
+                  <td data-label="Redemptions" className="px-4 py-2 text-right text-xs text-[rgb(var(--text-secondary))] font-mono">
                     {c.redemptionCount} / {c.maxRedemptions}
                   </td>
-                  <td data-label="Expires" className="px-4 py-2 text-xs text-zinc-500">
+                  <td data-label="Expires" className="px-4 py-2 text-xs text-[rgb(var(--text-muted))]">
                     {c.expiresAt ? new Date(c.expiresAt).toLocaleDateString() : 'never'}
                   </td>
-                  <td data-label="Note" className="px-4 py-2 text-xs text-zinc-500 truncate max-w-[160px]">{c.note ?? '-'}</td>
+                  <td data-label="Note" className="px-4 py-2 text-xs text-[rgb(var(--text-muted))] truncate max-w-[160px]">{c.note ?? '-'}</td>
                   <td data-label="" className="px-4 py-2 text-right">
                     {c.status !== 'disabled' && (
                       <button

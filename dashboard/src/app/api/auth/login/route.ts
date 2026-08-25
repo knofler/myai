@@ -54,6 +54,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: gw?.error || 'login failed' }, { status: gwRes.status || 401 });
     }
 
+    // 1b. TOTP-enabled account: password matched but no session yet — the
+    // gateway hands back a short-lived pendingToken instead of a real token.
+    // No tenant lookup (there's nothing to look up without a session) and no
+    // cookie; the caller must complete /api/auth/totp/verify with a code.
+    if (gw.mfaRequired) {
+      return NextResponse.json({ mfaRequired: true, pendingToken: gw.pendingToken });
+    }
+
     // 2. Resolve the tenant's display fields for the session/switcher UI.
     await connectDB();
     const tenant = await Tenant.findOne({ tenantId: gw.tenantId })
@@ -66,7 +74,11 @@ export async function POST(req: Request) {
     // 3. Set the JWT session cookie on the dashboard domain + return identity.
     const res = NextResponse.json({
       tenant: { tenantId: tenant.tenantId, name: tenant.name, plan: tenant.plan },
-      user: { role: gw.role, displayName: gw.displayName },
+      // totpEnrollmentRequired: the tenant's require2fa policy is on but this
+      // account hasn't enrolled yet — the dashboard must force /2fa before
+      // letting the user past the wall (a full session IS issued here since
+      // there's no secret to challenge against yet).
+      user: { role: gw.role, displayName: gw.displayName, totpEnrollmentRequired: !!gw.totpEnrollmentRequired },
     });
     setSessionCookie(res, gw.token, JWT_MAX_AGE);
     return res;

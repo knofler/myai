@@ -508,10 +508,83 @@ th_rc=0; check_tracked_hygiene || th_rc=$?
 if [ "$th_rc" -eq 1 ]; then overall=1; fi
 echo
 
+# ── Stat-ordering gate (AI_RULES §4 regression backstop) ────────────────────
+# CRITICAL block, same contract as the gates above: a BSD-first
+# `stat -f ... || stat -c ...` fallback chain is a silent-corruption bug on
+# Linux (GNU `-f` means `--file-system`, so the BSD form succeeds with garbage
+# instead of failing over) — it has recurred multiple times fleet-wide
+# (473a19a, b5a6a8bd). Logic lives in scripts/check_stat_ordering.sh (shared
+# with script-unit-tests.yml). set -e-safe rc capture.
+check_stat_ordering() {
+  local rc=0 out=""
+  out="$("$SCRIPT_DIR/check_stat_ordering.sh" --repo "$REPO_ROOT" 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/  /'
+  return "$rc"
+}
+so_rc=0; check_stat_ordering || so_rc=$?
+if [ "$so_rc" -eq 1 ]; then overall=1; fi
+echo
+
 # Same set -e-safe pattern as the tenant-scoping gate above: rc 2 is SKIP (no
 # runtime/ in this repo), rc 1 is a genuine FAIL that must flip `overall`.
 cov_rc=0; check_runtime_coverage || cov_rc=$?
 if [ "$cov_rc" -eq 1 ]; then overall=1; fi
+echo
+
+# ── Brain token SLO gate (BRAIN W2.4) ────────────────────────────────────────
+# The brain's core claim — "a blank agent boots for a few hundred tokens, not
+# tens of thousands, because it reads the compiled brief + only-what-changed
+# instead of STATE.md + the handoff in full" (scripts/brain_token_eval.py) —
+# was previously just a number someone had to remember to check. This turns
+# it into an enforced SLO: fail the build if cold-start or smart-returning
+# boot cost regresses past budget. Degrades to SKIP (not FAIL) when this
+# machine has no brain store (fresh clone / CI runner with no ~/.myai/brain)
+# so CI stays green there — the gate only bites once a brain exists to regress.
+check_brain_token_slo() {
+  local cold_budget=500 smart_budget=3000
+  echo "  [Brain Token SLO] cold-start <${cold_budget} tok, smart-returning <${smart_budget} tok"
+  command -v python3 >/dev/null 2>&1 || { echo "    SKIP — python3 unavailable"; return 2; }
+  [ -f "$SCRIPT_DIR/brain_token_eval.py" ] || { echo "    SKIP — brain_token_eval.py not found"; return 2; }
+  local json_out
+  if ! json_out="$(python3 "$SCRIPT_DIR/brain_token_eval.py" --json 2>&1)"; then
+    echo "    SKIP — brain_token_eval.py errored: $json_out"; return 2
+  fi
+  BRAIN_SLO_COLD_BUDGET="$cold_budget" BRAIN_SLO_SMART_BUDGET="$smart_budget" \
+    python3 - "$json_out" <<'PY'
+import json, os, sys
+cold_budget = int(os.environ["BRAIN_SLO_COLD_BUDGET"])
+smart_budget = int(os.environ["BRAIN_SLO_SMART_BUDGET"])
+try:
+    data = json.loads(sys.argv[1])
+except Exception as e:
+    print(f"    SKIP — could not parse brain_token_eval.py output ({e})")
+    sys.exit(2)
+
+cold = data.get("cold_start", {}).get("new_tokens", -1)
+smart = data.get("smart_returning", {}).get("tokens", -1)
+
+if cold < 0 or smart < 0:
+    print("    SKIP — no brain store on this machine (brief.md/working.md absent)")
+    sys.exit(2)
+
+print(f"    cold-start   : {cold} tok  (budget < {cold_budget})")
+print(f"    smart-return : {smart} tok  (budget < {smart_budget})")
+
+ok = True
+if cold >= cold_budget:
+    print(f"    FAIL — cold-start {cold} tok >= budget {cold_budget} tok (regression)")
+    ok = False
+if smart >= smart_budget:
+    print(f"    FAIL — smart-returning {smart} tok >= budget {smart_budget} tok (regression)")
+    ok = False
+if not ok:
+    sys.exit(1)
+print("    PASS — brain token SLO within budget")
+sys.exit(0)
+PY
+}
+bts_rc=0; check_brain_token_slo || bts_rc=$?
+if [ "$bts_rc" -eq 1 ]; then overall=1; fi
 echo
 
 # ── Run required checks (Ready to Merge is an aggregator — evaluate last) ────

@@ -33,6 +33,11 @@ interface MonthlyBucket {
   inputTokens: number;
   outputTokens: number;
 }
+interface AttributionRow {
+  _id: string | boolean | null;
+  cost: number;
+  calls: number;
+}
 
 function fmtUsd(n: number): string {
   if (n === 0) return '$0.00';
@@ -107,6 +112,9 @@ export default async function CostsPage() {
     dailyBuckets,
     monthlyBuckets,
     topExpensiveDocs,
+    byRepoRows,
+    byTaskTypeRows,
+    byLaneRows,
   ] = await Promise.all([
     // 1. All-time total
     BudgetUsage.aggregate<AggTotal>([
@@ -173,6 +181,26 @@ export default async function CostsPage() {
       .sort({ costUsd: -1 })
       .limit(10)
       .lean(),
+    // 9-11. Cost-attribution breakdown (MTD) — repo / task-type / premium-vs-
+    // standard lane. Itemised $ spend the pricing page's overage invoicing
+    // reads and Team/Scale buyers use to justify spend. Mirrors
+    // llm/budget-stats.ts::getCostAttribution's grouping (gateway REST/MCP
+    // read the same rows via `/api/budgets/attribution`).
+    BudgetUsage.aggregate<AttributionRow>([
+      { $match: { ...tf, createdAt: { $gte: monthStart } } },
+      { $group: { _id: '$repo', cost: { $sum: '$costUsd' }, calls: { $sum: 1 } } },
+      { $sort: { cost: -1 } },
+    ]),
+    BudgetUsage.aggregate<AttributionRow>([
+      { $match: { ...tf, createdAt: { $gte: monthStart } } },
+      { $group: { _id: '$taskType', cost: { $sum: '$costUsd' }, calls: { $sum: 1 } } },
+      { $sort: { cost: -1 } },
+    ]),
+    BudgetUsage.aggregate<AttributionRow>([
+      { $match: { ...tf, createdAt: { $gte: monthStart } } },
+      { $group: { _id: { $cond: [{ $eq: ['$premium', true] }, 'premium', 'standard'] }, cost: { $sum: '$costUsd' }, calls: { $sum: 1 } } },
+      { $sort: { cost: -1 } },
+    ]),
   ]);
 
   const allTimeSpend = allTimeAgg[0]?.total ?? 0;
@@ -229,20 +257,20 @@ export default async function CostsPage() {
       </div>
 
       {/* ── 2. Provider x Model Breakdown ─────────────────────── */}
-      <div className="mb-8 bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-800 flex items-baseline justify-between">
+      <div className="mb-8 bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))] flex items-baseline justify-between">
           <h2 className="text-lg font-semibold">Provider breakdown (MTD)</h2>
-          <span className="text-xs text-zinc-500">{providerModelRows.length} model(s)</span>
+          <span className="text-xs text-[rgb(var(--text-muted))]">{providerModelRows.length} model(s)</span>
         </div>
         {providerModelRows.length === 0 ? (
-          <div className="p-8 text-center text-sm text-zinc-500">
-            No spend recorded this month. Route calls through the gateway with <code className="text-zinc-400">BUDGETS_ENABLED=1</code> to populate.
+          <div className="p-8 text-center text-sm text-[rgb(var(--text-muted))]">
+            No spend recorded this month. Route calls through the gateway with <code className="text-[rgb(var(--text-secondary))]">BUDGETS_ENABLED=1</code> to populate.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="card-table w-full text-sm">
               <thead>
-                <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+                <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
                   <th className="px-4 py-3">Provider</th>
                   <th className="px-4 py-3">Model</th>
                   <th className="px-4 py-3 text-right">Calls</th>
@@ -252,30 +280,30 @@ export default async function CostsPage() {
                   <th className="px-4 py-3 text-right">Avg / call</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                 {providerModelRows.map((row) => {
                   const avgPerCall = row.totalCalls > 0 ? row.totalCost / row.totalCalls : 0;
                   return (
-                    <tr key={`${row._id.provider}-${row._id.model}`} className="hover:bg-zinc-800/30 transition-colors">
-                      <td className="m-title px-4 py-2.5 text-zinc-300">
+                    <tr key={`${row._id.provider}-${row._id.model}`} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                      <td className="m-title px-4 py-2.5 text-[rgb(var(--text-primary))]">
                         {row._id.provider ?? '(unknown)'}
                       </td>
-                      <td data-label="Model" className="px-4 py-2.5 text-xs font-mono text-zinc-400">
+                      <td data-label="Model" className="px-4 py-2.5 text-xs font-mono text-[rgb(var(--text-secondary))]">
                         {row._id.model ?? '(unknown)'}
                       </td>
-                      <td data-label="Calls" className="px-4 py-2.5 text-right text-zinc-400 font-mono">
+                      <td data-label="Calls" className="px-4 py-2.5 text-right text-[rgb(var(--text-secondary))] font-mono">
                         {numFmt.format(row.totalCalls)}
                       </td>
-                      <td data-label="Tokens in" className="px-4 py-2.5 text-right text-zinc-400 font-mono text-xs">
+                      <td data-label="Tokens in" className="px-4 py-2.5 text-right text-[rgb(var(--text-secondary))] font-mono text-xs">
                         {fmtTokens(row.totalInputTokens)}
                       </td>
-                      <td data-label="Tokens out" className="px-4 py-2.5 text-right text-zinc-400 font-mono text-xs">
+                      <td data-label="Tokens out" className="px-4 py-2.5 text-right text-[rgb(var(--text-secondary))] font-mono text-xs">
                         {fmtTokens(row.totalOutputTokens)}
                       </td>
-                      <td data-label="Total cost" className="px-4 py-2.5 text-right text-zinc-200 font-mono font-semibold">
+                      <td data-label="Total cost" className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono font-semibold">
                         {fmtUsd(row.totalCost)}
                       </td>
-                      <td data-label="Avg / call" className="px-4 py-2.5 text-right text-xs text-zinc-500 font-mono">
+                      <td data-label="Avg / call" className="px-4 py-2.5 text-right text-xs text-[rgb(var(--text-muted))] font-mono">
                         {fmtUsd(avgPerCall)}
                       </td>
                     </tr>
@@ -283,17 +311,17 @@ export default async function CostsPage() {
                 })}
               </tbody>
               <tfoot>
-                <tr className="border-t border-zinc-700 bg-zinc-950/50">
-                  <td className="m-title px-4 py-2.5 text-xs text-zinc-400 font-semibold" colSpan={2}>
+                <tr className="border-t border-zinc-700 bg-[rgb(var(--bg-page))]/50">
+                  <td className="m-title px-4 py-2.5 text-xs text-[rgb(var(--text-secondary))] font-semibold" colSpan={2}>
                     Total
                   </td>
-                  <td data-label="Calls" className="px-4 py-2.5 text-right text-zinc-300 font-mono text-xs">
+                  <td data-label="Calls" className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono text-xs">
                     {numFmt.format(providerModelRows.reduce((s: number, r: ProviderModelRow) => s + r.totalCalls, 0))}
                   </td>
-                  <td data-label="Tokens in" className="px-4 py-2.5 text-right text-zinc-300 font-mono text-xs">
+                  <td data-label="Tokens in" className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono text-xs">
                     {fmtTokens(providerModelRows.reduce((s: number, r: ProviderModelRow) => s + r.totalInputTokens, 0))}
                   </td>
-                  <td data-label="Tokens out" className="px-4 py-2.5 text-right text-zinc-300 font-mono text-xs">
+                  <td data-label="Tokens out" className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono text-xs">
                     {fmtTokens(providerModelRows.reduce((s: number, r: ProviderModelRow) => s + r.totalOutputTokens, 0))}
                   </td>
                   <td data-label="Total cost" className="px-4 py-2.5 text-right text-emerald-400 font-mono font-bold">
@@ -307,12 +335,51 @@ export default async function CostsPage() {
         )}
       </div>
 
+      {/* ── 2b. Cost attribution (MTD) — repo / task-type / lane ─ */}
+      <div className="mb-8">
+        <h2 className="text-lg font-semibold mb-3">Cost attribution (MTD)</h2>
+        <p className="text-xs text-[rgb(var(--text-muted))] mb-4">
+          Itemised spend by repo, task-type, and premium-vs-standard lane — the substrate for overage invoicing. Same data as{' '}
+          <code className="text-[rgb(var(--text-secondary))]">GET /api/budgets/attribution</code>.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {([
+            { title: 'By repo', rows: byRepoRows },
+            { title: 'By task-type', rows: byTaskTypeRows },
+            { title: 'By lane', rows: byLaneRows },
+          ] as const).map(({ title, rows }) => (
+            <div key={title} className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+              <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))]">
+                <h3 className="text-sm font-semibold">{title}</h3>
+              </div>
+              {rows.length === 0 ? (
+                <div className="p-4 text-xs text-[rgb(var(--text-muted))]">No data this month.</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
+                    {rows.map((row) => (
+                      <tr key={String(row._id)} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                        <td className="px-4 py-2 text-[rgb(var(--text-secondary))] font-mono">
+                          {row._id === null || row._id === undefined || row._id === '' ? 'unattributed' : String(row._id)}
+                        </td>
+                        <td className="px-4 py-2 text-right text-[rgb(var(--text-muted))] font-mono">{numFmt.format(row.calls)}</td>
+                        <td className="px-4 py-2 text-right text-[rgb(var(--text-primary))] font-mono font-semibold">{fmtUsd(row.cost)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* ── 3. 30-Day Daily Spend Chart ───────────────────────── */}
-      <div className="mb-8 bg-zinc-900 border border-zinc-800 rounded-lg p-5">
+      <div className="mb-8 bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
         <div className="flex items-baseline justify-between mb-4">
           <h2 className="text-lg font-semibold">Daily spend (30 days)</h2>
-          <div className="text-xs text-zinc-500">
-            Peak: <span className="text-zinc-300">{fmtUsd(peakDay.cost)}</span> on {peakDay._id}
+          <div className="text-xs text-[rgb(var(--text-muted))]">
+            Peak: <span className="text-[rgb(var(--text-primary))]">{fmtUsd(peakDay.cost)}</span> on {peakDay._id}
           </div>
         </div>
         <div className="space-y-1">
@@ -321,16 +388,16 @@ export default async function CostsPage() {
             const isToday = d._id === dates[dates.length - 1];
             return (
               <div key={d._id} className="flex items-center gap-3 text-xs font-mono">
-                <span className={`w-20 text-right ${isToday ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                <span className={`w-20 text-right ${isToday ? 'text-emerald-400' : 'text-[rgb(var(--text-muted))]'}`}>
                   {d._id.slice(5)}
                 </span>
-                <div className="flex-1 h-4 bg-zinc-950 rounded overflow-hidden relative">
+                <div className="flex-1 h-4 bg-[rgb(var(--bg-page))] rounded overflow-hidden relative">
                   <div
                     className={`absolute left-0 top-0 h-full rounded ${isToday ? 'bg-emerald-500/60' : 'bg-zinc-600'}`}
                     style={{ width: `${widthPct}%` }}
                   />
                 </div>
-                <span className={`w-16 text-right ${d.cost > 0 ? 'text-zinc-300' : 'text-zinc-700'}`}>
+                <span className={`w-16 text-right ${d.cost > 0 ? 'text-[rgb(var(--text-primary))]' : 'text-zinc-700'}`}>
                   {d.cost > 0 ? fmtUsd(d.cost) : '—'}
                 </span>
                 <span className="w-10 text-right text-zinc-600">
@@ -351,15 +418,15 @@ export default async function CostsPage() {
       <div className="mb-8">
         <h2 className="text-lg font-semibold mb-3">Top 10 most expensive calls</h2>
         {topExpensiveDocs.length === 0 ? (
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-8 text-center text-zinc-500 text-sm">
+          <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-8 text-center text-[rgb(var(--text-muted))] text-sm">
             No calls recorded yet.
           </div>
         ) : (
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+          <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
             <div className="overflow-x-auto">
               <table className="card-table w-full text-sm">
                 <thead>
-                  <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+                  <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
                     <th className="px-4 py-3">When</th>
                     <th className="px-4 py-3">Agent</th>
                     <th className="px-4 py-3">Provider</th>
@@ -369,31 +436,31 @@ export default async function CostsPage() {
                     <th className="px-4 py-3 text-right">Cost</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-800/50">
+                <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                   {topExpensiveDocs.map((doc: Record<string, unknown>) => {
                     const r = doc;
                     const created = r.createdAt ? new Date(r.createdAt as Date) : null;
                     return (
-                      <tr key={String(r._id)} className="hover:bg-zinc-800/30 transition-colors">
-                        <td className="m-title px-4 py-2.5 text-xs text-zinc-500 whitespace-nowrap">
+                      <tr key={String(r._id)} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                        <td className="m-title px-4 py-2.5 text-xs text-[rgb(var(--text-muted))] whitespace-nowrap">
                           {created ? created.toLocaleString() : '-'}
                         </td>
-                        <td data-label="Agent" className="px-4 py-2.5 text-zinc-300 truncate max-w-[140px]">
+                        <td data-label="Agent" className="px-4 py-2.5 text-[rgb(var(--text-primary))] truncate max-w-[140px]">
                           {(r.agentName as string) || '-'}
                         </td>
-                        <td data-label="Provider" className="px-4 py-2.5 text-xs text-zinc-500">
+                        <td data-label="Provider" className="px-4 py-2.5 text-xs text-[rgb(var(--text-muted))]">
                           {(r.provider as string) || '-'}
                         </td>
-                        <td data-label="Model" className="px-4 py-2.5 text-xs font-mono text-zinc-400">
+                        <td data-label="Model" className="px-4 py-2.5 text-xs font-mono text-[rgb(var(--text-secondary))]">
                           {(r.model as string) || '-'}
                         </td>
-                        <td data-label="Tokens in" className="px-4 py-2.5 text-right text-xs text-zinc-400 font-mono">
+                        <td data-label="Tokens in" className="px-4 py-2.5 text-right text-xs text-[rgb(var(--text-secondary))] font-mono">
                           {numFmt.format((r.inputTokens as number) ?? 0)}
                         </td>
-                        <td data-label="Tokens out" className="px-4 py-2.5 text-right text-xs text-zinc-400 font-mono">
+                        <td data-label="Tokens out" className="px-4 py-2.5 text-right text-xs text-[rgb(var(--text-secondary))] font-mono">
                           {numFmt.format((r.outputTokens as number) ?? 0)}
                         </td>
-                        <td data-label="Cost" className="px-4 py-2.5 text-right text-zinc-200 font-mono font-semibold">
+                        <td data-label="Cost" className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono font-semibold">
                           {fmtUsd((r.costUsd as number) ?? 0)}
                         </td>
                       </tr>
@@ -407,10 +474,10 @@ export default async function CostsPage() {
       </div>
 
       {/* ── 5. Monthly Trend (Last 6 Months) ──────────────────── */}
-      <div className="mb-8 bg-zinc-900 border border-zinc-800 rounded-lg p-5">
+      <div className="mb-8 bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
         <div className="flex items-baseline justify-between mb-4">
           <h2 className="text-lg font-semibold">Monthly trend (6 months)</h2>
-          <span className="text-xs text-zinc-500">
+          <span className="text-xs text-[rgb(var(--text-muted))]">
             {months[0]} to {months[months.length - 1]}
           </span>
         </div>
@@ -422,7 +489,7 @@ export default async function CostsPage() {
             const isCurrent = m._id === months[months.length - 1];
             return (
               <div key={m._id} className="flex-1 flex flex-col items-center gap-1">
-                <span className={`text-xs font-mono ${m.cost > 0 ? 'text-zinc-300' : 'text-zinc-700'}`}>
+                <span className={`text-xs font-mono ${m.cost > 0 ? 'text-[rgb(var(--text-primary))]' : 'text-zinc-700'}`}>
                   {m.cost > 0 ? fmtUsd(m.cost) : ''}
                 </span>
                 <div className="w-full flex items-end justify-center" style={{ height: '100px' }}>
@@ -431,7 +498,7 @@ export default async function CostsPage() {
                     style={{ height: `${Math.max(heightPct, m.cost > 0 ? 2 : 0)}%` }}
                   />
                 </div>
-                <span className={`text-[10px] font-mono ${isCurrent ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                <span className={`text-[10px] font-mono ${isCurrent ? 'text-emerald-400' : 'text-[rgb(var(--text-muted))]'}`}>
                   {m._id.slice(5)}
                 </span>
               </div>
@@ -443,7 +510,7 @@ export default async function CostsPage() {
         <div className="overflow-x-auto">
           <table className="card-table w-full text-xs">
             <thead>
-              <tr className="border-b border-zinc-800 text-left text-zinc-500 uppercase tracking-wider">
+              <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-[rgb(var(--text-muted))] uppercase tracking-wider">
                 <th className="px-3 py-2">Month</th>
                 <th className="px-3 py-2 text-right">Calls</th>
                 <th className="px-3 py-2 text-right">Tokens in</th>
@@ -452,26 +519,26 @@ export default async function CostsPage() {
                 <th className="px-3 py-2 text-right">vs prev</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800/50">
+            <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
               {monthlySeries.map((m, i) => {
                 const prev = i > 0 ? monthlySeries[i - 1].cost : 0;
                 const delta = prev > 0 ? ((m.cost - prev) / prev) * 100 : 0;
                 const isCurrent = m._id === months[months.length - 1];
                 return (
-                  <tr key={m._id} className={`hover:bg-zinc-800/30 transition-colors ${isCurrent ? 'bg-emerald-500/5' : ''}`}>
-                    <td className={`m-title px-3 py-2 font-mono ${isCurrent ? 'text-emerald-400' : 'text-zinc-300'}`}>
+                  <tr key={m._id} className={`hover:bg-[rgb(var(--bg-hover))]/30 transition-colors ${isCurrent ? 'bg-emerald-500/5' : ''}`}>
+                    <td className={`m-title px-3 py-2 font-mono ${isCurrent ? 'text-emerald-400' : 'text-[rgb(var(--text-primary))]'}`}>
                       {m._id}
                     </td>
-                    <td data-label="Calls" className="px-3 py-2 text-right text-zinc-400 font-mono">
+                    <td data-label="Calls" className="px-3 py-2 text-right text-[rgb(var(--text-secondary))] font-mono">
                       {numFmt.format(m.calls)}
                     </td>
-                    <td data-label="Tokens in" className="px-3 py-2 text-right text-zinc-400 font-mono">
+                    <td data-label="Tokens in" className="px-3 py-2 text-right text-[rgb(var(--text-secondary))] font-mono">
                       {fmtTokens(m.inputTokens)}
                     </td>
-                    <td data-label="Tokens out" className="px-3 py-2 text-right text-zinc-400 font-mono">
+                    <td data-label="Tokens out" className="px-3 py-2 text-right text-[rgb(var(--text-secondary))] font-mono">
                       {fmtTokens(m.outputTokens)}
                     </td>
-                    <td data-label="Spend" className="px-3 py-2 text-right text-zinc-200 font-mono font-semibold">
+                    <td data-label="Spend" className="px-3 py-2 text-right text-[rgb(var(--text-primary))] font-mono font-semibold">
                       {m.cost > 0 ? fmtUsd(m.cost) : '—'}
                     </td>
                     <td data-label="vs prev" className="px-3 py-2 text-right font-mono">
@@ -482,7 +549,7 @@ export default async function CostsPage() {
                       ) : delta < 0 ? (
                         <span className="text-emerald-400">{delta.toFixed(0)}%</span>
                       ) : (
-                        <span className="text-zinc-500">0%</span>
+                        <span className="text-[rgb(var(--text-muted))]">0%</span>
                       )}
                     </td>
                   </tr>

@@ -24,6 +24,22 @@ export interface TenantSession {
    *  session was established by a show-once signup or the "connect a tool"
    *  key flow. Password logins have no key (the JWT cookie is the credential). */
   apiKey?: string;
+  /** The tenant's require2fa policy is on but this account hasn't enrolled
+   *  TOTP yet — the dashboard should route to /2fa instead of home. */
+  totpEnrollmentRequired?: boolean;
+}
+
+/** Thrown by loginWithPassword when the account has TOTP enabled — password
+ *  matched, but the caller must complete completeTotpLogin(pendingToken, code)
+ *  before a real session exists. Distinct from a plain login failure so the
+ *  login page can switch to the code-entry step instead of showing an error. */
+export class MfaRequiredError extends Error {
+  pendingToken: string;
+  constructor(pendingToken: string) {
+    super('TOTP code required');
+    this.name = 'MfaRequiredError';
+    this.pendingToken = pendingToken;
+  }
 }
 
 export interface SignupInput {
@@ -33,14 +49,30 @@ export interface SignupInput {
   password: string;
   /** Team tier: join the inviter's existing tenant instead of creating one. */
   inviteToken?: string;
+  /** GROWTH — referral program: the `?ref=` code from another tenant's
+   *  tracked invite link, if this signup arrived via one. */
+  referralCode?: string;
+  /** Design-partner program (GRAND_PRODUCT §7.4): a `trial_days` gift code
+   *  (e.g. from a `?trial=` link) redeemed at signup for an immediate
+   *  time-boxed trial (e.g. 60 days of Solo) instead of the free plan. */
+  trialCode?: string;
+  /** Click-wrap consent: the "I agree to the Terms / Privacy / Acceptable
+   *  Use" checkbox. Recorded per tenant (version + timestamp) on the gateway;
+   *  REQUIRED there when LEGAL_CONSENT_REQUIRED=1. */
+  acceptTerms?: boolean;
 }
 
 interface TenantContextValue {
   current: TenantSession | null;
   tenants: TenantSession[];
   loading: boolean;
-  /** PRIMARY: email + password → JWT session cookie. */
+  /** PRIMARY: email + password → JWT session cookie. Throws MfaRequiredError
+   *  (carrying a pendingToken) when the account has TOTP enabled instead of
+   *  resolving — the caller must then call completeTotpLogin. */
   loginWithPassword: (email: string, password: string) => Promise<TenantSession>;
+  /** Second half of a TOTP-gated login: pendingToken from a caught
+   *  MfaRequiredError + a 6-digit code (or a recovery code) → JWT session cookie. */
+  completeTotpLogin: (pendingToken: string, code: string) => Promise<TenantSession>;
   /** PRIMARY (passwordless): request a one-time sign-in link by email. Always
    *  resolves — the caller learns nothing about whether the address exists. */
   requestMagicLink: (email: string) => Promise<void>;
@@ -49,7 +81,7 @@ interface TenantContextValue {
   loginWithMagicLink: (token: string) => Promise<TenantSession>;
   /** PRIMARY: create org + owner user (show-once API key), or join an
    *  existing tenant via invite (no API key). */
-  signup: (input: SignupInput) => Promise<{ session: TenantSession; apiKey?: string }>;
+  signup: (input: SignupInput) => Promise<{ session: TenantSession; apiKey?: string; trialEndsAt?: string }>;
   /** SECONDARY: paste a per-tenant API key ("connect a tool / CLI"). */
   connectWithKey: (apiKey: string) => Promise<TenantSession>;
   switchTenant: (tenantId: string) => void;
@@ -125,6 +157,27 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || 'login failed');
+      if (json.mfaRequired) throw new MfaRequiredError(json.pendingToken);
+      const session: TenantSession = { ...json.tenant, totpEnrollmentRequired: !!json.user?.totpEnrollmentRequired };
+      upsert(session);
+      return session;
+    },
+    [upsert],
+  );
+
+  // Second half of a TOTP-gated login: pendingToken (from a caught
+  // MfaRequiredError) + a 6-digit authenticator code, or a one-time recovery
+  // code. The route sets an httpOnly JWT cookie; the session here carries no
+  // API key, same as loginWithPassword.
+  const completeTotpLogin = useCallback(
+    async (pendingToken: string, code: string): Promise<TenantSession> => {
+      const res = await fetch('/api/auth/totp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pendingToken, code }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || 'verification failed');
       const session: TenantSession = { ...json.tenant };
       upsert(session);
       return session;
@@ -166,7 +219,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   // tenant when an invite token is supplied. New-org signups return the
   // show-once API key; invite joins never re-expose the tenant's key.
   const signup = useCallback(
-    async (input: SignupInput): Promise<{ session: TenantSession; apiKey?: string }> => {
+    async (input: SignupInput): Promise<{ session: TenantSession; apiKey?: string; trialEndsAt?: string }> => {
       const res = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -176,7 +229,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       if (!res.ok) throw new Error(json?.error || 'signup failed');
       const session: TenantSession = { ...json.tenant, apiKey: json.apiKey };
       upsert(session);
-      return { session, apiKey: json.apiKey };
+      return { session, apiKey: json.apiKey, trialEndsAt: json.trialEndsAt };
     },
     [upsert],
   );
@@ -247,6 +300,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       tenants,
       loading,
       loginWithPassword,
+      completeTotpLogin,
       requestMagicLink,
       loginWithMagicLink,
       signup,
@@ -260,6 +314,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       tenants,
       loading,
       loginWithPassword,
+      completeTotpLogin,
       requestMagicLink,
       loginWithMagicLink,
       signup,

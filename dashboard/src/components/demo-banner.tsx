@@ -10,12 +10,12 @@ export function DemoBanner() {
   if (!DEMO_MODE) return null;
 
   return (
-    <div className="fixed bottom-0 inset-x-0 z-50 border-t border-amber-500/30 bg-zinc-900/95 backdrop-blur px-4 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
+    <div className="fixed bottom-0 inset-x-0 z-50 border-t border-amber-500/30 bg-[rgb(var(--bg-surface))]/95 backdrop-blur px-4 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
       <div className="mx-auto flex max-w-4xl items-center justify-center gap-3 text-sm">
         <span className="hidden sm:inline text-amber-400" aria-hidden>
           ●
         </span>
-        <p className="text-zinc-300">
+        <p className="text-[rgb(var(--text-primary))]">
           <span className="font-semibold text-amber-400">Read-only demo</span>
           <span className="hidden sm:inline">
             {' '}

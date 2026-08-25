@@ -54,7 +54,7 @@ export default async function SavingsPage() {
       <div className="mb-8">
         <Card title="Your share card" meta="Copy it into Slack, X, or your README" accent="emerald">
           <div className="p-5 space-y-4">
-            <div className="rounded-xl overflow-hidden border border-zinc-800 bg-black">
+            <div className="rounded-xl overflow-hidden border border-[rgb(var(--border-subtle))] bg-black">
               {/* The exact image the /savings/card endpoint serves. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/savings/card" alt={shareText} className="w-full h-auto" />
@@ -65,12 +65,12 @@ export default async function SavingsPage() {
                 href="/savings/card"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-sm text-zinc-400 hover:text-zinc-200 underline underline-offset-4"
+                className="text-sm text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] underline underline-offset-4"
               >
                 Open card image ↗
               </a>
             </div>
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[rgb(var(--text-muted))]">
               The card shows this month&apos;s savings and refreshes as agents boot. It&apos;s tenant-scoped — only your own consumption.
             </p>
           </div>
@@ -82,11 +82,11 @@ export default async function SavingsPage() {
         <Card title="Per-member savings (this month)" meta={`${byUser.length} contributor${byUser.length === 1 ? '' : 's'}`}>
           <div className="p-5">
             {byUser.length === 0 ? (
-              <EmptyState>No per-member data yet — boots record a member once the gateway carries a <code className="text-zinc-400">userId</code> (Team tier).</EmptyState>
+              <EmptyState>No per-member data yet — boots record a member once the gateway carries a <code className="text-[rgb(var(--text-secondary))]">userId</code> (Team tier).</EmptyState>
             ) : (
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800">
+                  <tr className="text-left text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))]">
                     <th className="pb-2">Member</th>
                     <th className="pb-2 text-right">Tokens saved</th>
                     <th className="pb-2 text-right">$ saved</th>
@@ -96,14 +96,14 @@ export default async function SavingsPage() {
                 </thead>
                 <tbody>
                   {byUser.map((u) => (
-                    <tr key={u.userId || 'system'} className="border-b border-zinc-900 last:border-0">
-                      <td className="py-2 font-mono text-zinc-300">{u.userId || <span className="text-zinc-600">system / agent</span>}</td>
+                    <tr key={u.userId || 'system'} className="border-b border-[rgb(var(--border-subtle))] last:border-0">
+                      <td className="py-2 font-mono text-[rgb(var(--text-primary))]">{u.userId || <span className="text-zinc-600">system / agent</span>}</td>
                       <td className="py-2 text-right text-emerald-400 font-semibold">{fmtTokens(u.tokens)}</td>
                       <td className="py-2 text-right text-emerald-400">{fmtUsd(u.usd)}</td>
-                      <td className="py-2 text-right text-zinc-400">{u.boots.toLocaleString()}</td>
+                      <td className="py-2 text-right text-[rgb(var(--text-secondary))]">{u.boots.toLocaleString()}</td>
                       <td className="py-2 text-right">
                         {u.userId ? (
-                          <a href={`/savings/card?userId=${encodeURIComponent(u.userId)}`} target="_blank" rel="noopener noreferrer" className="text-zinc-500 hover:text-emerald-300 underline underline-offset-2">card ↗</a>
+                          <a href={`/savings/card?userId=${encodeURIComponent(u.userId)}`} target="_blank" rel="noopener noreferrer" className="text-[rgb(var(--text-muted))] hover:text-emerald-300 underline underline-offset-2">card ↗</a>
                         ) : <span className="text-zinc-700">—</span>}
                       </td>
                     </tr>
@@ -116,7 +116,7 @@ export default async function SavingsPage() {
       </div>
 
       <p className="text-xs text-zinc-600">
-        Cold-start tokens are priced at the input-token tier the model would otherwise re-ingest (${summary.usdPerMTokens}/M). See the fleet-wide meter on <a href="/analytics" className="underline underline-offset-2 hover:text-zinc-400">Analytics</a>.
+        Cold-start tokens are priced at the input-token tier the model would otherwise re-ingest (${summary.usdPerMTokens}/M). See the fleet-wide meter on <a href="/analytics" className="underline underline-offset-2 hover:text-[rgb(var(--text-secondary))]">Analytics</a>.
       </p>
     </div>
   );

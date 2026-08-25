@@ -1,3 +1,4 @@
+import type { Connection } from 'mongoose';
 import { RepoCardModel, isConnected } from '../shared/db.js';
 import type { IRepoCard } from '../shared/db.js';
 import { createChildLogger } from '../shared/logger.js';
@@ -66,7 +67,7 @@ function toView(doc: IRepoCard): RepoCardView {
  * written, so a `wrap up` that passes just {repoName, lastStatus} refreshes the
  * status without clobbering the static URLs a previous call set.
  */
-export async function upsertRepoCard(tenantId: string, input: UpsertRepoCardInput): Promise<RepoCardView | null> {
+export async function upsertRepoCard(tenantId: string, input: UpsertRepoCardInput, connection?: Connection): Promise<RepoCardView | null> {
   if (!isConnected() || !RepoCardModel) {
     log.warn('DB not connected — cannot upsert repo card');
     return null;
@@ -86,25 +87,26 @@ export async function upsertRepoCard(tenantId: string, input: UpsertRepoCardInpu
     { repoName: input.repoName },
     { $set: set, $setOnInsert: { ...tenantScope(tenantId), repoName: input.repoName } },
     { new: true, upsert: true, setDefaultsOnInsert: true },
+    connection,
   );
   log.info({ repo: input.repoName }, 'repo card upserted');
   return toView(doc as IRepoCard);
 }
 
-export async function listRepoCards(tenantId: string): Promise<RepoCardView[]> {
+export async function listRepoCards(tenantId: string, connection?: Connection): Promise<RepoCardView[]> {
   if (!isConnected() || !RepoCardModel) return [];
-  const docs = await scopedFind(RepoCardModel, tenantId, {}).sort({ group: 1, repoName: 1 }).lean<IRepoCard[]>();
+  const docs = await scopedFind(RepoCardModel, tenantId, {}, connection).sort({ group: 1, repoName: 1 }).lean<IRepoCard[]>();
   return docs.map(toView);
 }
 
-export async function getRepoCard(tenantId: string, repoName: string): Promise<RepoCardView | null> {
+export async function getRepoCard(tenantId: string, repoName: string, connection?: Connection): Promise<RepoCardView | null> {
   if (!isConnected() || !RepoCardModel) return null;
-  const doc = await scopedFindOne(RepoCardModel, tenantId, { repoName }).lean<IRepoCard | null>();
+  const doc = await scopedFindOne(RepoCardModel, tenantId, { repoName }, connection).lean<IRepoCard | null>();
   return doc ? toView(doc) : null;
 }
 
-export async function deleteRepoCard(tenantId: string, repoName: string): Promise<boolean> {
+export async function deleteRepoCard(tenantId: string, repoName: string, connection?: Connection): Promise<boolean> {
   if (!isConnected() || !RepoCardModel) return false;
-  const res = await scopedDeleteOne(RepoCardModel, tenantId, { repoName });
+  const res = await scopedDeleteOne(RepoCardModel, tenantId, { repoName }, connection);
   return res.deletedCount > 0;
 }

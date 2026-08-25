@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import type { Connection } from 'mongoose';
 import { TaskModel, isConnected } from '../shared/db.js';
 import type { ITask, TaskPriority, TaskSource, TaskStatus, FleetRepoActionStatus } from '../shared/db.js';
 import { createChildLogger } from '../shared/logger.js';
-import { scopedFind, scopedFindOne, scopedFindOneAndUpdate, scopedAggregate, tenantScope } from '../shared/scoped-query.js';
+import { scopedFind, scopedFindOne, scopedFindOneAndUpdate, scopedAggregate, tenantScope, resolveScopedModel } from '../shared/scoped-query.js';
 import { emitNotifyEvent } from '../notifications/event-bus.js';
 import { notifyLifecycleMilestone } from '../notifications/lifecycle-emails.js';
 import type { NotificationLevel } from '../notifications/notifier.js';
@@ -11,8 +12,11 @@ import { recordTaskDefer, clearTaskDeferCount } from '../monitoring/task-defer-a
 import { preemptForUrgentTask, resumeTasksPreemptedBy } from './preemption.js';
 import { recordSpan } from '../tracing/tracer.js';
 import { isFleetPaused } from './fleet-maintenance-store.js';
+import { getBlockedMemberIds } from './member-budget-guard.js';
+import { getTenantBudgetGateStatus, notifyTenantBudgetExhausted } from './tenant-budget-gate.js';
 import { checkBulkBlock, BulkBlockGuardError } from './bulk-block-guard.js';
 import { getFleetRun, updateFleetRepo } from '../repos/fleet-run-store.js';
+import { buildAfterFilter, encodeCursor, hydrateCursor } from '../shared/pagination.js';
 
 const log = createChildLogger({ module: 'task-store' });
 
@@ -97,6 +101,85 @@ export function nextFailureState(
   return { status: 'pending', delayMs: retryBackoffMs(retryCountAfter) };
 }
 
+// ── Task dependency graph (task-cafdd778 — DAG scheduling) ──────────────
+// A task may declare `dependsOn: [taskIds]`. claimTask() skips it until every
+// upstream is status 'done'; createTask/updateTask validate the edge set
+// (upstreams exist, tenant-scoped, no self-reference, no cycle) and reject a
+// bad graph with this error rather than persisting it.
+export class TaskDependencyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TaskDependencyError';
+  }
+}
+
+/** Normalize a caller-supplied dependsOn list: trim, drop empties, dedupe. */
+function normalizeDependsOn(dependsOn: string[]): string[] {
+  return [...new Set(dependsOn.map((d) => (typeof d === 'string' ? d.trim() : '')).filter(Boolean))];
+}
+
+/**
+ * Validate a proposed dependency edge set for `taskId` (empty string for a
+ * not-yet-created task): every upstream must exist for this tenant, none may
+ * be the task itself, and following dependsOn edges from the proposed
+ * upstreams must never lead back to `taskId` (cycle). BFS with batched $in
+ * lookups — graph depth costs one query per level, not one per node.
+ */
+async function assertValidDependencies(
+  tenantId: string,
+  taskId: string,
+  deps: string[],
+  connection?: Connection,
+): Promise<void> {
+  if (!deps.length) return;
+  if (deps.includes(taskId)) {
+    throw new TaskDependencyError(`Task ${taskId} cannot depend on itself`);
+  }
+  // Direct upstreams must all exist (tenant-scoped — a leaked cross-tenant
+  // taskId reads as "not found", same posture as updateTask).
+  const direct = await scopedFind(TaskModel, tenantId, { taskId: { $in: deps } }, connection).exec() as unknown as ITask[];
+  const found = new Set(direct.map((d) => d.taskId));
+  const missing = deps.filter((d) => !found.has(d));
+  if (missing.length) {
+    throw new TaskDependencyError(`Unknown upstream task(s): ${missing.join(', ')}`);
+  }
+  // Cycle check: walk upstream edges breadth-first; reaching taskId means the
+  // proposed edge closes a loop no task in it could ever satisfy.
+  const visited = new Set<string>(deps);
+  let frontier = direct;
+  while (frontier.length) {
+    const next = [...new Set(frontier.flatMap((d) => d.dependsOn ?? []))]
+      .filter((d) => !visited.has(d));
+    if (next.includes(taskId)) {
+      throw new TaskDependencyError(
+        `Dependency cycle detected: ${taskId} is reachable from its own upstream chain`,
+      );
+    }
+    if (!next.length) return;
+    next.forEach((d) => visited.add(d));
+    frontier = await scopedFind(TaskModel, tenantId, { taskId: { $in: next } }, connection).exec() as unknown as ITask[];
+  }
+}
+
+/**
+ * Which of `deps` are not yet satisfied — an upstream counts as satisfied
+ * ONLY when it exists and is status 'done'. A missing upstream (deleted out
+ * from under the graph) is conservatively unmet: the downstream task stays
+ * unclaimable until an operator clears/repairs its dependsOn, never silently
+ * runs out of order. Exported for the gateway inline lane (inline-executor.ts),
+ * which picks pending tasks outside claimTask and must honor the same gate.
+ */
+export async function unmetDependencies(
+  tenantId: string,
+  deps: string[],
+  connection?: Connection,
+): Promise<string[]> {
+  if (!deps.length) return [];
+  const upstreams = await scopedFind(TaskModel, tenantId, { taskId: { $in: deps } }, connection).exec() as unknown as ITask[];
+  const done = new Set(upstreams.filter((u) => u.status === 'done').map((u) => u.taskId));
+  return deps.filter((d) => !done.has(d));
+}
+
 export interface CreateTaskInput {
   repo: string;
   title: string;
@@ -107,6 +190,12 @@ export interface CreateTaskInput {
   source?: TaskSource;
   sourceId?: string;
   notes?: string;
+  /** Team-tier per-member budget scoping (task-82854b12) — the tenant member
+   *  this task is attributed to. Omit for system/CLI/scheduler-created work. */
+  requestedByUserId?: string;
+  /** Task dependency graph (task-cafdd778) — upstream taskIds that must all be
+   *  'done' before this task is claimable. Validated: upstreams must exist. */
+  dependsOn?: string[];
 }
 
 export interface UpdateTaskInput {
@@ -152,6 +241,10 @@ export interface UpdateTaskInput {
    *  CONSECUTIVE defers for this task via monitoring/task-defer-alerter.ts —
    *  distinct from a genuine failure/retry, which goes through failTask. */
   routeExhausted?: boolean;
+  /** Task dependency graph (task-cafdd778) — REPLACES the task's upstream
+   *  list. Validated: upstreams exist, no self-reference, no cycle. Empty
+   *  array clears all dependencies (operator repair for a broken graph). */
+  dependsOn?: string[];
 }
 
 export interface ListTasksFilter {
@@ -160,7 +253,28 @@ export interface ListTasksFilter {
   priority?: TaskPriority;
   assignedAgent?: string;
   limit?: number;
+  /** Opaque cursor from a prior page's `nextCursor` — resumes right after
+   *  the last row that page returned. Omitted = start from the beginning,
+   *  same as before cursor pagination existed (backwards-compatible default). */
+  cursor?: string;
 }
+
+export interface ListTasksResult {
+  tasks: TaskView[];
+  /** Present only when more rows exist past this page. Opaque — pass back
+   *  verbatim as `cursor` on the next call. */
+  nextCursor?: string;
+}
+
+// Stable sort for tasks_list / GET /api/tasks: priority, then creation time,
+// then taskId as a unique tiebreaker so same-instant creations still produce
+// a total order a cursor can resume from without skipping or repeating rows.
+const TASKS_LIST_SORT = { priority: 1, createdAt: 1, taskId: 1 } as const;
+const TASKS_LIST_CURSOR_TEMPLATE = [
+  { field: 'priority' },
+  { field: 'createdAt', isDate: true },
+  { field: 'taskId' },
+];
 
 export interface ClaimTaskInput {
   /** Identifies the runner/slot claiming the task, e.g. "runner-host/slot-0". */
@@ -209,6 +323,8 @@ export interface TaskView {
   deadLetteredAt?: Date;
   lastError?: string;
   deferCount?: number;
+  requestedByUserId?: string;
+  dependsOn?: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -248,6 +364,8 @@ function toView(doc: ITask): TaskView {
     deadLetteredAt: doc.deadLetteredAt,
     lastError: doc.lastError,
     deferCount: doc.deferCount,
+    requestedByUserId: doc.requestedByUserId,
+    dependsOn: doc.dependsOn && doc.dependsOn.length ? [...doc.dependsOn] : undefined,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
@@ -259,11 +377,18 @@ function requireDb(): void {
   }
 }
 
-export async function createTask(tenantId: string, input: CreateTaskInput): Promise<TaskView> {
+export async function createTask(tenantId: string, input: CreateTaskInput, connection?: Connection): Promise<TaskView> {
   requireDb();
-  const doc = await TaskModel.create({
+  const taskId = `task-${randomUUID()}`;
+  // Dependency graph (task-cafdd778): upstreams must exist before the edge is
+  // persisted. A fresh taskId can't be referenced by anything yet, so a
+  // create can never close a cycle — but the shared validator still guards
+  // self-reference and keeps the two write paths behaviourally identical.
+  const dependsOn = input.dependsOn ? normalizeDependsOn(input.dependsOn) : [];
+  if (dependsOn.length) await assertValidDependencies(tenantId, taskId, dependsOn, connection);
+  const doc = await resolveScopedModel(TaskModel, connection).create({
     ...tenantScope(tenantId),
-    taskId: `task-${randomUUID()}`,
+    taskId,
     repo: input.repo,
     title: input.title,
     description: input.description ?? '',
@@ -274,6 +399,8 @@ export async function createTask(tenantId: string, input: CreateTaskInput): Prom
     source: input.source ?? 'manual',
     sourceId: input.sourceId,
     notes: input.notes,
+    requestedByUserId: input.requestedByUserId,
+    ...(dependsOn.length ? { dependsOn } : {}),
   });
   log.info({ taskId: doc.taskId, repo: doc.repo, priority: doc.priority }, 'Task created');
   emitNotifyEvent({
@@ -307,10 +434,10 @@ export async function createTask(tenantId: string, input: CreateTaskInput): Prom
  * gateway→runner→agent trace chain, tracing/tracer.ts) around the real
  * implementation without touching its control flow.
  */
-export async function updateTask(tenantId: string, input: UpdateTaskInput): Promise<TaskView | null> {
+export async function updateTask(tenantId: string, input: UpdateTaskInput, connection?: Connection): Promise<TaskView | null> {
   const startMs = Date.now();
   try {
-    const result = await updateTaskImpl(tenantId, input);
+    const result = await updateTaskImpl(tenantId, input, connection);
     if (result) {
       recordSpan({
         traceKey: result.taskId,
@@ -338,11 +465,11 @@ export async function updateTask(tenantId: string, input: UpdateTaskInput): Prom
   }
 }
 
-async function updateTaskImpl(tenantId: string, input: UpdateTaskInput): Promise<TaskView | null> {
+async function updateTaskImpl(tenantId: string, input: UpdateTaskInput, connection?: Connection): Promise<TaskView | null> {
   requireDb();
   // Scope by tenant: a leaked taskId from another tenant matches nothing
   // (cross-tenant update → "not found"), never a silent cross-tenant mutation.
-  const existing = await scopedFindOne(TaskModel, tenantId, { taskId: input.taskId });
+  const existing = await scopedFindOne(TaskModel, tenantId, { taskId: input.taskId }, connection);
   if (!existing) return null;
 
   const prevStatus = existing.status;
@@ -412,6 +539,16 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput): Promise
   } else if (input.status === 'working') {
     clearTaskDeferCount({ taskId: existing.taskId, tenantId });
     existing.deferCount = 0;
+  }
+
+  // Dependency graph edit (task-cafdd778): REPLACE semantics. This is the one
+  // write path that can close a loop in an existing graph, so the cycle check
+  // runs here on every edit; an empty array is the operator escape hatch that
+  // clears a broken/stale upstream list outright.
+  if (input.dependsOn !== undefined) {
+    const deps = normalizeDependsOn(input.dependsOn);
+    await assertValidDependencies(tenantId, existing.taskId, deps, connection);
+    existing.dependsOn = deps.length ? deps : undefined;
   }
 
   // Re-point a misfiled task to a different repo. Guard against empty/whitespace so a
@@ -492,6 +629,7 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput): Promise
       source: 'gateway',
       repo: existing.repo,
       taskId: existing.taskId,
+      userId: existing.requestedByUserId,
       metadata: {
         finalStatus: existing.status,
         ...(premium ? { premium: true } : {}),
@@ -499,6 +637,8 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput): Promise
       },
     });
     // Off-hours minutes: only runner-claimed tasks consume metered wall-clock.
+    // `userId` (when the task carries one) is what member-budget-guard.ts sums
+    // against a Team owner's per-member off-hours-minutes cap.
     if (existing.claimedAt && existing.startedAt) {
       const minutes = Math.max(1, Math.ceil((Date.now() - existing.startedAt.getTime()) / 60000));
       await recordUsage(tenantId, {
@@ -509,6 +649,7 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput): Promise
         source: 'runner',
         repo: existing.repo,
         taskId: existing.taskId,
+        userId: existing.requestedByUserId,
       });
     }
   }
@@ -536,7 +677,7 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput): Promise
   return toView(existing);
 }
 
-export async function listTasks(tenantId: string, filter: ListTasksFilter = {}): Promise<TaskView[]> {
+export async function listTasks(tenantId: string, filter: ListTasksFilter = {}, connection?: Connection): Promise<TaskView[]> {
   requireDb();
   const query: Record<string, unknown> = {};
   if (filter.repo) query.repo = filter.repo;
@@ -544,7 +685,7 @@ export async function listTasks(tenantId: string, filter: ListTasksFilter = {}):
   if (filter.priority) query.priority = filter.priority;
   if (filter.assignedAgent) query.assignedAgent = filter.assignedAgent;
 
-  const docs = await scopedFind(TaskModel, tenantId, query)
+  const docs = await scopedFind(TaskModel, tenantId, query, connection)
     .sort({ priority: 1, createdAt: 1 })
     .limit(filter.limit ?? 50)
     .exec();
@@ -552,19 +693,61 @@ export async function listTasks(tenantId: string, filter: ListTasksFilter = {}):
   return docs.map(toView);
 }
 
-/** Single tenant-scoped lookup by taskId — null when missing or owned by another tenant. */
-export async function getTask(tenantId: string, taskId: string): Promise<TaskView | null> {
+/**
+ * Cursor-paginated variant of {@link listTasks} — used by the tasks_list MCP
+ * tool and GET /api/tasks. Kept separate from `listTasks` so its existing
+ * internal callers (inline-executor, webhook handlers) keep their simple
+ * array return untouched; only the public list surfaces need `nextCursor`.
+ */
+export async function listTasksPage(tenantId: string, filter: ListTasksFilter = {}, connection?: Connection): Promise<ListTasksResult> {
   requireDb();
-  const doc = await scopedFindOne(TaskModel, tenantId, { taskId }).exec();
+  const query: Record<string, unknown> = {};
+  if (filter.repo) query.repo = filter.repo;
+  if (filter.status) query.status = filter.status;
+  if (filter.priority) query.priority = filter.priority;
+  if (filter.assignedAgent) query.assignedAgent = filter.assignedAgent;
+
+  if (filter.cursor) {
+    const keys = hydrateCursor(filter.cursor, TASKS_LIST_CURSOR_TEMPLATE);
+    if (keys) Object.assign(query, buildAfterFilter(keys));
+  }
+
+  const limit = filter.limit ?? 50;
+  // Fetch one extra row past the page size — its presence (not the exact
+  // remaining count) is what tells us whether a nextCursor is needed.
+  const docs = await scopedFind(TaskModel, tenantId, query, connection)
+    .sort(TASKS_LIST_SORT)
+    .limit(limit + 1)
+    .exec();
+
+  const hasMore = docs.length > limit;
+  const page = hasMore ? docs.slice(0, limit) : docs;
+  const tasks = page.map(toView);
+  const last = tasks[tasks.length - 1];
+  const nextCursor = hasMore && last
+    ? encodeCursor([
+        { field: 'priority', value: last.priority },
+        { field: 'createdAt', value: last.createdAt },
+        { field: 'taskId', value: last.taskId },
+      ])
+    : undefined;
+
+  return { tasks, nextCursor };
+}
+
+/** Single tenant-scoped lookup by taskId — null when missing or owned by another tenant. */
+export async function getTask(tenantId: string, taskId: string, connection?: Connection): Promise<TaskView | null> {
+  requireDb();
+  const doc = await scopedFindOne(TaskModel, tenantId, { taskId }, connection).exec();
   return doc ? toView(doc) : null;
 }
 
-export async function nextTask(tenantId: string, repo?: string): Promise<TaskView | null> {
+export async function nextTask(tenantId: string, repo?: string, connection?: Connection): Promise<TaskView | null> {
   requireDb();
   const query: Record<string, unknown> = { status: 'pending', ...dueFilter(new Date()) };
   if (repo) query.repo = repo;
 
-  const doc = await scopedFindOne(TaskModel, tenantId, query)
+  const doc = await scopedFindOne(TaskModel, tenantId, query, connection)
     .sort({ priority: 1, createdAt: 1 })
     .exec();
 
@@ -595,9 +778,9 @@ function dueFilter(now: Date): Record<string, unknown> {
  * implementation without touching its control flow. This is the exact
  * gateway↔runner boundary: the bash runner's `mcp tasks_claim` call lands here.
  */
-export async function claimTask(tenantId: string, input: ClaimTaskInput): Promise<TaskView | null> {
+export async function claimTask(tenantId: string, input: ClaimTaskInput, connection?: Connection): Promise<TaskView | null> {
   const startMs = Date.now();
-  const result = await claimTaskImpl(tenantId, input);
+  const result = await claimTaskImpl(tenantId, input, connection);
   if (result) {
     recordSpan({
       traceKey: result.taskId,
@@ -612,7 +795,7 @@ export async function claimTask(tenantId: string, input: ClaimTaskInput): Promis
   return result;
 }
 
-async function claimTaskImpl(tenantId: string, input: ClaimTaskInput): Promise<TaskView | null> {
+async function claimTaskImpl(tenantId: string, input: ClaimTaskInput, connection?: Connection): Promise<TaskView | null> {
   requireDb();
   // Fleet-wide operator kill switch (fleet-maintenance-store.ts): while active,
   // every claim — including an explicit --task-id retry — reads as "nothing to
@@ -620,13 +803,88 @@ async function claimTaskImpl(tenantId: string, input: ClaimTaskInput): Promise<T
   // work without killing any runner process.
   if (await isFleetPaused(tenantId)) return null;
   const now = new Date();
+
+  // Runner budget-aware execution gate (task-7fed6488) — before claiming
+  // anything for this tenant, check whether its $ / off-hours-minutes budget
+  // is exhausted. Same explicit-override exemption as the backoff/off-hours
+  // pacing guards below: a specific --task-id claim bypasses it, matching
+  // operator-retry semantics elsewhere in this function. Blocked tenants defer
+  // (return null, nothing is touched) rather than fail — the same pending task
+  // is simply reconsidered on the runner's next poll and claims normally once
+  // the window rolls over.
+  if (!input.taskId) {
+    const gate = await getTenantBudgetGateStatus(tenantId, connection, now);
+    if (gate.blocked) {
+      await notifyTenantBudgetExhausted(tenantId, gate, connection);
+      return null;
+    }
+  }
+
+  // Dependency gate, explicit --task-id path (task-cafdd778): unlike the
+  // pacing/budget guards above, DAG ordering is a CORRECTNESS constraint, not
+  // a throttle — an operator retry must not run "build UI" before "migrate
+  // DB" finished either. An upstream that isn't done defers the claim (null,
+  // task untouched); to genuinely force it, clear dependsOn via tasks_update.
+  if (input.taskId) {
+    const target = await scopedFindOne(TaskModel, tenantId, { taskId: input.taskId }, connection);
+    if (target?.dependsOn?.length) {
+      const unmet = await unmetDependencies(tenantId, target.dependsOn, connection);
+      if (unmet.length) {
+        log.info({ taskId: input.taskId, unmet }, 'Claim deferred — upstream dependencies not done');
+        return null;
+      }
+    }
+  }
+
+  // Dependency gate, queue path (task-cafdd778): snapshot which dep-carrying
+  // pending tasks have every upstream 'done', then constrain the atomic claim
+  // to dependency-free tasks OR that ready allow-list. Allow-list (not a
+  // blocked-list $nin) so a dep task created between this snapshot and the
+  // findOneAndUpdate can only be missed for one poll — never claimed early.
+  let depGate: Record<string, unknown> | undefined;
+  if (!input.taskId) {
+    const candidateBase: Record<string, unknown> = { status: 'pending', dependsOn: { $exists: true, $ne: [] } };
+    if (input.repo) candidateBase.repo = input.repo;
+    if (input.ignoreRepos && input.ignoreRepos.length) candidateBase.repo = { $nin: input.ignoreRepos };
+    const withDeps = await scopedFind(TaskModel, tenantId, candidateBase, connection).exec() as unknown as ITask[];
+    if (withDeps.length) {
+      const upstreamIds = [...new Set(withDeps.flatMap((t) => t.dependsOn ?? []))];
+      const upstreams = await scopedFind(TaskModel, tenantId, { taskId: { $in: upstreamIds } }, connection).exec() as unknown as ITask[];
+      const doneSet = new Set(upstreams.filter((u) => u.status === 'done').map((u) => u.taskId));
+      const readyIds = withDeps
+        .filter((t) => (t.dependsOn ?? []).every((d) => doneSet.has(d)))
+        .map((t) => t.taskId);
+      depGate = {
+        $or: [
+          { dependsOn: { $exists: false } },
+          { dependsOn: { $size: 0 } },
+          { taskId: { $in: readyIds } },
+        ],
+      };
+    }
+  }
+
   // A specific --task-id claim is an explicit operator/runner override — bypass
   // the backoff the same way pacing/off-hours guards are bypassed by --task-id
   // (cli_task_runner.sh), so a manual retry is never blocked by its own cooldown.
-  const filter: Record<string, unknown> = input.taskId ? { status: 'pending' } : { status: 'pending', ...dueFilter(now) };
+  // dueFilter and depGate are both $or conditions, so they compose under $and.
+  const filter: Record<string, unknown> = input.taskId
+    ? { status: 'pending' }
+    : depGate
+      ? { status: 'pending', $and: [dueFilter(now), depGate] }
+      : { status: 'pending', ...dueFilter(now) };
   if (input.taskId) filter.taskId = input.taskId;
   else if (input.repo) filter.repo = input.repo;
   if (input.ignoreRepos && input.ignoreRepos.length) filter.repo = { $nin: input.ignoreRepos };
+
+  // Team-tier per-member budget scoping (task-82854b12) — exclude tasks
+  // attributed to a member whose $ spend or off-hours-minutes cap has tripped
+  // from the claimable set. Same explicit-override exemption as the backoff/
+  // off-hours pacing guards above: a specific --task-id claim bypasses it too.
+  if (!input.taskId) {
+    const blockedUserIds = await getBlockedMemberIds(tenantId, connection);
+    if (blockedUserIds.length) filter.requestedByUserId = { $nin: blockedUserIds };
+  }
 
   const leaseMs = (input.leaseSeconds ?? 3600) * 1000;
   const doc = await scopedFindOneAndUpdate(
@@ -642,6 +900,7 @@ async function claimTaskImpl(tenantId: string, input: ClaimTaskInput): Promise<T
       },
     },
     { sort: { priority: 1, createdAt: 1 }, new: true },
+    connection,
   );
   if (!doc) return null;
   const claimed = doc as ITask;
@@ -685,9 +944,9 @@ export interface FailTaskInput {
  * gateway→runner→agent trace chain, tracing/tracer.ts) around the real
  * implementation without touching its control flow.
  */
-export async function failTask(tenantId: string, input: FailTaskInput, now: Date = new Date()): Promise<TaskView | null> {
+export async function failTask(tenantId: string, input: FailTaskInput, now: Date = new Date(), connection?: Connection): Promise<TaskView | null> {
   const startMs = Date.now();
-  const result = await failTaskImpl(tenantId, input, now);
+  const result = await failTaskImpl(tenantId, input, now, connection);
   if (result) {
     recordSpan({
       traceKey: result.taskId,
@@ -703,9 +962,9 @@ export async function failTask(tenantId: string, input: FailTaskInput, now: Date
   return result;
 }
 
-async function failTaskImpl(tenantId: string, input: FailTaskInput, now: Date = new Date()): Promise<TaskView | null> {
+async function failTaskImpl(tenantId: string, input: FailTaskInput, now: Date = new Date(), connection?: Connection): Promise<TaskView | null> {
   requireDb();
-  const existing = await scopedFindOne(TaskModel, tenantId, { taskId: input.taskId });
+  const existing = await scopedFindOne(TaskModel, tenantId, { taskId: input.taskId }, connection);
   if (!existing) return null;
 
   const retryCountAfter = existing.retryCount + 1;
@@ -803,7 +1062,7 @@ export async function reapStaleLeases(now: Date = new Date()): Promise<ReapStale
   return { requeued, deadLettered };
 }
 
-export async function countTasks(tenantId: string, filter: ListTasksFilter = {}): Promise<Record<TaskStatus, number>> {
+export async function countTasks(tenantId: string, filter: ListTasksFilter = {}, connection?: Connection): Promise<Record<TaskStatus, number>> {
   requireDb();
   const match: Record<string, unknown> = {};
   if (filter.repo) match.repo = filter.repo;
@@ -813,7 +1072,7 @@ export async function countTasks(tenantId: string, filter: ListTasksFilter = {})
   const agg = await scopedAggregate(TaskModel, tenantId, [
     ...(filter.repo ? [{ $match: { repo: filter.repo } }] : []),
     { $group: { _id: '$status', count: { $sum: 1 } } },
-  ]) as Array<{ _id: TaskStatus; count: number }>;
+  ], connection) as Array<{ _id: TaskStatus; count: number }>;
 
   const result: Record<TaskStatus, number> = {
     pending: 0, working: 0, review: 0, done: 0, blocked: 0, paused: 0, dead_letter: 0,
@@ -839,13 +1098,13 @@ export interface LaneRatioStats {
  * the stamp landed) — pre-stamp / gateway-inline tasks carry no lane signal
  * and are excluded rather than silently counted as "claude".
  */
-export async function getLaneRatioStats(tenantId: string, windowDays: number): Promise<LaneRatioStats> {
+export async function getLaneRatioStats(tenantId: string, windowDays: number, connection?: Connection): Promise<LaneRatioStats> {
   requireDb();
   const since = new Date(Date.now() - windowDays * 24 * 3_600_000);
   const docs = await scopedFind(TaskModel, tenantId, {
     executionLane: { $exists: true },
     updatedAt: { $gte: since },
-  }).exec();
+  }, connection).exec();
 
   let claude = 0;
   let agenticFallback = 0;

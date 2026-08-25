@@ -2,9 +2,10 @@
 # myai_login.sh — authenticate this terminal against a HOSTED myAI gateway.
 #
 # End-user session identity, NOT credential plumbing:
-#   • distinct from `myai config` (scripts/lib/myai_config.sh) — that sets raw
-#     ~/.myai/config keys with no round-trip check; `login` VALIDATES a key
-#     against the gateway's GET /api/auth/whoami before persisting anything.
+#   • distinct from `myai config` (scripts/myai_config.sh) — that edits
+#     ~/.myai/config keys locally (schema-validated, but no gateway
+#     round-trip); `login` VALIDATES a key against the gateway's
+#     GET /api/auth/whoami before persisting anything.
 #   • distinct from `myai rotate-keys tenant` (operator CRUD on a tenant's
 #     bootstrap key, local-trust only) — this is the tenant's OWN per-tenant
 #     API key (myai_live_… / myai_test_…), the credential a real end user

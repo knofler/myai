@@ -57,16 +57,25 @@ def brain_dir() -> Path:
     return Path(os.environ.get("MYAI_BRAIN_DIR", str(Path.home() / ".myai" / "brain")))
 
 
-def brain_delta_tokens(since: str | None) -> tuple[int, str]:
+def brain_delta_tokens(since: str | None, namespace: str) -> tuple[int, str]:
     """Ask the gateway for the brain_delta payload token estimate; fall back to
-    the local working.md if the gateway is unreachable."""
+    the local working.md if the gateway is unreachable.
+
+    MUST pass `repo` (the namespace) through to brain_delta — without it,
+    brainDelta()'s SMART returning-boot cap (brief+min(delta,working),
+    runtime/src/core/distill.ts) never engages (it's gated on the resolved
+    namespace being known) and the call also loses per-repo scoping, pulling
+    in atoms/commits from every namespace touched since `since` instead of
+    just this one. Either gap alone inflates the measured "returning" number
+    past what a real, repo-scoped `agent mode -min` boot actually pays.
+    """
     if not since:
         return -1, "no --since given"
     tok = os.environ.get("GATEWAY_LOCAL_TOKEN", "")
     mcp = os.environ.get("GATEWAY_MCP", "http://localhost:3100/mcp")
     payload = json.dumps({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": "brain_delta", "arguments": {"since": since}},
+        "params": {"name": "brain_delta", "arguments": {"since": since, "repo": namespace}},
     })
     try:
         out = subprocess.run(
@@ -106,7 +115,7 @@ def main() -> int:
     working_tok = est_tokens(read(working)) if working.exists() else -1
 
     # NEW returning boot — brain_delta since last SHA.
-    delta_tok, delta_note = brain_delta_tokens(a.since)
+    delta_tok, delta_note = brain_delta_tokens(a.since, a.namespace)
 
     def pct(old: int, new: int) -> float:
         return round(100 * (1 - new / old), 1) if old > 0 and new >= 0 else float("nan")
@@ -124,6 +133,17 @@ def main() -> int:
                       "ratio": ratio(old_tok, delta_tok) if delta_tok > 0 else "n/a"},
         "working_set": {"tokens": working_tok, "note": "brief+working loaded for a full-context session"},
     }
+
+    # SMART returning boot: cap the delta at the compiled working-set size — after a
+    # long absence, re-reading working.md beats replaying a bloated delta. Computed
+    # unconditionally (not just in the human-readable branch below) so --json callers
+    # — e.g. local-ci.sh's brain token SLO gate — see it too.
+    if brief_tok >= 0 and working_tok >= 0:
+        capped = min(delta_tok, working_tok) if delta_tok >= 0 else working_tok
+        smart = brief_tok + capped
+        result["smart_returning"] = {"tokens": smart, "reduction_pct": pct(old_tok, smart),
+                                     "ratio": ratio(old_tok, smart),
+                                     "rule": "brief + min(delta, working)"}
 
     if a.json:
         print(json.dumps(result, indent=2))
@@ -147,14 +167,8 @@ def main() -> int:
         print(f"  NEW returning   (brain_delta)                    :      n/a   ({delta_note})")
     print("  " + "-" * 58)
     print(f"  full working set (brief+working, heavy session)  : {fmt(working_tok):>8} tok")
-    # SMART returning boot: cap the delta at the compiled working-set size — after a
-    # long absence, re-reading working.md beats replaying a bloated delta.
-    if brief_tok >= 0 and working_tok >= 0:
-        capped = min(delta_tok, working_tok) if delta_tok >= 0 else working_tok
-        smart = brief_tok + capped
-        result["smart_returning"] = {"tokens": smart, "reduction_pct": pct(old_tok, smart),
-                                     "ratio": ratio(old_tok, smart),
-                                     "rule": "brief + min(delta, working)"}
+    if "smart_returning" in result:
+        smart = result["smart_returning"]["tokens"]
         via = "delta" if delta_tok >= 0 and delta_tok <= working_tok else "working (delta bloated)"
         print(f"  SMART returning (brief + min(delta,working))     : {fmt(smart):>8} tok"
               f"   → {result['smart_returning']['reduction_pct']}% less  ({result['smart_returning']['ratio']})  [via {via}]")

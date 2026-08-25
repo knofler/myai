@@ -34,9 +34,9 @@ export function clearListingVersionStore(): void {
 /**
  * Test/ops helper: insert or overwrite a `ListingVersion` row directly,
  * bypassing the lifecycle-transition checks. Used to seed `published` rows
- * in tests — the `approved → published` promotion path (ADR-029 §3 step 3)
- * that would normally produce one is a separate, not-yet-implemented
- * follow-up (see `artifact-store.ts`'s header note).
+ * in tests that don't want to exercise the full `approved → published`
+ * promotion flow (`promote.ts`'s `promoteApprovedListingVersion`, ADR-029 §3
+ * step 3 + the ADR-035 malware-scan gate) end-to-end.
  */
 export function upsertListingVersionForTest(version: ListingVersion): void {
   store.set(key(version.creatorTenantId, version.listingId, version.version), version);
@@ -187,5 +187,40 @@ export function reviewListingVersion(input: ReviewDecisionInput): ListingVersion
   }
   const updated: ListingVersion = { ...existing, status: input.to, reviewedBy: input.reviewedBy };
   store.set(key(input.creatorTenantId, input.listingId, input.version), updated);
+  return updated;
+}
+
+/**
+ * Apply the ADR-029 §3 step 3 `approved → published` promotion to a
+ * ListingVersion row: flips `status` to `published`, points `artifactUri` at
+ * the `published/` key the caller (`promote.ts`) already copied the bytes
+ * to, and stamps `publishedAt`. Callers MUST have already gated this on
+ * ADR-035's malware-scan verdict (clean, or flagged-with-override) — this
+ * function only re-validates the mechanical version-lifecycle transition
+ * (`approved → published`), same division of responsibility
+ * `upsertInReviewListingVersion`'s header note establishes for its own
+ * transition.
+ */
+export function promoteListingVersionToPublished(
+  creatorTenantId: string,
+  listingId: string,
+  version: string,
+  publishedArtifactUri: string,
+): ListingVersion {
+  const existing = getListingVersion(creatorTenantId, listingId, version);
+  if (!existing) {
+    throw new Error(`no such ListingVersion ${listingId}@${version}`);
+  }
+  const result = canTransitionVersion(existing.status, 'published');
+  if (!result.ok) {
+    throw new Error(`cannot promote ListingVersion ${listingId}@${version} to published: ${result.reason}`);
+  }
+  const updated: ListingVersion = {
+    ...existing,
+    status: 'published',
+    artifactUri: publishedArtifactUri,
+    publishedAt: new Date().toISOString(),
+  };
+  store.set(key(creatorTenantId, listingId, version), updated);
   return updated;
 }

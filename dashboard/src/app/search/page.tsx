@@ -36,7 +36,7 @@ const KIND_ACCENT: Record<SearchHitKind, string> = {
   plan: 'text-purple-300 bg-purple-500/10',
   repo: 'text-blue-300 bg-blue-500/10',
   atom: 'text-amber-300 bg-amber-500/10',
-  session: 'text-zinc-300 bg-zinc-500/10',
+  session: 'text-[rgb(var(--text-primary))] bg-zinc-500/10',
 };
 
 const EMPTY_GROUPS: Record<SearchHitKind, SearchHit[]> = { task: [], plan: [], repo: [], atom: [], session: [] };
@@ -45,16 +45,16 @@ function ResultRow({ hit }: { hit: SearchHit }) {
   return (
     <Link
       href={hit.href}
-      className="block px-4 py-3 border-b border-zinc-800/60 last:border-b-0 hover:bg-zinc-800/40 transition-colors"
+      className="block px-4 py-3 border-b border-[rgb(var(--border-subtle))]/60 last:border-b-0 hover:bg-[rgb(var(--bg-hover))]/40 transition-colors"
     >
       <div className="flex items-center gap-2 flex-wrap">
         <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${KIND_ACCENT[hit.kind]}`}>
           {KIND_LABEL[hit.kind]}
         </span>
-        {hit.repo && <span className="text-xs text-zinc-500">{hit.repo}</span>}
+        {hit.repo && <span className="text-xs text-[rgb(var(--text-muted))]">{hit.repo}</span>}
       </div>
-      <div className="text-sm text-zinc-200 mt-1">{hit.title}</div>
-      {hit.snippet && <div className="text-xs text-zinc-500 mt-0.5 line-clamp-2">{hit.snippet}</div>}
+      <div className="text-sm text-[rgb(var(--text-primary))] mt-1">{hit.title}</div>
+      {hit.snippet && <div className="text-xs text-[rgb(var(--text-muted))] mt-0.5 line-clamp-2">{hit.snippet}</div>}
     </Link>
   );
 }
@@ -140,22 +140,22 @@ function SearchPageInner() {
           onChange={(e) => setInput(e.target.value)}
           placeholder="Search tasks, plans, repos, brain atoms…"
           autoFocus
-          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-teal-500/60"
+          className="w-full bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg px-4 py-2.5 text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:outline-none focus:border-teal-500/60"
         />
       </form>
 
       {query.trim() && (
-        <div className="flex flex-wrap gap-1 mb-4 border-b border-zinc-800 -mb-px">
+        <div className="flex flex-wrap gap-1 mb-4 border-b border-[rgb(var(--border-subtle))] -mb-px">
           {tabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
               className={`px-3 py-2 text-sm border-b-2 transition-colors ${
-                tab === t.id ? 'border-teal-400 text-zinc-100 font-medium' : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                tab === t.id ? 'border-teal-400 text-[rgb(var(--text-primary))] font-medium' : 'border-transparent text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))]'
               }`}
             >
               {t.label}
-              <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${tab === t.id ? 'bg-teal-500/15 text-teal-300' : 'bg-zinc-800 text-zinc-500'}`}>
+              <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${tab === t.id ? 'bg-teal-500/15 text-teal-300' : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]'}`}>
                 {t.count}
               </span>
             </button>

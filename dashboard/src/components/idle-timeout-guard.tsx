@@ -119,20 +119,20 @@ export function IdleTimeoutGuard() {
       aria-describedby="idle-timeout-desc"
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4"
     >
-      <div className="w-full max-w-sm rounded-lg border border-zinc-800 bg-zinc-900 p-5 shadow-xl">
-        <h2 id="idle-timeout-title" className="text-sm font-semibold text-zinc-100">
+      <div className="w-full max-w-sm rounded-lg border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))] p-5 shadow-xl">
+        <h2 id="idle-timeout-title" className="text-sm font-semibold text-[rgb(var(--text-primary))]">
           Still there?
         </h2>
-        <p id="idle-timeout-desc" className="mt-2 text-sm text-zinc-400">
+        <p id="idle-timeout-desc" className="mt-2 text-sm text-[rgb(var(--text-secondary))]">
           You&apos;ve been inactive for a while. For security, you&apos;ll be signed out automatically in{' '}
-          <span className="font-mono text-zinc-200">{formatCountdown(secondsLeft)}</span>.
+          <span className="font-mono text-[rgb(var(--text-primary))]">{formatCountdown(secondsLeft)}</span>.
         </p>
         <div className="mt-4 flex items-center justify-end gap-2">
           <button
             type="button"
             onClick={() => void doLogout()}
             disabled={signingOut}
-            className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 disabled:opacity-50"
+            className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-[rgb(var(--text-secondary))] hover:bg-[rgb(var(--bg-hover))] disabled:opacity-50"
           >
             Sign out now
           </button>

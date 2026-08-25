@@ -164,21 +164,21 @@ export default function PricingPage() {
   );
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="min-h-screen bg-[rgb(var(--bg-page))] text-[rgb(var(--text-primary))]">
       <header className="max-w-6xl mx-auto px-5 md:px-8 h-16 flex items-center justify-between">
         <Link href="/welcome" className="text-xl font-bold tracking-tight text-brand-orange">
           myAI
         </Link>
         <nav className="flex items-center gap-4 text-sm">
-          <Link href="/welcome" className="text-zinc-400 hover:text-zinc-200 hidden sm:inline">
+          <Link href="/welcome" className="text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hidden sm:inline">
             Product
           </Link>
-          <Link href="/showcase" className="text-zinc-400 hover:text-zinc-200 hidden sm:inline">
+          <Link href="/showcase" className="text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hidden sm:inline">
             Capabilities
           </Link>
           <Link
-            href="/login"
-            className="px-3 py-1.5 rounded-lg border border-zinc-800 text-zinc-200 hover:border-zinc-700 transition"
+            href="/operator-login"
+            className="px-3 py-1.5 rounded-lg border border-[rgb(var(--border-subtle))] text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
           >
             Sign in
           </Link>
@@ -188,7 +188,7 @@ export default function PricingPage() {
       <main className="max-w-6xl mx-auto px-5 md:px-8 pt-10 pb-20">
         <div className="text-center max-w-2xl mx-auto">
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight">Pricing</h1>
-          <p className="mt-3 text-zinc-400">
+          <p className="mt-3 text-[rgb(var(--text-secondary))]">
             Start free. Upgrade to Solo when you want the off-hours autonomous runner working your repos overnight.
             Cancel anytime — billing runs through Stripe.
           </p>
@@ -211,7 +211,7 @@ export default function PricingPage() {
             <div
               key={t.plan}
               className={`gel-surface rounded-2xl border p-6 flex flex-col ${
-                t.highlight ? 'border-teal-700 ring-1 ring-teal-700/40' : 'border-zinc-800'
+                t.highlight ? 'border-teal-700 ring-1 ring-teal-700/40' : 'border-[rgb(var(--border-subtle))]'
               }`}
             >
               <div className="flex items-baseline justify-between">
@@ -221,11 +221,11 @@ export default function PricingPage() {
                 )}
               </div>
               <div className="mt-3">
-                <span className="text-3xl font-bold text-zinc-100">{t.price}</span>
-                <span className="ml-2 text-xs text-zinc-500">{t.per}</span>
+                <span className="text-3xl font-bold text-[rgb(var(--text-primary))]">{t.price}</span>
+                <span className="ml-2 text-xs text-[rgb(var(--text-muted))]">{t.per}</span>
               </div>
-              <p className="mt-2 text-sm text-zinc-400">{t.tagline}</p>
-              <ul className="mt-4 space-y-2 text-sm text-zinc-400 flex-1">
+              <p className="mt-2 text-sm text-[rgb(var(--text-secondary))]">{t.tagline}</p>
+              <ul className="mt-4 space-y-2 text-sm text-[rgb(var(--text-secondary))] flex-1">
                 {t.features.map((f) => (
                   <li key={f} className="flex gap-2">
                     <span className="text-teal-400">✓</span>
@@ -242,7 +242,7 @@ export default function PricingPage() {
                   className={`mt-6 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed ${
                     t.highlight
                       ? 'gel-brand text-teal-100 hover:brightness-110'
-                      : 'border border-zinc-700 text-zinc-200 hover:border-teal-700 hover:text-teal-300'
+                      : 'border border-zinc-700 text-[rgb(var(--text-primary))] hover:border-teal-700 hover:text-teal-300'
                   }`}
                 >
                   {busyPlan === t.plan ? 'Starting checkout…' : (
@@ -255,7 +255,7 @@ export default function PricingPage() {
               ) : (
                 <Link
                   href="/welcome/start"
-                  className="mt-6 inline-flex justify-center px-4 py-2.5 rounded-xl text-sm font-semibold border border-zinc-700 text-zinc-200 hover:border-teal-700 hover:text-teal-300 transition"
+                  className="mt-6 inline-flex justify-center px-4 py-2.5 rounded-xl text-sm font-semibold border border-zinc-700 text-[rgb(var(--text-primary))] hover:border-teal-700 hover:text-teal-300 transition"
                 >
                   {t.cta}
                 </Link>
@@ -266,7 +266,7 @@ export default function PricingPage() {
 
         <p className="mt-8 text-center text-xs text-zinc-600">
           Prices in USD, billed monthly. Every tenant's memory, state and tasks stay yours — see the{' '}
-          <Link href="/welcome#pricing" className="text-zinc-500 hover:text-teal-300 underline underline-offset-2">
+          <Link href="/welcome#pricing" className="text-[rgb(var(--text-muted))] hover:text-teal-300 underline underline-offset-2">
             data-locality guarantee
           </Link>
           .

@@ -51,7 +51,7 @@ const GRADE_STYLE: Record<BrainHealth['grade'], { text: string; accent: 'emerald
  *  newest), not a real time axis — fine for "is this trending up or down". */
 function HealthTrend({ history }: { history: BrainHealth['history'] }) {
   if (history.length < 2) {
-    return <p className="text-xs text-zinc-500">Not enough recorded snapshots yet for a trend.</p>;
+    return <p className="text-xs text-[rgb(var(--text-muted))]">Not enough recorded snapshots yet for a trend.</p>;
   }
   const w = 240;
   const h = 48;
@@ -75,7 +75,7 @@ function HealthTrend({ history }: { history: BrainHealth['history'] }) {
         />
         <circle cx={pad + (history.length - 1) * step} cy={y(last.score)} r={3} className={GRADE_STYLE[last.grade].text} fill="currentColor" />
       </svg>
-      <span className="text-xs text-zinc-500">{history.length} recorded point{history.length !== 1 ? 's' : ''}</span>
+      <span className="text-xs text-[rgb(var(--text-muted))]">{history.length} recorded point{history.length !== 1 ? 's' : ''}</span>
     </div>
   );
 }
@@ -88,29 +88,29 @@ function HealthCard({ health }: { health: BrainHealth }) {
       <div className="p-4 flex flex-col md:flex-row md:items-center gap-6">
         <div className="flex items-baseline gap-2">
           <span className={`text-4xl font-bold ${style.text}`}>{health.score}</span>
-          <span className="text-zinc-500 text-sm">/100</span>
+          <span className="text-[rgb(var(--text-muted))] text-sm">/100</span>
           <Badge className={KIND_BADGE.memory}>{health.grade}</Badge>
         </div>
         <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs flex-1">
           <div>
-            <dt className="text-zinc-500">Freshness</dt>
-            <dd className="text-zinc-300 font-mono">{signals.freshnessDays === null ? 'n/a' : `${signals.freshnessDays.toFixed(1)}d`} ({subscores.freshness})</dd>
+            <dt className="text-[rgb(var(--text-muted))]">Freshness</dt>
+            <dd className="text-[rgb(var(--text-primary))] font-mono">{signals.freshnessDays === null ? 'n/a' : `${signals.freshnessDays.toFixed(1)}d`} ({subscores.freshness})</dd>
           </div>
           <div>
-            <dt className="text-zinc-500">Coverage</dt>
-            <dd className="text-zinc-300 font-mono">{signals.coverageGaps}/{signals.namespaceTotal} gaps ({subscores.coverage})</dd>
+            <dt className="text-[rgb(var(--text-muted))]">Coverage</dt>
+            <dd className="text-[rgb(var(--text-primary))] font-mono">{signals.coverageGaps}/{signals.namespaceTotal} gaps ({subscores.coverage})</dd>
           </div>
           <div>
-            <dt className="text-zinc-500">Contradictions</dt>
-            <dd className="text-zinc-300 font-mono">{signals.contradictionCount}/{signals.contradictionWindowDays}d ({subscores.contradictions})</dd>
+            <dt className="text-[rgb(var(--text-muted))]">Contradictions</dt>
+            <dd className="text-[rgb(var(--text-primary))] font-mono">{signals.contradictionCount}/{signals.contradictionWindowDays}d ({subscores.contradictions})</dd>
           </div>
           <div>
-            <dt className="text-zinc-500">Recall hit-rate</dt>
-            <dd className="text-zinc-300 font-mono">{signals.recallHitRate === null ? 'n/a' : `${Math.round(signals.recallHitRate * 100)}%`}{subscores.recall !== null && ` (${subscores.recall})`}</dd>
+            <dt className="text-[rgb(var(--text-muted))]">Recall hit-rate</dt>
+            <dd className="text-[rgb(var(--text-primary))] font-mono">{signals.recallHitRate === null ? 'n/a' : `${Math.round(signals.recallHitRate * 100)}%`}{subscores.recall !== null && ` (${subscores.recall})`}</dd>
           </div>
         </dl>
         <div>
-          <p className="text-xs text-zinc-500 mb-1">Trend</p>
+          <p className="text-xs text-[rgb(var(--text-muted))] mb-1">Trend</p>
           <HealthTrend history={health.history} />
         </div>
       </div>
@@ -156,21 +156,21 @@ export function RetrievalStrategyCard({ stats }: { stats: BanditStats }) {
           { label: 'Mean reward', align: 'right' },
           { label: 'Pulls', align: 'right' },
         ]} />
-        <tbody className="divide-y divide-zinc-800/50">
+        <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
           {stats.contexts.map((c) => {
             const favoredMean = c.arms.find(
               (a) => c.favoredArm && a.k === c.favoredArm.k && a.rerankOn === c.favoredArm.rerank_on,
             )?.meanReward;
             return (
-              <tr key={c.context} className="hover:bg-zinc-800/30 transition-colors">
-                <td className="px-4 py-2.5 font-mono text-xs text-zinc-300">{c.context}</td>
-                <td className="px-4 py-2.5 text-zinc-300">
+              <tr key={c.context} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                <td className="px-4 py-2.5 font-mono text-xs text-[rgb(var(--text-primary))]">{c.context}</td>
+                <td className="px-4 py-2.5 text-[rgb(var(--text-primary))]">
                   <Badge className={KIND_BADGE.session}>{formatArm(c.favoredArm)}</Badge>
                 </td>
-                <td className="px-4 py-2.5 text-right font-mono text-zinc-400">
+                <td className="px-4 py-2.5 text-right font-mono text-[rgb(var(--text-secondary))]">
                   {favoredMean === undefined ? '—' : favoredMean.toFixed(3)}
                 </td>
-                <td className="px-4 py-2.5 text-right font-mono text-zinc-400">{c.pullsTotal}</td>
+                <td className="px-4 py-2.5 text-right font-mono text-[rgb(var(--text-secondary))]">{c.pullsTotal}</td>
               </tr>
             );
           })}
@@ -188,27 +188,33 @@ const GATEWAY_URL_IS_DEFAULT = GATEWAY_URL === 'http://gateway:3100/mcp';
 function GatewayDown() {
   return (
     <Card title="Brain unavailable" accent="red">
-      <div className="p-6 text-sm text-zinc-400 space-y-3">
-        <p>The gateway didn&apos;t return a brain snapshot.</p>
+      <div className="p-6 text-sm text-[rgb(var(--text-secondary))] space-y-3">
+        <p>Neither the gateway nor a configured git remote returned a brain snapshot.</p>
         {GATEWAY_URL_IS_DEFAULT ? (
-          <p className="text-xs text-zinc-500">
-            No <code className="text-zinc-400">GATEWAY_MCP_URL</code> is configured on this deployment, so
-            it&apos;s still pointed at the Docker-internal default (<code className="text-zinc-400">gateway:3100</code>)
-            — that host only resolves inside a local <code className="text-zinc-400">docker compose</code> network,
-            never from Vercel or any other remote host. The brain is git-backed on whichever machine runs the
-            gateway (<code className="text-zinc-400">~/.myai/brain</code>), so a remote dashboard can only see it by
-            reaching that gateway&apos;s <code className="text-zinc-400">brain_explore</code> tool over the network.
-            Either set <code className="text-zinc-400">GATEWAY_MCP_URL</code> (+{' '}
-            <code className="text-zinc-400">GATEWAY_LOCAL_TOKEN</code> if the gateway enforces tenancy) to a
-            publicly reachable URL for that gateway, or provision the hosted-brain remote (ADR-017) as a
-            synced, tenant-scoped store instead. See <code className="text-zinc-400">documentation/BRAIN_DASHBOARD.md</code>.
+          <p className="text-xs text-[rgb(var(--text-muted))]">
+            No <code className="text-[rgb(var(--text-secondary))]">GATEWAY_MCP_URL</code> is configured on this deployment, so
+            it&apos;s still pointed at the Docker-internal default (<code className="text-[rgb(var(--text-secondary))]">gateway:3100</code>)
+            — that host only resolves inside a local <code className="text-[rgb(var(--text-secondary))]">docker compose</code> network,
+            never from Vercel or any other remote host. The brain is a real git repo on whichever machine runs the
+            gateway (<code className="text-[rgb(var(--text-secondary))]">~/.myai/brain</code>) — it already has its own <code className="text-[rgb(var(--text-secondary))]">origin</code> remote,
+            so a remote dashboard can read it straight from there without the gateway: set{' '}
+            <code className="text-[rgb(var(--text-secondary))]">BRAIN_GIT_REMOTE</code> to that remote&apos;s URL (the same value{' '}
+            <code className="text-[rgb(var(--text-secondary))]">git -C ~/.myai/brain remote get-url origin</code> prints — currently
+            only GitHub remotes are supported), plus <code className="text-[rgb(var(--text-secondary))]">BRAIN_GIT_TOKEN</code> for a
+            private repo. Alternatively, point <code className="text-[rgb(var(--text-secondary))]">GATEWAY_MCP_URL</code> (+{' '}
+            <code className="text-[rgb(var(--text-secondary))]">GATEWAY_LOCAL_TOKEN</code> if the gateway enforces tenancy) at a
+            publicly reachable gateway, or provision the hosted-brain remote (ADR-017) as a synced, tenant-scoped
+            store instead. See <code className="text-[rgb(var(--text-secondary))]">documentation/BRAIN_DASHBOARD.md</code>.
           </p>
         ) : (
-          <p className="text-xs text-zinc-500">
-            The brain is git-versioned agent memory served by the myai gateway
-            (<code className="text-zinc-400">brain_explore</code> MCP tool). If the gateway is
+          <p className="text-xs text-[rgb(var(--text-muted))]">
+            The brain is git-versioned agent memory, normally served by the myai gateway
+            (<code className="text-[rgb(var(--text-secondary))]">brain_explore</code> MCP tool). If the gateway is
             reachable but this persists, it may be running an image built before this tool
-            shipped — rebuild the gateway from the master checkout.
+            shipped — rebuild the gateway from the master checkout. A{' '}
+            <code className="text-[rgb(var(--text-secondary))]">BRAIN_GIT_REMOTE</code> git-remote fallback is also available
+            (see <code className="text-[rgb(var(--text-secondary))]">documentation/BRAIN_DASHBOARD.md</code>) if the repo/branch it
+            points at is unreachable or the configured token lacks access.
           </p>
         )}
       </div>
@@ -219,12 +225,12 @@ function GatewayDown() {
 function NotInitialized() {
   return (
     <Card title="No brain store yet">
-      <div className="p-6 text-sm text-zinc-400 space-y-2">
+      <div className="p-6 text-sm text-[rgb(var(--text-secondary))] space-y-2">
         <p>This tenant has no brain repo initialised.</p>
-        <p className="text-xs text-zinc-500">
-          Run <code className="text-zinc-400">myai brain init</code> (or complete a{' '}
-          <code className="text-zinc-400">wrap up</code>, which merges a session atom into the
-          brain) to create the store. Sessions = commits, wrap up = merge, <code className="text-zinc-400">main</code> ={' '}
+        <p className="text-xs text-[rgb(var(--text-muted))]">
+          Run <code className="text-[rgb(var(--text-secondary))]">myai brain init</code> (or complete a{' '}
+          <code className="text-[rgb(var(--text-secondary))]">wrap up</code>, which merges a session atom into the
+          brain) to create the store. Sessions = commits, wrap up = merge, <code className="text-[rgb(var(--text-secondary))]">main</code> ={' '}
           the consolidated truth every agent boots from.
         </p>
       </div>
@@ -257,15 +263,15 @@ function HostedBrainCard({ info, hasBrainActivity }: { info: HostedBrainInfo; ha
     const upsell = showUpsell ? syncUpsellCopy() : null;
     return (
       <Card title="Hosted brain" meta="not provisioned">
-        <div className="p-6 text-sm text-zinc-400 space-y-2">
+        <div className="p-6 text-sm text-[rgb(var(--text-secondary))] space-y-2">
           <p>
-            No managed brain remote for this tenant. The <strong className="text-zinc-200">hosted brain</strong>{' '}
+            No managed brain remote for this tenant. The <strong className="text-[rgb(var(--text-primary))]">hosted brain</strong>{' '}
             is a gateway-served, tenant-scoped git remote your brain pushes to — turnkey cross-device
             continuity for anyone who won&apos;t self-host git (ADR-017).
           </p>
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-[rgb(var(--text-muted))]">
             An opt-in Pro/Team upsell — self-hosting stays the default (your brain is your own git repo in
-            every tier). Provision it with <code className="text-zinc-400">brain host provision</code> once your
+            every tier). Provision it with <code className="text-[rgb(var(--text-secondary))]">brain host provision</code> once your
             plan includes it.
           </p>
           {upsell && (
@@ -302,15 +308,15 @@ function HostedBrainCard({ info, hasBrainActivity }: { info: HostedBrainInfo; ha
         {/* Quota bar */}
         <div>
           <div className="flex items-baseline justify-between mb-1.5 text-sm">
-            <span className="text-zinc-400">Storage used</span>
-            <span className="font-mono text-zinc-200">
+            <span className="text-[rgb(var(--text-secondary))]">Storage used</span>
+            <span className="font-mono text-[rgb(var(--text-primary))]">
               {usedLabel}
-              <span className="text-zinc-500"> / {limitLabel}</span>
-              {!usage.unlimited && <span className="text-zinc-500"> · {usage.percent}%</span>}
+              <span className="text-[rgb(var(--text-muted))]"> / {limitLabel}</span>
+              {!usage.unlimited && <span className="text-[rgb(var(--text-muted))]"> · {usage.percent}%</span>}
             </span>
           </div>
           <div
-            className="h-2.5 bg-zinc-950 rounded-full overflow-hidden"
+            className="h-2.5 bg-[rgb(var(--bg-page))] rounded-full overflow-hidden"
             role="progressbar"
             aria-valuenow={usage.unlimited ? 0 : usage.percent}
             aria-valuemin={0}
@@ -323,7 +329,7 @@ function HostedBrainCard({ info, hasBrainActivity }: { info: HostedBrainInfo; ha
             />
           </div>
           {usage.unlimited && (
-            <p className="mt-1.5 text-xs text-zinc-500">Unlimited storage on {planLabel(info.plan)} — no cap.</p>
+            <p className="mt-1.5 text-xs text-[rgb(var(--text-muted))]">Unlimited storage on {planLabel(info.plan)} — no cap.</p>
           )}
         </div>
 
@@ -348,17 +354,17 @@ function HostedBrainCard({ info, hasBrainActivity }: { info: HostedBrainInfo; ha
         <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
           {info.remoteUrl && (
             <div className="sm:col-span-2 min-w-0">
-              <dt className="text-zinc-500 uppercase tracking-wider text-[10px]">Remote</dt>
-              <dd className="font-mono text-zinc-300 truncate">{info.remoteUrl}</dd>
+              <dt className="text-[rgb(var(--text-muted))] uppercase tracking-wider text-[10px]">Remote</dt>
+              <dd className="font-mono text-[rgb(var(--text-primary))] truncate">{info.remoteUrl}</dd>
             </div>
           )}
           <div>
-            <dt className="text-zinc-500 uppercase tracking-wider text-[10px]">Provisioned</dt>
-            <dd className="text-zinc-300">{info.createdAt ? new Date(info.createdAt).toLocaleDateString() : '—'}</dd>
+            <dt className="text-[rgb(var(--text-muted))] uppercase tracking-wider text-[10px]">Provisioned</dt>
+            <dd className="text-[rgb(var(--text-primary))]">{info.createdAt ? new Date(info.createdAt).toLocaleDateString() : '—'}</dd>
           </div>
           <div>
-            <dt className="text-zinc-500 uppercase tracking-wider text-[10px]">Token rotated</dt>
-            <dd className="text-zinc-300">{info.rotatedAt ? new Date(info.rotatedAt).toLocaleDateString() : '—'}</dd>
+            <dt className="text-[rgb(var(--text-muted))] uppercase tracking-wider text-[10px]">Token rotated</dt>
+            <dd className="text-[rgb(var(--text-primary))]">{info.rotatedAt ? new Date(info.rotatedAt).toLocaleDateString() : '—'}</dd>
           </div>
         </dl>
 
@@ -454,13 +460,13 @@ function OverviewTab({ brain }: { brain: NonNullable<Awaited<ReturnType<typeof f
               { label: 'Handoffs', align: 'right' },
               { label: 'Compiled', align: 'right' },
             ]} />
-            <tbody className="divide-y divide-zinc-800/50">
+            <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
               {brain.namespaces.map((n) => (
-                <tr key={n.name} className="hover:bg-zinc-800/30 transition-colors">
-                  <td className="px-4 py-2.5 font-mono text-xs text-zinc-300">{n.name}</td>
-                  <td className="px-4 py-2.5 text-right text-zinc-300 font-mono">{n.sessions}</td>
-                  <td className="px-4 py-2.5 text-right text-zinc-300 font-mono">{n.handoffs}</td>
-                  <td className="px-4 py-2.5 text-right text-xs text-zinc-500">
+                <tr key={n.name} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                  <td className="px-4 py-2.5 font-mono text-xs text-[rgb(var(--text-primary))]">{n.name}</td>
+                  <td className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono">{n.sessions}</td>
+                  <td className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono">{n.handoffs}</td>
+                  <td className="px-4 py-2.5 text-right text-xs text-[rgb(var(--text-muted))]">
                     {[n.hasBrief && 'brief', n.hasWorking && 'working'].filter(Boolean).join(' · ') || '—'}
                   </td>
                 </tr>
@@ -478,7 +484,7 @@ function OverviewTab({ brain }: { brain: NonNullable<Awaited<ReturnType<typeof f
             <div className="p-4 space-y-3">
               {brain.branches.ideas.length > 0 && (
                 <div>
-                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider mb-1.5">Idea (long-lived)</p>
+                  <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider mb-1.5">Idea (long-lived)</p>
                   <div className="flex flex-wrap gap-1.5">
                     {brain.branches.ideas.map((b) => (
                       <Badge key={b} className="bg-cyan-500/15 text-cyan-400 border-cyan-500/30 font-mono">{b}</Badge>
@@ -488,7 +494,7 @@ function OverviewTab({ brain }: { brain: NonNullable<Awaited<ReturnType<typeof f
               )}
               {brain.branches.sessions.length > 0 && (
                 <div>
-                  <p className="text-[11px] text-zinc-500 uppercase tracking-wider mb-1.5">Session (in-flight)</p>
+                  <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider mb-1.5">Session (in-flight)</p>
                   <div className="flex flex-wrap gap-1.5">
                     {brain.branches.sessions.map((b) => (
                       <Badge key={b} className="bg-blue-500/15 text-blue-400 border-blue-500/30 font-mono">{b}</Badge>
@@ -504,11 +510,11 @@ function OverviewTab({ brain }: { brain: NonNullable<Awaited<ReturnType<typeof f
           {brain.recentCommits.length === 0 ? (
             <EmptyState>No commits.</EmptyState>
           ) : (
-            <ul className="divide-y divide-zinc-800/50">
+            <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
               {brain.recentCommits.map((c) => (
-                <li key={c.sha} className="px-4 py-2.5 flex items-start gap-3 text-sm hover:bg-zinc-800/30 transition-colors">
-                  <span className="font-mono text-xs text-zinc-500 shrink-0">{c.short}</span>
-                  <span className="text-zinc-300 min-w-0 truncate">{c.subject}</span>
+                <li key={c.sha} className="px-4 py-2.5 flex items-start gap-3 text-sm hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                  <span className="font-mono text-xs text-[rgb(var(--text-muted))] shrink-0">{c.short}</span>
+                  <span className="text-[rgb(var(--text-primary))] min-w-0 truncate">{c.subject}</span>
                   <span className="ml-auto text-[11px] text-zinc-600 shrink-0">
                     {c.date ? new Date(c.date).toLocaleDateString() : ''}
                   </span>
@@ -540,12 +546,12 @@ function AtomsTab({ atoms, truncated }: { atoms: BrainAtomMeta[]; truncated: boo
             { label: 'Host' },
             { label: 'Written', align: 'right' },
           ]} />
-          <tbody className="divide-y divide-zinc-800/50">
+          <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
             {atoms.map((a) => (
-              <tr key={a.path} className="hover:bg-zinc-800/30 transition-colors align-top">
+              <tr key={a.path} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors align-top">
                 <td className="px-4 py-2.5"><KindBadge kind={a.kind} /></td>
-                <td className="px-4 py-2.5 font-mono text-xs text-zinc-400">{a.repo || <span className="text-zinc-600">(cross-repo)</span>}</td>
-                <td className="px-4 py-2.5 text-zinc-300">
+                <td className="px-4 py-2.5 font-mono text-xs text-[rgb(var(--text-secondary))]">{a.repo || <span className="text-zinc-600">(cross-repo)</span>}</td>
+                <td className="px-4 py-2.5 text-[rgb(var(--text-primary))]">
                   {a.slug}
                   <span className="block font-mono text-[10px] text-zinc-600">{a.sha8}</span>
                 </td>
@@ -559,8 +565,8 @@ function AtomsTab({ atoms, truncated }: { atoms: BrainAtomMeta[]; truncated: boo
                     <span className="text-zinc-600">—</span>
                   )}
                 </td>
-                <td className="px-4 py-2.5 font-mono text-[11px] text-zinc-500">{a.host || '—'}</td>
-                <td className="px-4 py-2.5 text-right text-[11px] text-zinc-500 whitespace-nowrap">{formatBrainStamp(a.written)}</td>
+                <td className="px-4 py-2.5 font-mono text-[11px] text-[rgb(var(--text-muted))]">{a.host || '—'}</td>
+                <td className="px-4 py-2.5 text-right text-[11px] text-[rgb(var(--text-muted))] whitespace-nowrap">{formatBrainStamp(a.written)}</td>
               </tr>
             ))}
           </tbody>
@@ -576,17 +582,17 @@ function StashesTab({ stashes }: { stashes: import('@/lib/brain').BrainStashDeta
       {stashes.length === 0 ? (
         <EmptyState>No open stashes. A stash freezes a context payload on <code>main</code> so any later session can <code>brain pop</code> it.</EmptyState>
       ) : (
-        <ul className="divide-y divide-zinc-800/50">
+        <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
           {stashes.map((s) => (
             <li key={s.path} className="px-4 py-3">
               <div className="flex flex-wrap items-center gap-2 mb-1">
-                <span className="font-medium text-zinc-200">{s.slug}</span>
+                <span className="font-medium text-[rgb(var(--text-primary))]">{s.slug}</span>
                 {s.repo && <Badge className="bg-blue-500/15 text-blue-400 border-blue-500/30 font-mono text-[10px]">{s.repo}</Badge>}
-                {s.from && <span className="text-[11px] text-zinc-500 font-mono">from {s.from}</span>}
+                {s.from && <span className="text-[11px] text-[rgb(var(--text-muted))] font-mono">from {s.from}</span>}
                 <span className="ml-auto text-[11px] text-zinc-600">{formatBrainStamp(s.written)}</span>
               </div>
               {s.preview && (
-                <p className="text-xs text-zinc-400 whitespace-pre-wrap line-clamp-3 font-mono bg-zinc-950/40 rounded p-2 border border-zinc-800/60">
+                <p className="text-xs text-[rgb(var(--text-secondary))] whitespace-pre-wrap line-clamp-3 font-mono bg-[rgb(var(--bg-page))]/40 rounded p-2 border border-[rgb(var(--border-subtle))]/60">
                   {s.preview}
                 </p>
               )}
@@ -611,22 +617,22 @@ function ProvenanceTab({ provenance }: { provenance: import('@/lib/brain').Brain
           (which code branch / SHA / commits they&apos;re about) link back here.
         </EmptyState>
       ) : (
-        <ul className="divide-y divide-zinc-800/50">
+        <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
           {provenance.map((e) => (
             <li key={e.sha} className="px-4 py-3 space-y-1.5">
               <div className="flex items-start gap-3">
-                <span className="font-mono text-xs text-zinc-500 shrink-0">{e.short}</span>
-                <span className="text-sm text-zinc-300 min-w-0">{e.subject}</span>
+                <span className="font-mono text-xs text-[rgb(var(--text-muted))] shrink-0">{e.short}</span>
+                <span className="text-sm text-[rgb(var(--text-primary))] min-w-0">{e.subject}</span>
                 <span className="ml-auto text-[11px] text-zinc-600 shrink-0">
                   {e.date ? new Date(e.date).toLocaleDateString() : ''}
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-2 pl-8 text-[11px] font-mono">
-                {e.code.repo && <span className="text-zinc-400">{e.code.repo}</span>}
+                {e.code.repo && <span className="text-[rgb(var(--text-secondary))]">{e.code.repo}</span>}
                 {e.code.branch && <span className="text-orange-400/90">{e.code.branch}</span>}
                 {e.code.sha && <span className="text-emerald-400/90">@{e.code.sha.slice(0, 7)}</span>}
                 {e.code.commits.map((c) => (
-                  <span key={c} className="text-zinc-500 bg-zinc-800/50 rounded px-1.5 py-0.5">{c.slice(0, 7)}</span>
+                  <span key={c} className="text-[rgb(var(--text-muted))] bg-[rgb(var(--bg-hover))]/50 rounded px-1.5 py-0.5">{c.slice(0, 7)}</span>
                 ))}
               </div>
               {e.atoms.length > 0 && (

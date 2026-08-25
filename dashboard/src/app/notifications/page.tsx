@@ -66,7 +66,7 @@ export default function NotificationsPage() {
           <button
             type="button"
             onClick={markAllRead}
-            className="px-3 py-1.5 rounded-lg border border-zinc-800 text-xs text-teal-400 hover:text-teal-300 hover:border-zinc-700 transition-colors"
+            className="px-3 py-1.5 rounded-lg border border-[rgb(var(--border-subtle))] text-xs text-teal-400 hover:text-teal-300 hover:border-zinc-700 transition-colors"
           >
             Mark all read
           </button>
@@ -84,7 +84,7 @@ export default function NotificationsPage() {
             className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
               filter === key
                 ? 'gel-brand text-teal-200 border-teal-500/40'
-                : 'text-zinc-400 border-zinc-800 hover:text-zinc-200 hover:border-zinc-700'
+                : 'text-[rgb(var(--text-secondary))] border-[rgb(var(--border-subtle))] hover:text-[rgb(var(--text-primary))] hover:border-zinc-700'
             }`}
           >
             {label}
@@ -110,17 +110,17 @@ export default function NotificationsPage() {
               <div
                 key={n.id}
                 className={`flex gap-3 rounded-xl border p-3.5 transition-colors ${
-                  unread ? `${style.accent}` : 'border-zinc-800 bg-zinc-900/40'
+                  unread ? `${style.accent}` : 'border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))]/40'
                 }`}
               >
                 <span className="text-base leading-6 shrink-0" aria-hidden="true">{style.icon}</span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm text-zinc-100 leading-snug">{displayTitle(n)}</p>
+                    <p className="text-sm text-[rgb(var(--text-primary))] leading-snug">{displayTitle(n)}</p>
                     {unread && <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${style.dot}`} aria-label="unread" />}
                   </div>
-                  {body && <p className="text-xs text-zinc-400 mt-1 leading-snug">{body}</p>}
-                  <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[10px] text-zinc-500">
+                  {body && <p className="text-xs text-[rgb(var(--text-secondary))] mt-1 leading-snug">{body}</p>}
+                  <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[10px] text-[rgb(var(--text-muted))]">
                     <span title={fmtSydney(n.sentAt, 'full')}>{timeAgo(n.sentAt)}</span>
                     <span className="font-mono">· {n.channel}</span>
                     {n.source && <span className="font-mono truncate">· {n.source}</span>}

@@ -191,6 +191,22 @@ export interface GatewayConfig {
      * single batch instead of N synchronous calls. 50% discount on input +
      * output, stacked with prompt-cache. Override via `BATCH_ENABLED=false`. */
     batchEnabled: boolean;
+    /** Explicit retry-budget cap (plan §4a remainder): max number of hops a
+     * single `complete()` call may attempt across the failover chain,
+     * independent of cost. `undefined` = unlimited (chain length is the only
+     * bound, legacy behavior). Always keeps the primary hop; anything beyond
+     * the cap is dropped and recorded for the `provider_health` dashboard.
+     * Override via `LLM_MAX_FAILOVER_HOPS`. */
+    maxFailoverHops?: number;
+    /** Per-provider exponential backoff BETWEEN failover hops (plan §4a
+     * remainder) — a brief pause before trying the next provider after a
+     * recoverable failure, distinct from (and much shorter than) the
+     * same-provider retry backoff in resilience.ts. Default true in real
+     * deployments (`loadConfig()`); ad hoc/test config objects that omit
+     * this field get instant fallback (opt-in by design so existing test
+     * suites stay fast without needing fake timers). Override via
+     * `LLM_FAILOVER_BACKOFF_ENABLED=false`. */
+    failoverBackoffEnabled: boolean;
   };
   channels: {
     telegram: {

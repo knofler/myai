@@ -99,27 +99,27 @@ function FanoutComposer({ repos }: { repos: ConsoleRepo[] }) {
     <Card accent="blue" title="Bulk dispatch — fan out one task across repos" meta={`${selected.size} selected`}>
       <div className="p-4 space-y-4">
         <div>
-          <label className="block text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5">Task description</label>
+          <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1.5">Task description</label>
           <input
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             maxLength={300}
             placeholder="e.g. Bump Next.js to 15.4 and run the test suite"
-            className="w-full bg-zinc-950/60 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:border-blue-500/50 focus:outline-none"
+            className="w-full bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] rounded-lg px-3 py-2 text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-blue-500/50 focus:outline-none"
           />
         </div>
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="block text-[11px] uppercase tracking-wider text-zinc-500">Repos</label>
+            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))]">Repos</label>
             <div className="flex flex-wrap gap-1.5">
               {groups.map((g) => (
                 <button
                   key={g}
                   type="button"
                   onClick={() => selectGroup(g)}
-                  className="text-[10px] px-2 py-0.5 rounded-full border border-zinc-800 text-zinc-400 hover:text-teal-300 hover:border-teal-500/40 transition-colors"
+                  className="text-[10px] px-2 py-0.5 rounded-full border border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] hover:text-teal-300 hover:border-teal-500/40 transition-colors"
                 >
                   + {g}
                 </button>
@@ -138,11 +138,11 @@ function FanoutComposer({ repos }: { repos: ConsoleRepo[] }) {
                   className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors ${
                     on
                       ? 'bg-blue-500/15 border-blue-500/40 text-blue-300 font-medium'
-                      : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                      : 'bg-[rgb(var(--bg-surface))]/60 border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hover:border-zinc-700'
                   }`}
                 >
                   <span className="font-mono">{r.repo}</span>
-                  {r.open > 0 && <span className="text-[10px] px-1 rounded-full bg-zinc-800 text-zinc-500">{r.open}</span>}
+                  {r.open > 0 && <span className="text-[10px] px-1 rounded-full bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]">{r.open}</span>}
                 </button>
               );
             })}
@@ -151,21 +151,21 @@ function FanoutComposer({ repos }: { repos: ConsoleRepo[] }) {
 
         <div className="flex flex-wrap items-end gap-4">
           <div>
-            <label className="block text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5">Priority</label>
+            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1.5">Priority</label>
             <select
               value={priority}
               onChange={(e) => setPriority(e.target.value as Priority)}
-              className="bg-zinc-950/60 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-blue-500/50 focus:outline-none"
+              className="bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] rounded-lg px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:border-blue-500/50 focus:outline-none"
             >
               {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5">Strategy hint</label>
+            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1.5">Strategy hint</label>
             <select
               value={topology}
               onChange={(e) => setTopology(e.target.value as Topology | '')}
-              className="bg-zinc-950/60 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:border-blue-500/50 focus:outline-none"
+              className="bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] rounded-lg px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:border-blue-500/50 focus:outline-none"
               title="A strategy hint stamped on each task — independent lanes, not guaranteed ordering."
             >
               <option value="">none</option>
@@ -231,9 +231,9 @@ function ReprioritizeBoard({ tasks }: { tasks: PendingTask[] }) {
                 key={p}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={() => { if (dragId) move(dragId, p); setDragId(null); }}
-                className="rounded-lg border border-zinc-800 bg-zinc-950/40 min-h-32 p-2 space-y-2"
+                className="rounded-lg border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-page))]/40 min-h-32 p-2 space-y-2"
               >
-                <div className="flex items-center justify-between px-1 pb-1 border-b border-zinc-800/60">
+                <div className="flex items-center justify-between px-1 pb-1 border-b border-[rgb(var(--border-subtle))]/60">
                   <PriorityBadge priority={p} />
                   <span className="text-[10px] text-zinc-600">{byPriority(p).length}</span>
                 </div>
@@ -244,12 +244,12 @@ function ReprioritizeBoard({ tasks }: { tasks: PendingTask[] }) {
                     onDragStart={() => setDragId(t.taskId)}
                     onDragEnd={() => setDragId(null)}
                     title={`${t.repo}: ${t.title}`}
-                    className={`rounded-md border border-zinc-800 bg-zinc-900/70 px-2 py-1.5 cursor-grab active:cursor-grabbing hover:border-zinc-700 transition-colors ${
+                    className={`rounded-md border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))]/70 px-2 py-1.5 cursor-grab active:cursor-grabbing hover:border-zinc-700 transition-colors ${
                       dragId === t.taskId ? 'opacity-50' : ''
                     }`}
                   >
-                    <p className="text-xs text-zinc-200 truncate">{t.title}</p>
-                    <p className="text-[10px] text-zinc-500 font-mono truncate">{t.repo}</p>
+                    <p className="text-xs text-[rgb(var(--text-primary))] truncate">{t.title}</p>
+                    <p className="text-[10px] text-[rgb(var(--text-muted))] font-mono truncate">{t.repo}</p>
                   </div>
                 ))}
               </div>

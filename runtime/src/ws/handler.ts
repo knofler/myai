@@ -10,6 +10,8 @@ import { WsIncoming } from '../shared/types.js';
 import type { WsOutgoing } from '../shared/types.js';
 import { authenticateWs } from '../core/auth.js';
 import { rejectWsOnRegionMismatch } from '../core/region-guard.js';
+import { notifyBus } from '../notifications/event-bus.js';
+import type { NotifyEvent } from '../notifications/event-bus.js';
 
 const log = createChildLogger({ module: 'ws-handler' });
 
@@ -283,8 +285,65 @@ function setupClient(ws: WebSocket, tenantId: string, clientIp: string): void {
   ws.on('close', () => clearInterval(pingInterval));
 }
 
+/**
+ * Task/plan/runner lifecycle event types re-broadcast onto the WS channel
+ * (GATEWAY_WS_ASYNCAPI, task-c3abf505 — see docs/reference/asyncapi.json).
+ * An explicit allowlist: the notify bus (notifications/event-bus.ts) carries
+ * every activity family (notifications, budgets, alerts, …); WS clients
+ * (dashboard live views, CLI watchers) only need this fleet-lifecycle slice.
+ * Sourced from the actual emitNotifyEvent() call sites: tasks/task-store.ts,
+ * repos/plan-store.ts, tasks/runner-lease-store.ts.
+ */
+export const LIFECYCLE_EVENT_TYPES = [
+  'task.created',
+  'task.updated',
+  'task.completed',
+  'task.dead_letter',
+  'plan.updated',
+  'runner.fired',
+] as const;
+export type LifecycleEventType = (typeof LIFECYCLE_EVENT_TYPES)[number];
+const LIFECYCLE_EVENT_SET = new Set<string>(LIFECYCLE_EVENT_TYPES);
+
+/**
+ * Map a notify-bus event to the WS wire envelope, or `undefined` when it's
+ * outside the lifecycle allowlist. Pure — exported for unit tests and reused
+ * as the single source of truth the AsyncAPI spec's payload shape mirrors.
+ */
+export function toLifecycleMessage(event: NotifyEvent): WsOutgoing | undefined {
+  if (!LIFECYCLE_EVENT_SET.has(event.type)) return undefined;
+  return {
+    type: 'event',
+    data: { event: event.type, title: event.title, message: event.message, ...event.data },
+    timestamp: event.timestamp.toISOString(),
+  };
+}
+
+let lifecycleUnsubscribe: (() => void) | null = null;
+
+/**
+ * Subscribe once (idempotent) to fan lifecycle events out to same-tenant WS
+ * clients only — same tenant-scoping rule as session events (ADR-010 §3.2c).
+ */
+function subscribeLifecycleEvents(): void {
+  if (lifecycleUnsubscribe) return;
+  lifecycleUnsubscribe = notifyBus.on((event) => {
+    const msg = toLifecycleMessage(event);
+    if (msg) broadcast(msg, undefined, event.tenantId);
+  });
+}
+
+/** Test-only: undo subscribeLifecycleEvents() for isolation between suites. */
+export function _stopLifecycleEventsForTest(): void {
+  if (lifecycleUnsubscribe) {
+    lifecycleUnsubscribe();
+    lifecycleUnsubscribe = null;
+  }
+}
+
 export function startWsServer(): WebSocketServer {
   const config = getConfig();
+  subscribeLifecycleEvents();
 
   const wss = new WebSocketServer({
     port: config.server.wsPort,

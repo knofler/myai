@@ -12,11 +12,11 @@ export default async function PatternsPage() {
           const pct = Math.round(confidence * 100);
 
           return (
-            <div key={p._id} className="gel-surface tap-press bg-zinc-900 border border-zinc-800 rounded-lg p-5 hover:border-zinc-700">
+            <div key={p._id} className="gel-surface tap-press bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5 hover:border-zinc-700">
               <div className="flex items-start justify-between gap-4 mb-3">
                 <div>
-                  <h3 className="font-medium text-zinc-200">{p.title}</h3>
-                  <p className="text-xs text-zinc-500 mt-0.5">{p.description}</p>
+                  <h3 className="font-medium text-[rgb(var(--text-primary))]">{p.title}</h3>
+                  <p className="text-xs text-[rgb(var(--text-muted))] mt-0.5">{p.description}</p>
                 </div>
                 <div className="text-right shrink-0">
                   <p className={`text-lg font-bold ${pct >= 80 ? 'text-emerald-400' : pct >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
@@ -26,7 +26,7 @@ export default async function PatternsPage() {
                 </div>
               </div>
 
-              <div className="w-full h-1.5 bg-zinc-800 rounded-full mb-3">
+              <div className="w-full h-1.5 bg-[rgb(var(--bg-hover))] rounded-full mb-3">
                 <div
                   className={`h-full rounded-full transition-all ${pct >= 80 ? 'bg-emerald-500' : pct >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
                   style={{ width: `${pct}%` }}
@@ -35,7 +35,7 @@ export default async function PatternsPage() {
 
               <div className="flex flex-wrap gap-1.5 mb-3">
                 {p.tags.map(t => (
-                  <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">{t}</span>
+                  <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-[rgb(var(--text-secondary))]">{t}</span>
                 ))}
               </div>
 

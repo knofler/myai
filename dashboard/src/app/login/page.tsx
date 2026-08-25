@@ -22,7 +22,8 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { useTenant } from '@/lib/tenant-context';
+import { useTenant, MfaRequiredError } from '@/lib/tenant-context';
+import { ConsentCheckbox } from '@/components/consent-checkbox';
 
 type Tab = 'login' | 'signup';
 
@@ -45,8 +46,16 @@ export default function LoginPage() {
 function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { loginWithPassword, requestMagicLink, loginWithMagicLink, signup, connectWithKey } = useTenant();
+  const { loginWithPassword, completeTotpLogin, requestMagicLink, loginWithMagicLink, signup, connectWithKey } =
+    useTenant();
   const [tab, setTab] = useState<Tab>('login');
+
+  // TOTP step-up (?): password verified, but the account has 2FA enabled —
+  // loginWithPassword threw MfaRequiredError instead of resolving. Holds the
+  // short-lived pendingToken until a code (or recovery code) is submitted.
+  const [mfaPendingToken, setMfaPendingToken] = useState<string | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaError, setMfaError] = useState<string | null>(null);
 
   // Team-tier invite (?invite=<token>): looked up on mount; valid → the signup
   // tab becomes a join form locked to the invited email.
@@ -72,6 +81,13 @@ function LoginPageInner() {
   const [magicMode, setMagicMode] = useState(false);
   const [magicSent, setMagicSent] = useState(false);
 
+  // Email verification (?verify=<token>): consumed automatically on mount —
+  // distinct from magic link (this never signs the caller in, it just marks
+  // the address confirmed). Surfaces the outcome via the shared `notice`/
+  // `error` state so it reads like any other one-shot confirmation here.
+  const verifyToken = searchParams.get('verify');
+  const [verifying, setVerifying] = useState(false);
+
   // shared credential state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -83,6 +99,9 @@ function LoginPageInner() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Click-wrap consent — gates the signup-tab submit (incl. invite joins);
+  // recorded per tenant on the gateway (core/legal.ts).
+  const [agreed, setAgreed] = useState(false);
   // After signup, the show-once raw key.
   const [newKey, setNewKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -166,15 +185,65 @@ function LoginPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [magicToken]);
 
+  useEffect(() => {
+    if (!verifyToken) return;
+    let cancelled = false;
+    setVerifying(true);
+    (async () => {
+      try {
+        const res = await fetch('/api/auth/email/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: verifyToken }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (res.ok) {
+          setNotice(`Email verified${json.email ? ` — ${json.email}` : ''}. You can sign in below.`);
+        } else {
+          setError(json.error || 'email verification failed');
+        }
+      } catch {
+        if (!cancelled) setError('could not verify your email — please try the link again');
+      } finally {
+        if (!cancelled) setVerifying(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verifyToken]);
+
   async function onLogin(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await loginWithPassword(email.trim(), password);
+      const session = await loginWithPassword(email.trim(), password);
+      router.push(session.totpEnrollmentRequired ? '/2fa' : '/');
+    } catch (err) {
+      if (err instanceof MfaRequiredError) {
+        setMfaPendingToken(err.pendingToken);
+        setError(null);
+      } else {
+        setError(err instanceof Error ? err.message : 'login failed');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onMfaVerify(e: React.FormEvent) {
+    e.preventDefault();
+    if (!mfaPendingToken) return;
+    setBusy(true);
+    setMfaError(null);
+    try {
+      await completeTotpLogin(mfaPendingToken, mfaCode.trim());
       router.push('/');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'login failed');
+      setMfaError(err instanceof Error ? err.message : 'verification failed');
     } finally {
       setBusy(false);
     }
@@ -190,6 +259,7 @@ function LoginPageInner() {
         email: email.trim(),
         password,
         inviteToken: invite?.token,
+        acceptTerms: agreed,
       });
       // Invite joins get no show-once key (the tenant's key already exists) —
       // straight to the dashboard.
@@ -294,16 +364,16 @@ function LoginPageInner() {
   }
 
   const inputCls =
-    'w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-100 placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
+    'w-full px-3 py-2 rounded-lg bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
 
   // ── Show-once key panel (after signup) ───────────────────────
   if (newKey) {
     return (
       <div className="max-w-md mx-auto mt-10">
         <h1 className="text-2xl font-bold text-brand-orange tracking-tight">You&apos;re in 🎉</h1>
-        <p className="text-sm text-zinc-400 mt-1">
+        <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">
           Your account is ready and you&apos;re signed in. This is your tenant API key for connecting a tool or the
-          CLI — copy it now, it is shown <strong className="text-zinc-200">only once</strong> and cannot be retrieved
+          CLI — copy it now, it is shown <strong className="text-[rgb(var(--text-primary))]">only once</strong> and cannot be retrieved
           later.
         </p>
         <div className="gel-surface mt-5 p-4 rounded-xl border border-amber-700/40">
@@ -321,7 +391,7 @@ function LoginPageInner() {
         </p>
         <button
           onClick={() => router.push('/')}
-          className="gel-surface mt-5 w-full px-3 py-2 rounded-lg border border-zinc-800 text-sm text-zinc-200 hover:border-zinc-700 transition"
+          className="gel-surface mt-5 w-full px-3 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
         >
           Continue to dashboard →
         </button>
@@ -334,7 +404,59 @@ function LoginPageInner() {
     return (
       <div className="max-w-md mx-auto mt-10">
         <h1 className="text-2xl font-bold text-brand-orange tracking-tight">Signing you in…</h1>
-        <p className="text-sm text-zinc-400 mt-1">Verifying your sign-in link, one moment.</p>
+        <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">Verifying your sign-in link, one moment.</p>
+      </div>
+    );
+  }
+
+  // ── TOTP step-up (password verified, 2FA enabled) ─────────────
+  if (mfaPendingToken) {
+    return (
+      <div className="max-w-md mx-auto mt-10">
+        <h1 className="text-2xl font-bold text-brand-orange tracking-tight">Two-factor verification</h1>
+        <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">
+          Enter the 6-digit code from your authenticator app, or one of your recovery codes.
+        </p>
+        {mfaError && (
+          <div className="mt-4 px-3 py-2 rounded-lg bg-rose-950/50 border border-rose-800/50 text-xs text-rose-300">
+            {mfaError}
+          </div>
+        )}
+        <form onSubmit={onMfaVerify} className="mt-4 space-y-3">
+          <label className="block">
+            <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Code</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoFocus
+              value={mfaCode}
+              onChange={(e) => setMfaCode(e.target.value)}
+              placeholder="123456"
+              className={`${inputCls} font-mono tracking-widest`}
+              required
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={busy || !mfaCode.trim()}
+            className="gel-brand w-full px-3 py-2 rounded-lg text-sm font-medium text-teal-100 hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition"
+          >
+            {busy ? 'Verifying…' : 'Verify'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMfaPendingToken(null);
+              setMfaCode('');
+              setMfaError(null);
+              setPassword('');
+            }}
+            className="w-full text-xs text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
+          >
+            ← Back to sign in
+          </button>
+        </form>
       </div>
     );
   }
@@ -344,9 +466,9 @@ function LoginPageInner() {
     return (
       <div className="max-w-md mx-auto mt-10">
         <h1 className="text-2xl font-bold text-brand-orange tracking-tight">Set a new password</h1>
-        <p className="text-sm text-zinc-400 mt-1">
+        <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">
           {reset.email ? (
-            <>Choose a new password for <strong className="text-zinc-200">{reset.email}</strong>.</>
+            <>Choose a new password for <strong className="text-[rgb(var(--text-primary))]">{reset.email}</strong>.</>
           ) : (
             'Choose a new password for your account.'
           )}{' '}
@@ -359,7 +481,7 @@ function LoginPageInner() {
         )}
         <form onSubmit={onReset} className="mt-4 space-y-3">
           <label className="block">
-            <span className="block text-xs text-zinc-500 mb-1">New password</span>
+            <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">New password</span>
             <input
               type="password"
               autoComplete="new-password"
@@ -386,11 +508,11 @@ function LoginPageInner() {
   // ── Login / signup forms ─────────────────────────────────────
   return (
     <div className="max-w-md mx-auto mt-10">
-      <Link href="/welcome" className="text-xs text-zinc-500 hover:text-teal-300 transition">
+      <Link href="/welcome" className="text-xs text-[rgb(var(--text-muted))] hover:text-teal-300 transition">
         ← Back to home
       </Link>
       <h1 className="text-2xl font-bold text-brand-orange tracking-tight mt-2">myAI</h1>
-      <p className="text-sm text-zinc-500 mt-1">
+      <p className="text-sm text-[rgb(var(--text-muted))] mt-1">
         {invite
           ? `You've been invited to join ${invite.tenantName || 'a team'}.`
           : tab === 'login'
@@ -420,13 +542,18 @@ function LoginPageInner() {
           below.
         </div>
       )}
+      {verifying && (
+        <div className="mt-4 px-3 py-2 rounded-lg gel-surface border border-[rgb(var(--border-subtle))] text-xs text-[rgb(var(--text-secondary))]">
+          Verifying your email…
+        </div>
+      )}
       {notice && (
         <div className="mt-4 px-3 py-2 rounded-lg gel-brand border border-teal-800/50 text-xs text-teal-200">
           {notice}
         </div>
       )}
 
-      <div className="flex gap-1 mt-5 p-1 gel-surface rounded-lg border border-zinc-800">
+      <div className="flex gap-1 mt-5 p-1 gel-surface rounded-lg border border-[rgb(var(--border-subtle))]">
         {(['login', 'signup'] as Tab[]).map((t) => (
           <button
             key={t}
@@ -435,7 +562,7 @@ function LoginPageInner() {
               setError(null);
             }}
             className={`flex-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-              tab === t ? 'gel-brand text-teal-200' : 'text-zinc-500 hover:text-zinc-300'
+              tab === t ? 'gel-brand text-teal-200' : 'text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))]'
             }`}
           >
             {t === 'login' ? 'Sign in' : 'Create account'}
@@ -457,7 +584,7 @@ function LoginPageInner() {
               If <strong>{email.trim() || 'that address'}</strong> has an account, a reset link is on its way — check
               your inbox. The link expires in about an hour and works once.
             </div>
-            <p className="text-[11px] text-zinc-500">
+            <p className="text-[11px] text-[rgb(var(--text-muted))]">
               Self-hosting without SMTP configured? The reset link is printed in the gateway logs instead.
             </p>
             <button
@@ -466,18 +593,18 @@ function LoginPageInner() {
                 setForgotSent(false);
                 setError(null);
               }}
-              className="gel-surface w-full px-3 py-2 rounded-lg border border-zinc-800 text-sm text-zinc-200 hover:border-zinc-700 transition"
+              className="gel-surface w-full px-3 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
             >
               ← Back to sign in
             </button>
           </div>
         ) : (
           <form onSubmit={onForgot} className="mt-4 space-y-3">
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[rgb(var(--text-muted))]">
               Enter your account email and we&apos;ll send you a single-use link to set a new password.
             </p>
             <label className="block">
-              <span className="block text-xs text-zinc-500 mb-1">Email</span>
+              <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Email</span>
               <input
                 type="email"
                 autoComplete="email"
@@ -501,7 +628,7 @@ function LoginPageInner() {
                 setForgot(false);
                 setError(null);
               }}
-              className="w-full text-xs text-zinc-500 hover:text-zinc-300 transition"
+              className="w-full text-xs text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
             >
               ← Back to sign in
             </button>
@@ -515,7 +642,7 @@ function LoginPageInner() {
               If <strong>{email.trim() || 'that address'}</strong> has an account, a sign-in link is on its way —
               check your inbox. The link expires in about 15 minutes and works once.
             </div>
-            <p className="text-[11px] text-zinc-500">
+            <p className="text-[11px] text-[rgb(var(--text-muted))]">
               Self-hosting without SMTP configured? The sign-in link is printed in the gateway logs instead.
             </p>
             <button
@@ -524,19 +651,19 @@ function LoginPageInner() {
                 setMagicSent(false);
                 setError(null);
               }}
-              className="gel-surface w-full px-3 py-2 rounded-lg border border-zinc-800 text-sm text-zinc-200 hover:border-zinc-700 transition"
+              className="gel-surface w-full px-3 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
             >
               ← Back to sign in
             </button>
           </div>
         ) : (
           <form onSubmit={onMagicLink} className="mt-4 space-y-3">
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[rgb(var(--text-muted))]">
               Enter your account email and we&apos;ll send you a single-use link that signs you in — no password
               needed.
             </p>
             <label className="block">
-              <span className="block text-xs text-zinc-500 mb-1">Email</span>
+              <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Email</span>
               <input
                 type="email"
                 autoComplete="email"
@@ -560,7 +687,7 @@ function LoginPageInner() {
                 setMagicMode(false);
                 setError(null);
               }}
-              className="w-full text-xs text-zinc-500 hover:text-zinc-300 transition"
+              className="w-full text-xs text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
             >
               ← Back to sign in
             </button>
@@ -569,7 +696,7 @@ function LoginPageInner() {
       ) : tab === 'login' ? (
         <form onSubmit={onLogin} className="mt-4 space-y-3">
           <label className="block">
-            <span className="block text-xs text-zinc-500 mb-1">Email</span>
+            <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Email</span>
             <input
               type="email"
               autoComplete="email"
@@ -581,7 +708,7 @@ function LoginPageInner() {
             />
           </label>
           <label className="block">
-            <span className="block text-xs text-zinc-500 mb-1">Password</span>
+            <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Password</span>
             <input
               type="password"
               autoComplete="current-password"
@@ -607,7 +734,7 @@ function LoginPageInner() {
                 setError(null);
                 setNotice(null);
               }}
-              className="text-xs text-zinc-500 hover:text-teal-300 transition"
+              className="text-xs text-[rgb(var(--text-muted))] hover:text-teal-300 transition"
             >
               Forgot password?
             </button>
@@ -618,7 +745,7 @@ function LoginPageInner() {
                 setError(null);
                 setNotice(null);
               }}
-              className="text-xs text-zinc-500 hover:text-teal-300 transition"
+              className="text-xs text-[rgb(var(--text-muted))] hover:text-teal-300 transition"
             >
               Email me a sign-in link →
             </button>
@@ -628,7 +755,7 @@ function LoginPageInner() {
         <form onSubmit={onSignup} className="mt-4 space-y-3">
           {!invite && (
             <label className="block">
-              <span className="block text-xs text-zinc-500 mb-1">Organisation name</span>
+              <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Organisation name</span>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -639,7 +766,7 @@ function LoginPageInner() {
             </label>
           )}
           <label className="block">
-            <span className="block text-xs text-zinc-500 mb-1">
+            <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">
               Email{invite?.email ? ' (locked to the invite)' : ''}
             </span>
             <input
@@ -654,7 +781,7 @@ function LoginPageInner() {
             />
           </label>
           <label className="block">
-            <span className="block text-xs text-zinc-500 mb-1">Password</span>
+            <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Password</span>
             <input
               type="password"
               autoComplete="new-password"
@@ -666,9 +793,10 @@ function LoginPageInner() {
               required
             />
           </label>
+          <ConsentCheckbox checked={agreed} onChange={setAgreed} />
           <button
             type="submit"
-            disabled={busy || (!invite && !name.trim()) || !email.trim() || password.length < 8}
+            disabled={busy || (!invite && !name.trim()) || !email.trim() || password.length < 8 || !agreed}
             className="gel-brand w-full px-3 py-2 rounded-lg text-sm font-medium text-teal-100 hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition"
           >
             {busy
@@ -679,20 +807,20 @@ function LoginPageInner() {
       )}
 
       {/* ── Secondary: connect a tool / CLI with an API key ─────────── */}
-      <div className="mt-6 pt-5 border-t border-zinc-800/70">
+      <div className="mt-6 pt-5 border-t border-[rgb(var(--border-subtle))]/70">
         {!showKey ? (
           <button
             onClick={() => {
               setShowKey(true);
               setError(null);
             }}
-            className="text-xs text-zinc-500 hover:text-teal-300 transition"
+            className="text-xs text-[rgb(var(--text-muted))] hover:text-teal-300 transition"
           >
             Connecting a tool or CLI? Use an API key instead →
           </button>
         ) : (
           <form onSubmit={onConnect} className="space-y-3">
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[rgb(var(--text-muted))]">
               Paste a per-tenant API key to connect a tool or CLI session to its tenant.
             </p>
             <input
@@ -708,14 +836,14 @@ function LoginPageInner() {
               <button
                 type="submit"
                 disabled={busy || !apiKey.trim()}
-                className="gel-surface flex-1 px-3 py-2 rounded-lg border border-zinc-800 text-sm text-zinc-200 hover:border-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                className="gel-surface flex-1 px-3 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] hover:border-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
               >
                 {busy ? 'Connecting…' : 'Connect with key'}
               </button>
               <button
                 type="button"
                 onClick={() => setShowKey(false)}
-                className="px-3 py-2 rounded-lg text-sm text-zinc-500 hover:text-zinc-300 transition"
+                className="px-3 py-2 rounded-lg text-sm text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
               >
                 Cancel
               </button>

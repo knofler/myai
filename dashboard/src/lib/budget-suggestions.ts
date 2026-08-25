@@ -15,7 +15,7 @@
 // turns a suggestion row into the API payload without touching the network.
 
 import { BudgetUsage } from './db';
-import { tenantFilter } from './tenant';
+import { tenantFilter } from './tenant-cookie';
 
 export const DEFAULT_LOOKBACK_DAYS = 30;
 export const MIN_OBSERVED_DAYS = 7;

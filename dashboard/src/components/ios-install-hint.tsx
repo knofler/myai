@@ -54,18 +54,18 @@ export function IosInstallHint() {
     <div
       role="dialog"
       aria-label="Install myAI on your home screen"
-      className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-2xl border border-zinc-700 bg-zinc-900/95 backdrop-blur px-4 py-3 shadow-xl"
+      className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-2xl border border-zinc-700 bg-[rgb(var(--bg-surface))]/95 backdrop-blur px-4 py-3 shadow-xl"
     >
       <div className="flex items-start gap-3">
         <span className="text-xl leading-6 shrink-0" aria-hidden="true">📲</span>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-zinc-100">Install myAI on your iPhone</p>
-          <p className="mt-0.5 text-xs text-zinc-400 leading-snug">
+          <p className="text-sm font-semibold text-[rgb(var(--text-primary))]">Install myAI on your iPhone</p>
+          <p className="mt-0.5 text-xs text-[rgb(var(--text-secondary))] leading-snug">
             Tap the Share button{' '}
             <span aria-hidden="true" className="inline-block px-1 text-teal-300">
               􀈂
             </span>
-            in Safari, then choose <span className="text-zinc-200">“Add to Home Screen”</span> for a full-screen,
+            in Safari, then choose <span className="text-[rgb(var(--text-primary))]">“Add to Home Screen”</span> for a full-screen,
             app-like experience.
           </p>
         </div>
@@ -73,7 +73,7 @@ export function IosInstallHint() {
           type="button"
           onClick={dismiss}
           aria-label="Dismiss install hint"
-          className="shrink-0 rounded-lg border border-zinc-800 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition-colors"
+          className="shrink-0 rounded-lg border border-[rgb(var(--border-subtle))] px-2 py-1 text-xs text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hover:border-zinc-700 transition-colors"
         >
           ✕
         </button>

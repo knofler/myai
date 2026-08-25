@@ -28,6 +28,7 @@ import { Suspense, useCallback, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useTenant } from '@/lib/tenant-context';
+import { ConsentCheckbox } from '@/components/consent-checkbox';
 
 const STEPS = ['Sign up', 'Connect a repo', 'Queue a task', 'Watch it ship'] as const;
 
@@ -54,7 +55,7 @@ interface LaunchResult {
 }
 
 const inputCls =
-  'w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-100 placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
+  'w-full px-3 py-2 rounded-lg bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
 
 /* ── Step rail ──────────────────────────────────────────────── */
 function StepRail({ step }: { step: number }) {
@@ -72,14 +73,14 @@ function StepRail({ step }: { step: number }) {
                   ? 'border-teal-600 bg-teal-500/10 text-teal-300'
                   : done
                     ? 'border-emerald-700/60 bg-emerald-500/10 text-emerald-400'
-                    : 'border-zinc-800 text-zinc-600')
+                    : 'border-[rgb(var(--border-subtle))] text-zinc-600')
               }
             >
               <span className="font-mono">{done ? '✓' : i + 1}</span>
               <span className="hidden sm:inline">{label}</span>
             </span>
             {i < STEPS.length - 1 && (
-              <span className={'h-px w-4 sm:w-8 ' + (done ? 'bg-emerald-700/60' : 'bg-zinc-800')} />
+              <span className={'h-px w-4 sm:w-8 ' + (done ? 'bg-emerald-700/60' : 'bg-[rgb(var(--bg-hover))]')} />
             )}
           </li>
         );
@@ -134,6 +135,8 @@ function OnboardingWizardInner() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Click-wrap consent — gates the signup submit; recorded per tenant on the gateway.
+  const [agreed, setAgreed] = useState(false);
 
   // Paid-intent auto-checkout (?plan=solo|team) — kicked off right after signup.
   const [checkoutState, setCheckoutState] = useState<'idle' | 'starting' | 'error' | 'not-configured'>('idle');
@@ -169,7 +172,7 @@ function OnboardingWizardInner() {
     setBusy(true);
     setError(null);
     try {
-      const { apiKey: key } = await signup({ name: name.trim(), email: email.trim(), password });
+      const { apiKey: key } = await signup({ name: name.trim(), email: email.trim(), password, acceptTerms: agreed });
       setApiKey(key ?? null); // always present here (no inviteToken)
       if (requestedPlan && key) {
         await startCheckout(requestedPlan, key);
@@ -220,13 +223,13 @@ function OnboardingWizardInner() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="min-h-screen bg-[rgb(var(--bg-page))] text-[rgb(var(--text-primary))]">
       {/* top bar */}
       <header className="max-w-3xl mx-auto px-5 md:px-8 h-16 flex items-center justify-between">
         <Link href="/welcome" className="text-xl font-bold tracking-tight text-brand-orange">
           myAI
         </Link>
-        <Link href="/login" className="text-sm text-zinc-400 hover:text-zinc-200">
+        <Link href="/operator-login" className="text-sm text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))]">
           Sign in
         </Link>
       </header>
@@ -234,7 +237,7 @@ function OnboardingWizardInner() {
       <main className="max-w-2xl mx-auto px-5 md:px-8 pt-6 pb-20">
         <div className="text-center">
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Get your first task shipping</h1>
-          <p className="mt-2 text-sm text-zinc-500">
+          <p className="mt-2 text-sm text-[rgb(var(--text-muted))]">
             Four steps to a working autonomous loop — no manual wiring.
           </p>
         </div>
@@ -249,36 +252,37 @@ function OnboardingWizardInner() {
           </div>
         )}
 
-        <div className="mt-6 gel-surface p-5 md:p-6 rounded-2xl border border-zinc-800">
+        <div className="mt-6 gel-surface p-5 md:p-6 rounded-2xl border border-[rgb(var(--border-subtle))]">
           {/* ── Step 0: Sign up ─────────────────────────────── */}
           {step === 0 && !apiKey && (
             <form onSubmit={onSignup} className="space-y-3">
               <div>
-                <h2 className="text-lg font-semibold text-zinc-100">Create your account</h2>
-                <p className="text-sm text-zinc-500 mt-0.5">No credit card. Starts on the free plan.</p>
+                <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))]">Create your account</h2>
+                <p className="text-sm text-[rgb(var(--text-muted))] mt-0.5">No credit card. Starts on the free plan.</p>
               </div>
               <label className="block">
-                <span className="block text-xs text-zinc-500 mb-1">Organisation name</span>
+                <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Organisation name</span>
                 <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Inc" className={inputCls} required />
               </label>
               <label className="block">
-                <span className="block text-xs text-zinc-500 mb-1">Email</span>
+                <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Email</span>
                 <input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@acme.com" className={inputCls} required />
               </label>
               <label className="block">
-                <span className="block text-xs text-zinc-500 mb-1">Password</span>
+                <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Password</span>
                 <input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" className={inputCls} minLength={8} required />
               </label>
+              <ConsentCheckbox checked={agreed} onChange={setAgreed} />
               <button
                 type="submit"
-                disabled={busy || !name.trim() || !email.trim() || password.length < 8}
+                disabled={busy || !name.trim() || !email.trim() || password.length < 8 || !agreed}
                 className="gel-brand w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-teal-100 hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition"
               >
                 {busy ? 'Creating your account…' : 'Create account →'}
               </button>
               <p className="text-center text-xs text-zinc-600">
                 Already have an account?{' '}
-                <Link href="/login" className="text-teal-400 hover:text-teal-300">Sign in</Link>
+                <Link href="/operator-login" className="text-teal-400 hover:text-teal-300">Sign in</Link>
               </p>
             </form>
           )}
@@ -288,14 +292,14 @@ function OnboardingWizardInner() {
             <div>
               {requestedPlan && checkoutState === 'starting' ? (
                 <>
-                  <h2 className="text-lg font-semibold text-zinc-100">
+                  <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))]">
                     Setting up {PLAN_LABEL[requestedPlan]}… 🎉
                   </h2>
-                  <p className="text-sm text-zinc-400 mt-1">Redirecting you to secure Stripe checkout.</p>
+                  <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">Redirecting you to secure Stripe checkout.</p>
                 </>
               ) : (
                 <>
-                  <h2 className="text-lg font-semibold text-zinc-100">You&apos;re in. 🎉</h2>
+                  <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))]">You&apos;re in. 🎉</h2>
                   {requestedPlan && checkoutState !== 'idle' && (
                     <p className="mt-2 px-3 py-2 rounded-lg bg-amber-950/40 border border-amber-800/50 text-xs text-amber-300">
                       {checkoutState === 'not-configured'
@@ -305,16 +309,16 @@ function OnboardingWizardInner() {
                   )}
                 </>
               )}
-              <p className="text-sm text-zinc-400 mt-1">
+              <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">
                 Here is your tenant API key for the CLI / tools — copy it now, it is shown{' '}
-                <strong className="text-zinc-200">only once</strong>.
+                <strong className="text-[rgb(var(--text-primary))]">only once</strong>.
               </p>
-              <code className="block mt-4 px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-teal-300 break-all font-mono select-all">
+              <code className="block mt-4 px-3 py-2 rounded-lg bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] text-xs text-teal-300 break-all font-mono select-all">
                 {apiKey}
               </code>
               <button
                 onClick={copyKey}
-                className="gel-surface mt-3 w-full px-3 py-2 rounded-lg border border-zinc-800 text-sm text-zinc-200 hover:border-zinc-700 transition"
+                className="gel-surface mt-3 w-full px-3 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
               >
                 {copied ? '✓ Copied' : 'Copy key'}
               </button>
@@ -340,8 +344,8 @@ function OnboardingWizardInner() {
               className="space-y-3"
             >
               <div>
-                <h2 className="text-lg font-semibold text-zinc-100">Connect a repo</h2>
-                <p className="text-sm text-zinc-500 mt-0.5">
+                <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))]">Connect a repo</h2>
+                <p className="text-sm text-[rgb(var(--text-muted))] mt-0.5">
                   Point at an existing GitHub repo (<span className="font-mono">owner/repo</span>) or name a fresh
                   project. It appears in your{' '}
                   <Link href="/apps" className="text-teal-400 hover:text-teal-300">directory</Link>.
@@ -351,7 +355,7 @@ function OnboardingWizardInner() {
                 <div className="text-xs text-emerald-400/90">Signed in as {current.name}.</div>
               )}
               <label className="block">
-                <span className="block text-xs text-zinc-500 mb-1">Repo or project name</span>
+                <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Repo or project name</span>
                 <input
                   value={repo}
                   onChange={(e) => setRepo(e.target.value)}
@@ -362,7 +366,7 @@ function OnboardingWizardInner() {
                 />
               </label>
               <label className="block">
-                <span className="block text-xs text-zinc-500 mb-1">One-line description (optional)</span>
+                <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">One-line description (optional)</span>
                 <input
                   value={repoDescription}
                   onChange={(e) => setRepoDescription(e.target.value)}
@@ -387,15 +391,15 @@ function OnboardingWizardInner() {
           {step === 2 && (
             <form onSubmit={onLaunch} className="space-y-3">
               <div>
-                <h2 className="text-lg font-semibold text-zinc-100">Queue your first task</h2>
-                <p className="text-sm text-zinc-500 mt-0.5">
+                <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))]">Queue your first task</h2>
+                <p className="text-sm text-[rgb(var(--text-muted))] mt-0.5">
                   Describe one thing to do in{' '}
-                  <span className="font-mono text-zinc-400">{repo.trim() || 'your repo'}</span>. The off-hours runner
+                  <span className="font-mono text-[rgb(var(--text-secondary))]">{repo.trim() || 'your repo'}</span>. The off-hours runner
                   builds it autonomously.
                 </p>
               </div>
               <label className="block">
-                <span className="block text-xs text-zinc-500 mb-1">Task</span>
+                <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Task</span>
                 <input
                   value={taskTitle}
                   onChange={(e) => setTaskTitle(e.target.value)}
@@ -406,7 +410,7 @@ function OnboardingWizardInner() {
                 />
               </label>
               <label className="block">
-                <span className="block text-xs text-zinc-500 mb-1">Detail (optional)</span>
+                <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Detail (optional)</span>
                 <textarea
                   value={taskDescription}
                   onChange={(e) => setTaskDescription(e.target.value)}
@@ -416,7 +420,7 @@ function OnboardingWizardInner() {
                 />
               </label>
               <label className="block">
-                <span className="block text-xs text-zinc-500 mb-1">Priority</span>
+                <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Priority</span>
                 <select value={priority} onChange={(e) => setPriority(e.target.value)} className={inputCls}>
                   {PRIORITIES.map((p) => (
                     <option key={p.value} value={p.value}>{p.label}</option>
@@ -427,7 +431,7 @@ function OnboardingWizardInner() {
                 <button
                   type="button"
                   onClick={() => { setError(null); setStep(1); }}
-                  className="gel-surface px-3 py-2.5 rounded-lg border border-zinc-800 text-sm text-zinc-200 hover:border-zinc-700 transition"
+                  className="gel-surface px-3 py-2.5 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
                 >
                   ← Back
                 </button>
@@ -446,22 +450,22 @@ function OnboardingWizardInner() {
           {step === 3 && result && (
             <div>
               <h2 className="text-lg font-semibold text-brand-orange">Queued — it ships overnight 🚀</h2>
-              <p className="text-sm text-zinc-400 mt-1">{result.message}</p>
-              <div className="mt-4 p-4 rounded-xl border border-zinc-800 bg-zinc-950/60 space-y-2 text-sm">
+              <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">{result.message}</p>
+              <div className="mt-4 p-4 rounded-xl border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-page))]/60 space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-zinc-500">Repo</span>
+                  <span className="text-[rgb(var(--text-muted))]">Repo</span>
                   <span className="font-mono text-teal-300">{result.repoName}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-zinc-500">Task</span>
-                  <span className="font-mono text-zinc-300 text-xs break-all">{result.taskId}</span>
+                  <span className="text-[rgb(var(--text-muted))]">Task</span>
+                  <span className="font-mono text-[rgb(var(--text-primary))] text-xs break-all">{result.taskId}</span>
                 </div>
               </div>
-              <ol className="mt-4 space-y-1.5 text-sm text-zinc-400 list-decimal list-inside">
+              <ol className="mt-4 space-y-1.5 text-sm text-[rgb(var(--text-secondary))] list-decimal list-inside">
                 <li>The off-hours runner picks it up on the next free window.</li>
-                <li>It works the task autonomously and lands changes on <code className="text-zinc-300">test</code>.</li>
+                <li>It works the task autonomously and lands changes on <code className="text-[rgb(var(--text-primary))]">test</code>.</li>
                 <li>It surfaces in <span className="text-teal-300">Work → Needs Review</span> for your{' '}
-                  <code className="text-zinc-300">ship it</code>.</li>
+                  <code className="text-[rgb(var(--text-primary))]">ship it</code>.</li>
               </ol>
               <div className="flex flex-wrap gap-2 mt-5">
                 <button
@@ -472,7 +476,7 @@ function OnboardingWizardInner() {
                 </button>
                 <Link
                   href="/"
-                  className="gel-surface px-3 py-2.5 rounded-lg border border-zinc-800 text-sm text-zinc-200 hover:border-zinc-700 transition"
+                  className="gel-surface px-3 py-2.5 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
                 >
                   Open dashboard
                 </Link>

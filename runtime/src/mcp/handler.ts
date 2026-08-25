@@ -2,6 +2,7 @@ import express from 'express';
 import type { Request, Response } from 'express';
 import { createChildLogger } from '../shared/logger.js';
 import { TOOL_DEFINITIONS, executeTool } from './tools.js';
+import { pluginToolDefsForTenant, callPluginTool } from './plugin-tools.js';
 import { buildContextBundle } from './context-bundle.js';
 import { authenticate, ctxFromReq } from '../core/auth.js';
 import { filterToolsForTenant } from '../core/rbac.js';
@@ -11,6 +12,7 @@ import { tenantDbGuard } from '../shared/tenant-db-registry.js';
 import { getConfig } from '../shared/config.js';
 import { type ToolContext, SYSTEM_CONTEXT, AuthError } from '../core/tenant-context.js';
 import { IDEMPOTENT_TOOLS, lookupIdempotency, storeIdempotency } from '../core/idempotency-store.js';
+import { GATEWAY_API_VERSION } from '../core/api-version.js';
 
 const log = createChildLogger({ module: 'mcp-handler' });
 
@@ -66,6 +68,9 @@ export async function handleMcpRequest(
           serverInfo: {
             name: SERVER_NAME,
             version: SERVER_VERSION,
+            // Tool-surface contract major (documentation/API_VERSIONING.md) —
+            // lets SDK/contract-test clients pin the surface they built against.
+            apiVersion: GATEWAY_API_VERSION,
           },
           ...(instructions ? { instructions } : {}),
         },
@@ -80,11 +85,18 @@ export async function handleMcpRequest(
       // Per-org MCP tool visibility (Wave-2 #15): hide operator-only /
       // org-denylisted tools from tools/list so a restricted tenant never
       // even sees them advertised (core/rbac.ts filterToolsForTenant).
+      // Tenant MCP tool plugins (task-6f9ae8ea, env-gated): the caller
+      // tenant's ENABLED custom tools are appended AFTER the built-in
+      // surface — [] unless MYAI_TENANT_TOOL_PLUGINS is set, so default
+      // behaviour is unchanged (mcp/plugin-tools.ts).
       return {
         jsonrpc: '2.0',
         id: req.id ?? null,
         result: {
-          tools: filterToolsForTenant(ctx, TOOL_DEFINITIONS),
+          tools: [
+            ...filterToolsForTenant(ctx, TOOL_DEFINITIONS),
+            ...(await pluginToolDefsForTenant(ctx.tenantId)),
+          ],
         },
       };
 
@@ -103,10 +115,32 @@ export async function handleMcpRequest(
 
       const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
       if (!toolDef) {
+        // Tenant MCP tool plugins (task-6f9ae8ea): only a TOOL_DEFINITIONS
+        // MISS consults the tenant's plugin registry — built-ins always win,
+        // a plugin can never shadow or intercept a gateway tool. Inert (found:
+        // false) unless MYAI_TENANT_TOOL_PLUGINS is set AND the caller tenant
+        // registered an enabled plugin with this exact name. The proxy call is
+        // timeout-bounded + size-capped + audited (mcp/plugin-tools.ts).
+        const pluginOutcome = await callPluginTool(ctx, toolName, toolArgs);
+        if (!pluginOutcome.found) {
+          return {
+            jsonrpc: '2.0',
+            id: req.id ?? null,
+            error: { code: -32602, message: `Unknown tool: ${toolName}` },
+          };
+        }
+        const pluginText = pluginOutcome.ok
+          ? typeof pluginOutcome.result === 'string'
+            ? pluginOutcome.result
+            : JSON.stringify(pluginOutcome.result, null, 2)
+          : `Error: ${pluginOutcome.error}`;
         return {
           jsonrpc: '2.0',
           id: req.id ?? null,
-          error: { code: -32602, message: `Unknown tool: ${toolName}` },
+          result: {
+            content: [{ type: 'text', text: pluginText }],
+            ...(pluginOutcome.ok ? {} : { isError: true }),
+          },
         };
       }
 
@@ -230,6 +264,7 @@ export function createMcpRouter(): express.Router {
       name: SERVER_NAME,
       version: SERVER_VERSION,
       protocolVersion: MCP_PROTOCOL_VERSION,
+      apiVersion: GATEWAY_API_VERSION,
       transport: 'streamable-http',
       tools: TOOL_DEFINITIONS.length,
       toolNames: TOOL_DEFINITIONS.map(t => t.name),
@@ -262,7 +297,12 @@ export function startMcpServer(port: number, host: string = '0.0.0.0'): void {
   // for the shared-tier majority; only rejects a dedicated-tier tenant with
   // no provisioned binding yet.
   app.use(tenantDbGuard());
-  app.use('/mcp', createMcpRouter());
+  // One router instance serves both mounts: /mcp (legacy alias) and /mcp/v1
+  // (versioned namespace, documentation/API_VERSIONING.md). Same handlers,
+  // same auth — a compatibility shim, not a route fork.
+  const mcpRouter = createMcpRouter();
+  app.use('/mcp/v1', mcpRouter);
+  app.use('/mcp', mcpRouter);
 
   // Health endpoint for MCP server
   app.get('/health', (_req: Request, res: Response) => {

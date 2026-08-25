@@ -1,8 +1,9 @@
 import { v4 as uuid } from 'uuid';
+import type { Connection } from 'mongoose';
 import { GatewaySessionModel, isConnected } from '../shared/db.js';
 import { createChildLogger } from '../shared/logger.js';
 import { getConfig } from '../shared/config.js';
-import { scopedUpdateOne, scopedFind, scopedFindOne, scopedFindOneAndUpdate, tenantScope } from '../shared/scoped-query.js';
+import { scopedUpdateOne, scopedFind, scopedFindOne, scopedFindOneAndUpdate, tenantScope, resolveScopedModel } from '../shared/scoped-query.js';
 import type { Session, GatewayMessage, SessionStatus } from '../shared/types.js';
 
 const log = createChildLogger({ module: 'session-manager' });
@@ -10,7 +11,7 @@ const log = createChildLogger({ module: 'session-manager' });
 // In-memory session cache (source of truth is MongoDB, this is for fast access)
 const sessions = new Map<string, Session>();
 
-export async function createSession(tenantId: string, agentName: string, metadata: Record<string, unknown> = {}): Promise<Session> {
+export async function createSession(tenantId: string, agentName: string, metadata: Record<string, unknown> = {}, connection?: Connection): Promise<Session> {
   const config = getConfig();
 
   if (sessions.size >= config.sessions.maxConcurrentSessions) {
@@ -33,7 +34,7 @@ export async function createSession(tenantId: string, agentName: string, metadat
 
   // Persist to MongoDB — stamp the tenant so the row is owned + scoped.
   if (isConnected()) {
-    await GatewaySessionModel.create({
+    await resolveScopedModel(GatewaySessionModel, connection).create({
       ...tenantScope(tenantId),
       sessionId: session.id,
       agentName: session.agentName,
@@ -48,7 +49,7 @@ export async function createSession(tenantId: string, agentName: string, metadat
   return session;
 }
 
-export async function addMessage(sessionId: string, message: GatewayMessage): Promise<void> {
+export async function addMessage(sessionId: string, message: GatewayMessage, connection?: Connection): Promise<void> {
   const session = sessions.get(sessionId);
   if (!session) throw new Error(`Session ${sessionId} not found`);
 
@@ -59,7 +60,7 @@ export async function addMessage(sessionId: string, message: GatewayMessage): Pr
   // Check if compaction needed
   const config = getConfig();
   if (session.messages.length >= config.sessions.compactionThreshold) {
-    await compactSession(sessionId);
+    await compactSession(sessionId, connection);
   }
 
   // Persist message to MongoDB (scoped to the session's owning tenant)
@@ -71,11 +72,13 @@ export async function addMessage(sessionId: string, message: GatewayMessage): Pr
         $push: { messages: { id: message.id, role: message.role, content: message.content, agentName: message.agentName, channelType: message.channelType, channelId: message.channelId, metadata: message.metadata, timestamp: message.timestamp } },
         $set: { status: 'active', updatedAt: new Date() },
       },
+      undefined,
+      connection,
     );
   }
 }
 
-export async function compactSession(sessionId: string): Promise<void> {
+export async function compactSession(sessionId: string, connection?: Connection): Promise<void> {
   const session = sessions.get(sessionId);
   if (!session) return;
 
@@ -122,13 +125,15 @@ export async function compactSession(sessionId: string): Promise<void> {
           compactionCount: (session.metadata.compactionCount as number || 0) + 1,
         },
       },
+      undefined,
+      connection,
     );
   }
 
   log.info({ sessionId, before: total, after: session.messages.length }, 'Session compacted');
 }
 
-export async function closeSession(sessionId: string): Promise<void> {
+export async function closeSession(sessionId: string, connection?: Connection): Promise<void> {
   const session = sessions.get(sessionId);
   if (!session) return;
 
@@ -139,6 +144,8 @@ export async function closeSession(sessionId: string): Promise<void> {
       GatewaySessionModel, session.tenantId,
       { sessionId },
       { $set: { status: 'closed', closedAt: new Date() } },
+      undefined,
+      connection,
     );
   }
 
@@ -223,12 +230,12 @@ function dbMessagesToGateway(sessionId: string, raw: unknown): GatewayMessage[] 
  * on the shared Atlas) and falls back to the in-memory cache when the DB is down.
  * Returns null when the session does not exist or is not owned by this tenant.
  */
-export async function exportSession(tenantId: string, sessionId: string): Promise<SessionExport | null> {
+export async function exportSession(tenantId: string, sessionId: string, connection?: Connection): Promise<SessionExport | null> {
   if (!sessionId) throw new Error('sessionId is required');
 
   // Durable copy first — the DB row is tenant-scoped, so a cross-tenant id misses.
   if (isConnected() && GatewaySessionModel) {
-    const doc = await scopedFindOne(GatewaySessionModel, tenantId, { sessionId }).lean<Record<string, unknown> | null>();
+    const doc = await scopedFindOne(GatewaySessionModel, tenantId, { sessionId }, connection).lean<Record<string, unknown> | null>();
     if (doc) {
       return {
         version: SESSION_EXPORT_VERSION,
@@ -284,6 +291,7 @@ export async function importSession(
   tenantId: string,
   bundle: SessionExport,
   opts: ImportSessionOptions = {},
+  connection?: Connection,
 ): Promise<Session> {
   if (!bundle || typeof bundle !== 'object' || !bundle.session) {
     throw new Error('Invalid session bundle');
@@ -342,6 +350,7 @@ export async function importSession(
         },
       },
       { upsert: true, new: true, setDefaultsOnInsert: true },
+      connection,
     );
   }
 
@@ -384,6 +393,7 @@ export interface RecallContextOptions {
 export async function recallSessionContext(
   tenantId: string,
   opts: RecallContextOptions = {},
+  connection?: Connection,
 ): Promise<RecallContextResult> {
   const limit = Math.max(1, opts.limit ?? 5);
   const perSession = Math.max(0, opts.perSessionMessages ?? 4);
@@ -393,7 +403,7 @@ export async function recallSessionContext(
   if (isConnected() && GatewaySessionModel) {
     const filter: Record<string, unknown> = {};
     if (opts.agentName) filter.agentName = opts.agentName;
-    const docs = await scopedFind(GatewaySessionModel, tenantId, filter)
+    const docs = await scopedFind(GatewaySessionModel, tenantId, filter, connection)
       .sort({ updatedAt: -1 })
       .limit(limit)
       .lean<Array<Record<string, unknown>>>();

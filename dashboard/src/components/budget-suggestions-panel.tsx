@@ -69,12 +69,12 @@ function SuggestionRow({ row }: { row: Row }) {
   const { s, field } = row;
   const { deltaUsd } = summarizeSuggestion(s);
   return (
-    <tr className="hover:bg-zinc-800/30 transition-colors">
-      <td className="m-title px-4 py-2.5 text-zinc-200 font-medium">{row.label}</td>
-      <td data-label="Current cap" className="px-4 py-2.5 text-right font-mono text-zinc-400">
+    <tr className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+      <td className="m-title px-4 py-2.5 text-[rgb(var(--text-primary))] font-medium">{row.label}</td>
+      <td data-label="Current cap" className="px-4 py-2.5 text-right font-mono text-[rgb(var(--text-secondary))]">
         {fmtUsd(s.currentCapUsd)}
       </td>
-      <td data-label="Suggested cap" className="px-4 py-2.5 text-right font-mono text-zinc-200">
+      <td data-label="Suggested cap" className="px-4 py-2.5 text-right font-mono text-[rgb(var(--text-primary))]">
         {fmtUsd(s.suggestedCapUsd)}
         {deltaUsd !== 0 && (
           <span className={`ml-1 text-xs ${deltaUsd > 0 ? 'text-orange-400' : 'text-blue-400'}`}>
@@ -82,13 +82,13 @@ function SuggestionRow({ row }: { row: Row }) {
           </span>
         )}
       </td>
-      <td data-label="Observed days" className="px-4 py-2.5 text-right text-xs text-zinc-500 font-mono">
+      <td data-label="Observed days" className="px-4 py-2.5 text-right text-xs text-[rgb(var(--text-muted))] font-mono">
         {s.observedDays}
       </td>
       <td data-label="Recommendation" className="px-4 py-2.5">
         <RecommendationBadge recommendation={s.recommendation} />
       </td>
-      <td data-label="Rationale" className="px-4 py-2.5 text-xs text-zinc-500 max-w-[360px]">
+      <td data-label="Rationale" className="px-4 py-2.5 text-xs text-[rgb(var(--text-muted))] max-w-[360px]">
         {s.rationale}
       </td>
       <td data-label="Apply" className="px-4 py-2.5 text-right">
@@ -109,14 +109,14 @@ export function BudgetSuggestionsPanel({ suggestions }: { suggestions: BudgetCap
     <div className="mb-8">
       <div className="mb-3 flex items-baseline justify-between">
         <h2 className="text-lg font-semibold">Adaptive cap suggestions</h2>
-        <span className="text-xs text-zinc-500">
+        <span className="text-xs text-[rgb(var(--text-muted))]">
           {suggestions.lookbackDays}-day lookback
         </span>
       </div>
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
         <table className="card-table w-full text-sm">
           <thead>
-            <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+            <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
               <th className="px-4 py-3">Cap</th>
               <th className="px-4 py-3 text-right">Current</th>
               <th className="px-4 py-3 text-right">Suggested</th>
@@ -126,7 +126,7 @@ export function BudgetSuggestionsPanel({ suggestions }: { suggestions: BudgetCap
               <th className="px-4 py-3 text-right">Apply</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-800/50">
+          <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
             {rows.map((row) => (
               <SuggestionRow key={row.label} row={row} />
             ))}
@@ -136,7 +136,7 @@ export function BudgetSuggestionsPanel({ suggestions }: { suggestions: BudgetCap
       <p className="mt-3 text-xs text-zinc-600">
         Applying a suggestion persists the new cap as this tenant&apos;s budget-cap override (audit-logged as
         adaptive-suggested, distinct from a manually typed value) and takes effect in the dashboard immediately.
-        The gateway&apos;s own budget-guard enforcement still reads the <code className="bg-zinc-800 px-1 rounded">BUDGET_*</code> env
+        The gateway&apos;s own budget-guard enforcement still reads the <code className="bg-[rgb(var(--bg-hover))] px-1 rounded">BUDGET_*</code> env
         vars directly, so a gateway rebuild is separately required for enforcement to pick up an applied cap.
       </p>
     </div>

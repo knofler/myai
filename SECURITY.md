@@ -21,7 +21,7 @@
 | Vector embeddings | Same store; computed **in-process** by `Xenova/all-MiniLM-L6-v2` (`@xenova/transformers`) — no embeddings API | Never |
 | Brain store (session atoms, compiled briefs) | Local gateway + git-versioned files in your repos | Only via your own `git push` |
 | State files (`state/STATE.md`, `state/AI_AGENT_HANDOFF.md`, `logs/`) | Plain files in your repos | Only via your own `git push` |
-| Memory export bundles | A local folder of markdown + JSON you choose | Only if you copy them — and they are **secret-scanned first** (§3) |
+| Memory export bundles | A local folder of markdown + JSON you choose | Only if you copy them — and they are **secret-scanned first** (§4) |
 
 ### The exhaustive outbound surface
 
@@ -44,9 +44,87 @@ search → `recall_session`) is end-to-end local; cloud services only enter the
 picture for the *optional* conveniences you explicitly key in, and none of them
 receive the memory corpus.
 
+### BYO-model-key posture
+
+myAI does not sell inference. There is no default LLM key baked into the
+product, no proxy that routes your prompts through our infrastructure, and no
+usage-based inference billing on our side. Every model call is made **from
+your machine, with your own API key, directly to the provider you chose**:
+
+- Set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / a DeepSeek or Moonshot key in
+  your own `.env` → the gateway calls that provider directly. We never see the
+  key, the prompt, or the response — the request never transits our servers,
+  because we don't operate any request path between you and the model vendor.
+- No key configured → `LLM_MODE` defaults to whatever local/offline path is
+  available (e.g. `ollama`); nothing is silently routed to a hosted model.
+- This keeps myAI's COGS on inference at zero and means your prompts are
+  governed by *your* agreement with *your* model vendor (Anthropic's,
+  OpenAI's, etc.), not by us. If your organization has a model-vendor DPA or
+  zero-retention agreement already in place, it applies unchanged — myAI
+  sits outside that data path entirely.
+- The only thing we (the vendor) ever hold is the minimal hosted **account
+  and billing** record for a paid subscription tier — never inference
+  traffic. See the dashboard's `/privacy` page for the full account-data
+  list.
+
 ---
 
-## 2. What talks to what — ports and tokens
+## 2. Retention windows
+
+Two different things have retention policies here, and they're deliberately
+not the same system: **your local memory corpus** (which you own outright)
+and the **hosted account/control-plane data** (the minimal billing/usage
+records that exist only if you're on a paid tier).
+
+### Local memory corpus — retained until you delete it
+
+| Data | Retention |
+|---|---|
+| Memory corpus (`myai-mongo` volume: state, handoffs, patterns) | Indefinite — it's your database. Nothing auto-expires it. |
+| `state/STATE.md` hot tier | Kept to the last 3 session blocks / ~20KB by `rotate_state.sh`; older sessions move to `state/archive/YYYY-MM.md`, not deleted |
+| `state/AI_AGENT_HANDOFF.md` | Trimmed to a thin delta on rotation; prior content lives in the archive files, still in your git history either way |
+| Brain store (session atoms) | Git-versioned — retained per your own repo's git history and remotes, forever unless you rewrite history |
+| Memory export bundles | Written to a local path you choose; we impose no expiry. Secret-scanned on write (§4) |
+
+Deleting any of this is entirely in your hands: stop the stack and remove the
+`myai-mongo-data` volume, or delete the state/archive files and commit the
+removal. There is no server-side copy to separately purge.
+
+### Hosted account/control-plane data — bounded, env-configurable windows
+
+These only exist if you run the multi-tenant gateway with hosted accounts
+(billing, invites, the task queue) rather than a pure single-operator local
+setup. Each collection ages out on a fixed window, purged by a recurring
+sweep (`data_retention_purge`), **unless the tenant is flagged `legalHold`**,
+which excludes it from every purge below:
+
+| Collection | Default window | Env override | Scope |
+|---|---|---|---|
+| Task rows (terminal states: `done` / `dead_letter` only) | 90 days | `TASK_RETENTION_DAYS` | Per tenant |
+| PlanDay rows (terminal state: `done` only) | 180 days | `PLAN_RETENTION_DAYS` | Per tenant |
+| Audit log day-files | 400 days | `AUDIT_RETENTION_DAYS` | Per tenant (files interleave tenants; purge rewrites the file keeping only non-expired tenants' lines rather than deleting shared files outright) |
+
+Two more windows govern account lifecycle rather than row aging:
+
+- **Right-to-erasure (GDPR/CCPA, user-initiated):** a tenant owner requests
+  deletion from account settings; the request is recorded immediately but the
+  actual purge is deferred by a **14-day grace window**
+  (`ERASURE_GRACE_DAYS`) so a change of mind is recoverable. After the
+  window, every tenant-scoped collection is irreversibly deleted and the
+  tenant row is scrubbed to a `status=deleted` tombstone carrying no PII.
+- **Cancellation purge (billing-driven, operator-side):** once a
+  subscription has been fully canceled for **30 days**
+  (`CANCELLATION_PURGE_GRACE_DAYS`), the same purge runs automatically —
+  this path additionally wipes the tenant's audit trail (the erasure path
+  above deliberately does not, so a right-to-erasure request still leaves a
+  compliance trail; a billing-driven offboarding has no such requirement).
+
+None of these hosted-tier windows touch your local memory corpus — that
+corpus was never on our servers to purge.
+
+---
+
+## 3. What talks to what — ports and tokens
 
 ```
  your shell / Claude Code / runner            phone (Telegram app)
@@ -96,7 +174,7 @@ machine (single-laptop setups should).
 
 ---
 
-## 3. Memory export is secret-scanned — a bundle never carries a live credential
+## 4. Memory export is secret-scanned — a bundle never carries a live credential
 
 `myai memory export` produces the portable bundle that is *designed* to leave
 the machine (migration, backup, hand-off). It is therefore the one place a
@@ -135,7 +213,7 @@ Add a pattern once, all gates learn it.
 
 ---
 
-## 4. Threat model
+## 5. Threat model
 
 Assets: the memory corpus (your working context is the crown jewel), API
 keys/tokens in `.env`, the task queue (drives autonomous code execution), and
@@ -149,7 +227,7 @@ the git repos themselves.
 | **T**ampering with framework files | Agent (or prompt-injected agent) deleting state/rules | `04-protected-files.sh` blocks deletion/empty-overwrite of critical files |
 | **R**epudiation | "What did the autonomous runner do overnight?" | Runner transcripts in `~/.ai-cli-runner/logs/`, git history, task audit trail in the gateway |
 | **I**nfo disclosure — secrets in git | Credential staged in a diff or `.env` added | `03-secret-scan.sh` blocks the commit; `.env`/`.pem`/`.key` staging blocked outright |
-| **I**nfo disclosure — secrets in exports | Stored secret rides out in a memory bundle | Export-path scan + redaction (§3) |
+| **I**nfo disclosure — secrets in exports | Stored secret rides out in a memory bundle | Export-path scan + redaction (§4) |
 | **I**nfo disclosure — LAN Mongo | Default-cred Mongo published on the LAN | Host port bound to `127.0.0.1` by default |
 | **D**enial of service | Request floods on gateway | Rate-limit middleware; local-first design means the blast radius is your own box |
 | **E**levation — push to production | Agent pushing `main` directly | `01-block-push-main.sh` hook + branch protection; all work lands via `test` → PR |
@@ -162,20 +240,47 @@ you paste directly into chat with a cloud LLM you configured.
 
 ---
 
-## 5. Defense in depth — the always-on hooks
+## 6. Guardrail model — how autonomous agents are kept on a leash
 
-These run as Claude Code PreToolUse hooks, independent of permission mode
-(bypass/YOLO does **not** disable them):
+myAI's autonomous runner executes code changes, commits, and pushes without a
+human watching every action. Enterprise buyers evaluating an agentic tool
+correctly ask "what stops it from doing something destructive while
+unsupervised?" The answer is a layered set of guardrails that hold regardless
+of which permission mode (interactive, YOLO-timed, YOLO-god) the agent is
+running in:
 
-| Hook | Guarantee |
-|---|---|
-| `01-block-push-main.sh` | No direct pushes to `main` |
-| `03-secret-scan.sh` | No credentials, `.env`, `.pem`, `.key` in commits |
-| `04-protected-files.sh` | Critical framework files can't be deleted/blanked |
-| `05-no-local-npm.sh` | npm runs in containers only — host stays clean |
-| `16-block-workspace-gateway-deploy.sh` | Shared gateway stack deploys only from the master checkout |
+- **Hooks are not a permission-mode feature — they're always-on.** They run
+  as PreToolUse hooks outside the agent's own judgment, so "YOLO mode" or a
+  bypassed-permissions session does **not** disable them:
 
-## 6. Hardening checklist (recommended for anything beyond a single dev laptop)
+  | Hook | Guarantee |
+  |---|---|
+  | `01-block-push-main.sh` | No direct pushes to `main` — everything lands via `test` → PR, even for the fully-autonomous runner |
+  | `03-secret-scan.sh` | No credentials, `.env`, `.pem`, `.key` in commits |
+  | `04-protected-files.sh` | Critical framework files can't be deleted/blanked |
+  | `05-no-local-npm.sh` | npm runs in containers only — host stays clean |
+  | `16-block-workspace-gateway-deploy.sh` | Shared gateway stack deploys only from the master checkout — a per-task worktree can't split-brain the fleet |
+
+- **Autonomy is scoped, not unlimited.** Timed YOLO (`yolo N`) auto-expires
+  after N minutes; god-mode YOLO auto-deactivates on the next successful
+  commit or on plan completion — neither is "run forever unattended."
+  Destructive git operations (force-push, hard reset, branch deletion) stay
+  behind explicit user confirmation even inside YOLO; YOLO skips permission
+  *prompts*, it does not waive the safety rails above.
+- **Failure is bounded, not retried forever.** The 3-strikes rule: if an
+  agent fails the same fix three times in a row, it stops and writes a
+  postmortem instead of continuing to thrash — no infinite retry loops
+  against production state.
+- **Every task runs in an isolated worktree**, not against a shared
+  checkout — a runaway or compromised task can't clobber another task's
+  in-flight work, and can only merge its output through the same
+  `test`-branch → PR path every human contributor uses.
+- **The runner's actions are fully auditable after the fact:** transcripts in
+  `~/.ai-cli-runner/logs/`, normal git history for every commit, and the
+  gateway's own task audit trail — "what did the autonomous runner do
+  overnight" always has an answer.
+
+## 7. Hardening checklist (recommended for anything beyond a single dev laptop)
 
 1. `HOST_BIND=127.0.0.1` in `.env` — gateway/dashboard loopback-only.
 2. Set a strong, unique `GATEWAY_LOCAL_TOKEN` (the compose dev default is not
@@ -189,7 +294,7 @@ These run as Claude Code PreToolUse hooks, independent of permission mode
 
 ---
 
-## 7. Vulnerability disclosure policy
+## 8. Vulnerability disclosure policy
 
 - **Report privately** via GitHub Security Advisories on
   [`knofler/myai`](https://github.com/knofler/myai/security/advisories/new) —
@@ -217,4 +322,4 @@ These run as Claude Code PreToolUse hooks, independent of permission mode
 ports, or token model MUST update this file in the same PR — the guarantee is
 only as good as its documentation.*
 
-*Last updated: 2026-08-04*
+*Last updated: 2026-08-16*

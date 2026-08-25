@@ -48,7 +48,7 @@ export function MarketplaceReviewActions({ listingId, version }: { listingId: st
         value={reviewedBy}
         onChange={(e) => setReviewedBy(e.target.value)}
         placeholder="reviewer id"
-        className="bg-zinc-900 border border-zinc-800 rounded-md px-3 py-1.5 text-sm text-zinc-200 w-40"
+        className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-md px-3 py-1.5 text-sm text-[rgb(var(--text-primary))] w-40"
       />
       <input
         type="password"
@@ -56,7 +56,7 @@ export function MarketplaceReviewActions({ listingId, version }: { listingId: st
         onChange={(e) => setAdminToken(e.target.value)}
         placeholder="operator token"
         autoComplete="off"
-        className="bg-zinc-900 border border-zinc-800 rounded-md px-3 py-1.5 text-sm text-zinc-200 w-40"
+        className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-md px-3 py-1.5 text-sm text-[rgb(var(--text-primary))] w-40"
       />
       <button
         type="button"

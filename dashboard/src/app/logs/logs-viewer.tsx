@@ -23,17 +23,17 @@ const MAX_RENDERED = 500;
 const POLL_MS = 3000;
 
 const LEVEL_COLOR: Record<string, string> = {
-  debug: 'text-zinc-500',
-  info: 'text-zinc-300',
+  debug: 'text-[rgb(var(--text-muted))]',
+  info: 'text-[rgb(var(--text-primary))]',
   warn: 'text-amber-400',
   error: 'text-red-400',
 };
 
 function Th({ children }: { children: React.ReactNode }) {
-  return <th className="text-left font-medium text-zinc-300 px-3 py-2 border-b border-zinc-800 whitespace-nowrap">{children}</th>;
+  return <th className="text-left font-medium text-[rgb(var(--text-primary))] px-3 py-2 border-b border-[rgb(var(--border-subtle))] whitespace-nowrap">{children}</th>;
 }
 function Td({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <td className={`px-3 py-2 border-b border-zinc-900 align-top ${className}`}>{children}</td>;
+  return <td className={`px-3 py-2 border-b border-[rgb(var(--border-subtle))] align-top ${className}`}>{children}</td>;
 }
 
 export default function LogsViewer() {
@@ -70,7 +70,9 @@ export default function LogsViewer() {
       setEntries(fresh);
       sinceRef.current = fresh.length ? Math.max(...fresh.map((e) => e.ts)) : Date.now();
     } catch (err) {
-      setError('Failed to load logs.');
+      // Surface the actual failure inline (e.g. "HTTP 503") rather than a
+      // generic message — a blank table with no reason reads as "no logs".
+      setError(err instanceof Error ? `Failed to load logs — ${err.message}` : 'Failed to load logs.');
       console.error(err);
     } finally {
       setLoading(false);
@@ -104,7 +106,7 @@ export default function LogsViewer() {
         <select
           value={service}
           onChange={(e) => setService(e.target.value)}
-          className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-300"
+          className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded px-2 py-1 text-sm text-[rgb(var(--text-primary))]"
           aria-label="Filter by service"
         >
           {SERVICES.map((s) => <option key={s || 'all'} value={s}>{s || 'All services'}</option>)}
@@ -112,7 +114,7 @@ export default function LogsViewer() {
         <select
           value={level}
           onChange={(e) => setLevel(e.target.value)}
-          className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-300"
+          className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded px-2 py-1 text-sm text-[rgb(var(--text-primary))]"
           aria-label="Filter by level"
         >
           {LEVELS.map((l) => <option key={l || 'all'} value={l}>{l || 'All levels'}</option>)}
@@ -121,23 +123,23 @@ export default function LogsViewer() {
           value={correlationId}
           onChange={(e) => setCorrelationId(e.target.value)}
           placeholder="correlation id / task id"
-          className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-300 w-56"
+          className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded px-2 py-1 text-sm text-[rgb(var(--text-primary))] w-56"
           aria-label="Filter by correlation id"
         />
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="search message…"
-          className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-300 w-56"
+          className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded px-2 py-1 text-sm text-[rgb(var(--text-primary))] w-56"
           aria-label="Search message text"
         />
         <button
           onClick={() => void reload()}
-          className="text-sm text-teal-300 hover:underline border border-zinc-800 rounded px-3 py-1"
+          className="text-sm text-teal-300 hover:underline border border-[rgb(var(--border-subtle))] rounded px-3 py-1"
         >
           Apply
         </button>
-        <label className="flex items-center gap-2 text-sm text-zinc-400 ml-auto">
+        <label className="flex items-center gap-2 text-sm text-[rgb(var(--text-secondary))] ml-auto">
           <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
           Live tail
         </label>
@@ -146,11 +148,11 @@ export default function LogsViewer() {
       {error ? (
         <p className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2">{error}</p>
       ) : loading ? (
-        <p className="text-sm text-zinc-500">Loading…</p>
+        <p className="text-sm text-[rgb(var(--text-muted))]">Loading…</p>
       ) : entries.length === 0 ? (
-        <p className="text-sm text-zinc-500">No log entries match these filters yet.</p>
+        <p className="text-sm text-[rgb(var(--text-muted))]">No log entries match these filters yet.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-zinc-800">
+        <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr>
@@ -164,9 +166,9 @@ export default function LogsViewer() {
             <tbody>
               {entries.map((e) => (
                 <tr key={e.id}>
-                  <Td className="text-zinc-500 whitespace-nowrap">{new Date(e.ts).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z')}</Td>
-                  <Td className="text-zinc-400">{e.service}</Td>
-                  <Td><span className={LEVEL_COLOR[e.level] ?? 'text-zinc-300'}>{e.level}</span></Td>
+                  <Td className="text-[rgb(var(--text-muted))] whitespace-nowrap">{new Date(e.ts).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z')}</Td>
+                  <Td className="text-[rgb(var(--text-secondary))]">{e.service}</Td>
+                  <Td><span className={LEVEL_COLOR[e.level] ?? 'text-[rgb(var(--text-primary))]'}>{e.level}</span></Td>
                   <Td>
                     <button
                       type="button"
@@ -177,7 +179,7 @@ export default function LogsViewer() {
                       {e.correlationId}
                     </button>
                   </Td>
-                  <Td className="text-zinc-300">{e.message}</Td>
+                  <Td className="text-[rgb(var(--text-primary))]">{e.message}</Td>
                 </tr>
               ))}
             </tbody>

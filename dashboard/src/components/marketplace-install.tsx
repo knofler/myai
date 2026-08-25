@@ -20,7 +20,7 @@ interface InstallSnapshot {
 
 const BTN = 'px-3 py-1.5 text-sm rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 const BTN_PRIMARY = `${BTN} bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:border-emerald-500/60`;
-const BTN_NEUTRAL = `${BTN} bg-zinc-800 text-zinc-300 border-zinc-700 hover:border-zinc-500`;
+const BTN_NEUTRAL = `${BTN} bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-primary))] border-zinc-700 hover:border-zinc-500`;
 const BTN_DANGER = `${BTN} bg-red-500/10 text-red-400 border-red-500/30 hover:border-red-500/60`;
 
 export function MarketplaceInstallPanel({
@@ -90,7 +90,7 @@ export function MarketplaceInstallPanel({
           </>
         ) : (
           <>
-            <span className="text-xs text-zinc-400">Installed v{install.version} · disabled</span>
+            <span className="text-xs text-[rgb(var(--text-secondary))]">Installed v{install.version} · disabled</span>
             <button className={BTN_PRIMARY} disabled={busy} onClick={() => doAction('enable')}>Enable</button>
             <button className={BTN_DANGER} disabled={busy} onClick={() => doAction('uninstall')}>Uninstall</button>
           </>

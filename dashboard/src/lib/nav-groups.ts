@@ -32,6 +32,7 @@ export const FLAT_LINKS: NavLink[] = [
   { href: '/projects', label: 'Projects', short: 'Projects', icon: '⧉', hint: 'cross-repo board · bulk dispatch', primary: false },
   { href: '/apps', label: 'Apps', short: 'Apps', icon: '⊞', hint: 'directory · repo health', primary: true },
   { href: '/analytics', label: 'Analytics', short: 'Stats', icon: '◔', hint: 'throughput · cost · runner', primary: true },
+  { href: '/velocity', label: 'Velocity', short: 'Velocity', icon: '↗', hint: 'shipped/week · cycle time · trend', primary: false },
   { href: '/savings', label: 'Tokens saved', short: 'Saved', icon: '✦', hint: 'per-user savings · share card', primary: false },
   { href: '/recap', label: 'Year in review', short: 'Recap', icon: '★', hint: 'tasks shipped · hours saved · share card', primary: false },
   { href: '/revenue', label: 'Revenue', short: 'Revenue', icon: '$', hint: 'MRR · ARR · churn · LTV', primary: false },
@@ -45,9 +46,13 @@ export const FLAT_LINKS: NavLink[] = [
   { href: '/brain', label: 'Brain', short: 'Brain', icon: '❋', hint: 'namespaces · atoms · stashes', primary: false },
   { href: '/context', label: 'Your Context', short: 'Context', icon: '⊡', hint: 'view · download · port', primary: false },
   { href: '/api-keys', label: 'API Keys', short: 'Keys', icon: '⚿', hint: 'create · scope · rotate · revoke', primary: false },
+  { href: '/billing', label: 'Billing', short: 'Billing', icon: '$', hint: 'card · plan · cancel · invoices', primary: false },
+  { href: '/referrals', label: 'Referrals', short: 'Refer', icon: '↗', hint: 'invite link · credits earned', primary: false },
   { href: '/sessions', label: 'Sessions', short: 'Sessions', icon: '⌘', hint: 'devices · last-seen · revoke', primary: false },
+  { href: '/2fa', label: 'Two-Factor Auth', short: '2FA', icon: '⛨', hint: 'authenticator app · recovery codes', primary: false },
   { href: '/audit', label: 'Audit', short: 'Audit', icon: '⛨', hint: 'privileged actions · permissions · export', primary: false },
   { href: '/logs', label: 'Logs', short: 'Logs', icon: '☰', hint: 'live tail · correlation ids · redacted', primary: false },
+  { href: '/runs', label: 'Run History', short: 'Runs', icon: '⏱', hint: 'past runner fires · search by repo · task · error', primary: false },
 ];
 
 // Group definitions reference FLAT_LINKS by href (never invent a route) —
@@ -55,10 +60,10 @@ export const FLAT_LINKS: NavLink[] = [
 const GROUP_DEFS: { id: string; label: string; hrefs: string[] }[] = [
   { id: 'overview', label: 'Overview', hrefs: ['/', '/showcase'] },
   { id: 'work', label: 'Work', hrefs: ['/work', '/fleet', '/swarm', '/projects', '/apps'] },
-  { id: 'insights', label: 'Insights & Billing', hrefs: ['/analytics', '/savings', '/recap', '/revenue'] },
-  { id: 'system', label: 'System', hrefs: ['/system', '/connectors', '/registry', '/marketplace', '/logs'] },
+  { id: 'insights', label: 'Insights & Billing', hrefs: ['/analytics', '/velocity', '/savings', '/recap', '/revenue'] },
+  { id: 'system', label: 'System', hrefs: ['/system', '/connectors', '/registry', '/marketplace', '/logs', '/runs'] },
   { id: 'brain', label: 'Brain & Memory', hrefs: ['/memory', '/brain', '/context'] },
-  { id: 'account', label: 'Account', hrefs: ['/notifications', '/api-keys', '/sessions', '/audit'] },
+  { id: 'account', label: 'Account', hrefs: ['/notifications', '/api-keys', '/billing', '/referrals', '/sessions', '/2fa', '/audit'] },
 ];
 
 function linkByHref(href: string): NavLink {

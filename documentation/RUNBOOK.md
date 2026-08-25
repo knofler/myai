@@ -538,3 +538,94 @@ way the drift check does (sum `output_tokens` across transcripts in the
 window) and overwrite again. There's no retroactive fix for router/reserve
 decisions already made while the ledger was wrong — only for the ledger
 value going forward.
+
+---
+
+## 7. `myai` MCP "Failed to reconnect" in Claude sessions → empty `GATEWAY_LOCAL_TOKEN`
+
+**Status: FIXED AT THE ROOT (task-35c9e181).** `.mcp.json`'s myai server used
+to be `"type": "http"` with header `x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}`.
+Claude Code substitutes `${VAR}` from **its own launch environment** — it never
+reads this repo's `.env`. If the shell that started `claude` hadn't exported
+`GATEWAY_LOCAL_TOKEN`, the header went out **blank**, the gateway rejected the
+MCP handshake with `{"error":"unauthorized"}`, myai never connected, and all
+134 tools (every `brain_*`) silently vanished — with nothing surfacing it, so
+a whole session could run on file-reads/grep instead of `brain_delta` and
+nobody would notice. The old workaround (a manual `~/.zshrc` loader, one Mac
+at a time) is retired — this section now documents the permanent fix and how
+to confirm it's working.
+
+**The fix:** `.mcp.json`'s myai entry is now a **command-type stdio wrapper**
+(`scripts/lib/mcp_myai_stdio.sh`, or `AI/scripts/lib/mcp_myai_stdio.sh` in a
+managed repo) instead of a direct HTTP entry:
+
+```json
+"myai": {
+  "command": "bash",
+  "args": ["${CLAUDE_PROJECT_DIR}/scripts/lib/mcp_myai_stdio.sh"]
+}
+```
+
+The wrapper sources `scripts/lib/gateway.sh`, which resolves
+`GATEWAY_LOCAL_TOKEN` by reading **this repo's `.env`/`AI/.env` straight off
+disk** (falling back to the process env if already set) — completely
+independent of whatever environment Claude Code was launched with. It then
+execs `npx -y mcp-remote <gateway-url> --header "x-gateway-local-token:<resolved>"`,
+passing the real value as a literal argument, so no `${VAR}` substitution ever
+has to happen inside Claude Code's process. This self-serves on a fresh
+machine or a freshly cloned managed repo — no per-Mac shell setup required.
+
+**Regression guard:** `hooks/session/24-myai-mcp-health.sh` runs on every
+session start, replicates this same handshake, and prints a **loud red
+warning** (not a silent no-op) if the wrapper is missing/non-executable or the
+gateway rejects the token — so this can't quietly regress again.
+
+### Verify (read-only)
+
+```bash
+# 1. gateway is actually up? (rules out a real container problem)
+docker compose ps | grep gateway            # expect: Up ... (healthy)
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3100/health   # expect 200
+
+# 2. does the wrapper resolve a real token, independent of this shell's env?
+env -u GATEWAY_LOCAL_TOKEN bash -c '. scripts/lib/gateway.sh; echo "${GATEWAY_LOCAL_TOKEN:0:12}..."'
+# managed repo: '. AI/scripts/lib/gateway.sh; ...'  — not <EMPTY>, even with no shell export
+
+# 3. prove the resolved token is accepted by the gateway
+curl -s -X POST http://localhost:3100/mcp -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H "x-gateway-local-token: $(grep -E '^GATEWAY_LOCAL_TOKEN=' .env | cut -d= -f2-)" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}'
+# real initialize result => good. {"error":"unauthorized"} => token in .env doesn't match the running gateway
+```
+
+### If it's still broken
+
+- `mcp_myai_stdio.sh: gateway.sh not found next to this script` — the repo
+  layout is off (wrapper and `gateway.sh` must sit side-by-side in
+  `scripts/lib/` or `AI/scripts/lib/`); re-sync via `myai mcp repo`.
+- Gateway rejects with 401/403 even with the right-looking token — the
+  running gateway's `GATEWAY_LOCAL_TOKEN` (docker-compose/.env on the
+  container) doesn't match the repo `.env` this machine reads; rotate/align
+  them (`scripts/myai_rotate_keys.sh`) or rebuild the gateway.
+- `npx mcp-remote` fails outright — no network for the on-demand `npx`
+  fetch (same requirement as the context7/shadcn-ui/playwright/docker
+  entries already in `.mcp.json`); check connectivity or pre-warm the npx
+  cache.
+- Session-start hook `24-myai-mcp-health.sh` stayed silent on a real
+  failure — that's a bug in the hook itself; it's meant to be loud, never
+  quiet, on any of the above.
+
+### Confirm
+
+```bash
+# in a freshly launched Claude session:
+/mcp   # → myai shows connected, tool count > 0 (brain_*, tasks_*, recall_session, …)
+```
+
+### Rollback
+
+Revert `.mcp.json` / `templates/mcp.json`'s myai entry to the old
+`"type": "http"` + header shape, and remove
+`hooks/session/24-myai-mcp-health.sh` from `.claude/settings.json`. Not
+recommended — that's the exact shape that caused this P0.

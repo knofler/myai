@@ -12,7 +12,7 @@
  * independently — a delete failure on one never blocks the rest (mirrors
  * `runQuotaResetSweep`'s per-tenant isolation).
  */
-import { LocalFilesystemArtifactStore, type ArtifactStore } from '../marketplace/artifact-store.js';
+import { resolveArtifactStore, type ArtifactStore } from '../marketplace/artifact-store.js';
 import { createChildLogger } from '../shared/logger.js';
 
 const log = createChildLogger({ module: 'marketplace-staging-sweep' });
@@ -67,7 +67,7 @@ export async function runMarketplaceStagingSweep(opts: StagingSweepOptions = {})
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun ?? false;
   const env = opts.env ?? process.env;
-  const artifactStore = opts.artifactStore ?? new LocalFilesystemArtifactStore(env);
+  const artifactStore = opts.artifactStore ?? resolveArtifactStore(env);
   const ttlMs = stagingTtlMs(env);
 
   const result: StagingSweepResult = {

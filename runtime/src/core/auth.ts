@@ -209,12 +209,20 @@ interface AuthOptions {
 // per-tenant API key the REST middleware resolves, so they bypass it.
 const REST_EXEMPT = new Set([
   '/health', '/health/deep', '/status', '/api/status/uptime', '/api/openapi.json', '/api/docs',
+  // Self-hosted license + air-gapped status (task-37ca040c): read-only,
+  // returns no secrets (never the raw LICENSE_KEY), same public posture as
+  // /health — an operator or the installer needs this before any login flow
+  // can even be reached.
+  '/api/license/status',
   '/api/auth/signup', '/api/auth/login', '/api/auth/logout', '/api/auth/me',
   // Team-tier invites + members: JWT-cookie authenticated inside the handlers
   // (owner/admin role-gated), or public-by-token (lookup) — none use the
   // per-tenant API key this middleware resolves.
   '/api/auth/invites', '/api/auth/invites/revoke', '/api/auth/invites/lookup',
   '/api/auth/members', '/api/auth/members/role',
+  // Team-tier per-member budget scoping (task-82854b12): same JWT-cookie,
+  // members-capability gate inside the handler as members/role above.
+  '/api/auth/members/budget-cap',
   // Audit trail + permission matrix (ADR-013 §5, RBAC v2): JWT-cookie
   // authenticated inside the handlers, members-capability gated.
   '/api/auth/audit', '/api/auth/audit/export', '/api/auth/permissions',
@@ -229,10 +237,30 @@ const REST_EXEMPT = new Set([
   // Password reset: public by design (rate-limited; forgot never confirms an
   // account exists, reset/lookup are self-authenticating via the token).
   '/api/auth/password/forgot', '/api/auth/password/reset', '/api/auth/password/lookup',
+  // Email verification (M2 — signup wire-up): verify/lookup are public and
+  // self-authenticating via the token (same posture as password reset).
+  // resend is JWT-cookie authenticated INSIDE the handler (jwtFromReq) — the
+  // JWT is a session token, not a tenant API key, so it must bypass this
+  // per-tenant-key middleware rather than be resolved by it.
+  '/api/auth/email/verify', '/api/auth/email/resend', '/api/auth/email/lookup',
+  // Operator support-impersonation end (core/impersonation.ts): JWT-cookie
+  // authenticated inside the handler (the impersonation session token itself)
+  // — the session JWT is not a tenant API key, so it bypasses this middleware.
+  // The START route (/api/support/impersonate) is deliberately NOT here: it is
+  // x-admin-token gated inside the handler and rides the same authenticate()
+  // posture as every other requireAdmin cross-tenant route.
+  '/api/auth/impersonation/end',
   // Enterprise SSO (Phase 3): the IdP round-trip is the authentication — no
   // per-tenant API key. Metadata is a public gate check; the callbacks verify
   // the IdP token/assertion inside the handler and are env-gated per tenant.
   '/api/auth/sso/metadata', '/api/auth/sso/oidc/callback', '/api/auth/sso/saml/callback',
+  // Legal pack (core/legal.ts): the click-wrap documents are public by design
+  // (a buyer reads them before an account exists; the dashboard trust pages
+  // render them). The doc slugs are a fixed set, so exact paths suffice here.
+  // Consent status/record are JWT-cookie authenticated inside the handlers —
+  // a session token, not a tenant API key, so they bypass this middleware.
+  '/api/legal/docs', '/api/legal/docs/terms', '/api/legal/docs/privacy', '/api/legal/docs/acceptable-use',
+  '/api/legal/consent',
 ]);
 
 /**

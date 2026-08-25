@@ -1,8 +1,10 @@
 # Distribution & Installation
 
 `ai-management` ships the **`myai`** CLI (alias `ai-manage`) plus the
-full AI Management Framework it scaffolds. There are two supported install
-paths: **npm** (recommended) and the **`curl | sh` bootstrap** (no npm needed).
+full AI Management Framework it scaffolds. There are three supported install
+paths: **npm** (recommended), the **`curl | sh` bootstrap** (no npm needed),
+and the **Claude Code plugin marketplace** (agents/skills/hooks only, no
+gateway/dashboard/runner).
 
 > **Prerequisites:** Docker Desktop / engine (running), Node.js ≥ 20, and `git`.
 > An `ANTHROPIC_API_KEY` (or a logged-in `claude` CLI) is needed for the runner
@@ -93,10 +95,60 @@ Useful flags:
 
 ---
 
+## Option C — Claude Code plugin marketplace
+
+For Claude Code users who just want the agents/skills/hooks — not the
+gateway, dashboard, or runner — install myAI as a plugin bundle instead.
+Three bundles are published from `.claude-plugin/marketplace.json`, each a
+thin manifest plus symlinked component dirs pointing at the same top-level
+`agents/`, `skills/`, `hooks/` this repo ships everywhere else — one engine,
+many surfaces, not a fork or a separate package.
+
+| Plugin | Bundle |
+|---|---|
+| `myai-brain` | Git-versioned agent memory — capture, compress, recall context across agents/machines |
+| `myai-fleet` | Multi-agent swarm coordination + GitHub lifecycle automation + schedule tracking |
+| `myai-blueprint` | Full-stack scaffolding — frontend/API/database/devops specialists + scaffold skills |
+
+```bash
+# 1. Add the marketplace (one-time — points at the public mirror repo)
+claude plugin marketplace add knofler/myai
+
+# 2. Install the bundle(s) you want
+claude plugin install myai-brain@ai-management
+claude plugin install myai-fleet@ai-management
+claude plugin install myai-blueprint@ai-management
+```
+
+Or from inside a running Claude Code session:
+
+```
+/plugin marketplace add knofler/myai
+/plugin install myai-brain@ai-management
+```
+
+The marketplace is sourced from `knofler/myai` — the same curated public
+mirror that `scripts/publish_release.sh` (npm publish + mirror sync, atomic)
+refreshes on every release, so `.claude-plugin/` is always in sync with the
+latest npm version.
+
+**This path does not install the gateway, dashboard, or runner** — for the
+full self-hosted stack, use Option A or Option B above.
+
+### Updating / removing plugins
+
+```bash
+claude plugin marketplace update knofler/myai   # pull the latest manifest
+claude plugin uninstall myai-brain@ai-management
+```
+
+---
+
 ## What gets installed
 
 The package is **clean-room**: it contains the framework only — never operator
-context. Shipped: the `myai` bin, agents, skills, hooks, scripts, templates, the
+context. Shipped: the `myai` bin, agents, skills, hooks, scripts, templates,
+`.claude-plugin/` (the plugin marketplace manifest, Option C above), the
 runtime gateway + dashboard sources, the portable `docker-compose.yml`, docs,
 and `*.example` configs. **Excluded** (by both the `package.json` `files`
 allowlist and `scripts/publish_guard.sh`): `state/`, `plan/`, `memory/`,

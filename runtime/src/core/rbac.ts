@@ -217,6 +217,7 @@ export const REST_ROUTE_CAPS: readonly RestRouteRule[] = Object.freeze([
   // Task mutations — no prior role gate, shadow-mode soak.
   { method: 'POST',   path: '/api/tasks',               capability: 'work',      mode: 'shadow', enforce: true, note: 'create task' },
   { method: 'PATCH',  path: '/api/tasks/:id',           capability: 'work',      mode: 'shadow', enforce: true, note: 'update task' },
+  { method: 'POST',   path: '/api/tasks/bulk',          capability: 'work',      mode: 'shadow', enforce: true, note: 'bulk task mutations' },
   // Schedule mutations — no prior role gate, shadow-mode soak.
   { method: 'POST',   path: '/api/schedules',           capability: 'configure', mode: 'shadow', enforce: true, note: 'create schedule' },
   { method: 'PATCH',  path: '/api/schedules/:id',       capability: 'configure', mode: 'shadow', enforce: true, note: 'update schedule' },
@@ -288,15 +289,23 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   state_update: 'work',
   plan_list: 'read',
   plan_set: 'work',
+  // Trash bin (soft delete + restore, core/trash-bin.ts) — deletes are
+  // recoverable, so they sit on the same 'work' rung as plan_set/tasks_update.
+  plan_delete: 'work',
+  plan_restore: 'work',
+  trash_list: 'read',
   handoff_write: 'work',
   handoff_read: 'read',
   // Tasks (matches REST: POST/PATCH /api/tasks → work)
   tasks_list: 'read',
   tasks_create: 'work',
   tasks_update: 'work',
+  tasks_delete: 'work',
+  tasks_restore: 'work',
   tasks_next: 'read',
   tasks_claim: 'work',
   tasks_fail: 'work',
+  tasks_bulk: 'work',
   // Traces / logs / artifacts
   traces_record: 'work',
   traces_list: 'read',
@@ -304,6 +313,10 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   logs_list: 'read',
   artifacts_register: 'work',
   artifacts_list: 'read',
+  // Runner job-history archive (task-1873b3be): record = runner-side write
+  // (logs_record rung), search = read-only dashboard/operator query.
+  job_history_record: 'work',
+  job_history_search: 'read',
   // Runner coordination
   runner_lease_acquire: 'work',
   runner_lease_heartbeat: 'work',
@@ -332,6 +345,12 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   connectors_toggle: 'configure',
   connectors_remove: 'configure',
   connectors_mcp_config: 'read',
+  // Tenant MCP tool plugins (mcp/plugin-tools.ts, env-gated) — registering a
+  // proxied external tool is a control-plane config change, same rung as
+  // connectors_set / webhook management.
+  plugin_tools_register: 'configure',
+  plugin_tools_list: 'read',
+  plugin_tools_remove: 'configure',
   // Sessions / continuity
   session_export: 'work',
   session_import: 'work',
@@ -343,6 +362,7 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   // Observability
   perf_stats: 'read',
   slo_status: 'read',
+  canary_status: 'read',
   health_status: 'read',
   health_alerts_status: 'read',
   health_alerts_run: 'work',
@@ -371,6 +391,15 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   schedules_run_now: 'configure',
   schedules_delete: 'configure',
   schedules_seed: 'configure',
+  // Recurring runner tasks (cron-cadenced queue templates — same rungs as schedules)
+  recurring_tasks_list: 'read',
+  recurring_tasks_create: 'configure',
+  recurring_tasks_update: 'configure',
+  recurring_tasks_run_now: 'configure',
+  recurring_tasks_delete: 'configure',
+  recurring_tasks_sweep: 'configure',
+  // Entitlements (central plan-entitlement service)
+  entitlements_status: 'read',
   // Budgets + usage
   budgets_status: 'read',
   budgets_breakdown: 'read',
@@ -388,6 +417,9 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   data_retention_purge: 'configure',
   mrr_snapshot_sweep: 'configure',
   erasure_sweep: 'configure',
+  cancellation_purge_sweep: 'configure',
+  tenant_suspend: 'configure',
+  tenant_reactivate: 'configure',
   task_lease_reap: 'configure',
   // Notifications
   notifications_send: 'work',
@@ -396,12 +428,16 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   // Brain (content = work, reads = read — mirrors tasks/plans rungs)
   brain_status: 'read',
   brain_health: 'read',
+  brain_recall_analytics: 'read',
   brain_manifest: 'read',
   brain_bandit_stats: 'read',
   brain_explore: 'read',
   brain_commit: 'work',
+  brain_observe: 'work',
   brain_stash: 'work',
   brain_pop: 'work',
+  brain_pin: 'work',
+  brain_unpin: 'work',
   brain_branch: 'work',
   brain_checkout: 'work',
   brain_merge: 'work',
@@ -426,15 +462,87 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   brain_host_provision: 'configure',
   brain_host_status: 'read',
   brain_host_rotate: 'configure',
+  // Starter-brain packs (brain templates). Publishing is operator-curated
+  // (also on OPERATOR_ONLY_TOOLS); browsing the catalog is read-only;
+  // seeding writes atoms into the caller's own brain — an ordinary write,
+  // same rung as brain_commit.
+  brain_template_publish: 'configure',
+  brain_template_list: 'read',
+  brain_template_get: 'read',
+  brain_seed: 'work',
+  brain_seed_status: 'read',
   // Marketplace (ADR-019 §5: "marketplace.publish — creator owner/admin —
   // submit/publish own listings"; the closest existing rung to that
   // owner/admin restriction is `configure`, admin+).
   marketplace_publish: 'configure',
+  // marketplace_search: browsing the catalog is read-only and open to any
+  // authenticated role (ADR-019 doesn't name a distinct "browse" capability;
+  // `read` matches the other catalog/listing lookups on this matrix, e.g.
+  // brain_search above).
+  marketplace_search: 'read',
+  // marketplace_install: "Installing is an ordinary write" (ADR-019 §5) — `work`.
+  marketplace_install: 'work',
 });
 
 /** The capability a tool requires, or undefined for an uninventoried tool. */
 export function capabilityForTool(tool: string): Capability | undefined {
   return TOOL_CAPS[tool];
+}
+
+/**
+ * The `executeTool` chokepoint's THIRD gate (ADR-027 §3) — a sandboxed
+ * marketplace-package invocation's declared-capability + tool-call-ceiling
+ * check. Evaluated FIRST, before `assertToolCapability`/`assertToolVisibility`
+ * below, and active ONLY when `ctx.sandbox` is set — a marker that is always
+ * server-derived by the invocation loader (`marketplace/sandbox-invoke.ts`),
+ * never from a caller or tool arg (same posture as `ctx.role`, ADR-013 §2).
+ * No-op for every ordinary (non-sandboxed) call.
+ *
+ * Intersective, not substitutive (ADR-027 §3): passing this check never
+ * widens what `assertToolCapability` independently allows for the caller's
+ * real role — a `viewer`-installed package still cannot reach a
+ * `member`-only tool just because the manifest declares it. This only
+ * narrows, on top of the existing role/visibility gates.
+ */
+export function assertDeclaredCapability(ctx: ToolContext | undefined, tool: string): void {
+  const sandbox = ctx?.sandbox;
+  if (!sandbox) return;
+
+  if (!sandbox.declaredTools.includes(tool)) {
+    getLogger().warn(
+      { tool, listingId: sandbox.listingId, version: sandbox.version, installId: sandbox.installId },
+      'rbac.sandbox-tool-not-declared',
+    );
+    throw new AuthError(
+      `sandboxed invocation attempted undeclared tool '${tool}' (ADR-027 §3)`,
+      403,
+      'SANDBOX_TOOL_NOT_DECLARED',
+    );
+  }
+
+  // Resource ceiling (ADR-027 §3 table): enforced independent of, and in
+  // addition to, the tool gate above. `toolCallState` is the SAME object
+  // reference across every chained call this invocation makes, so the count
+  // is per-invocation, not per-call. Fail-closed abort on breach — no
+  // partial effect from the call that pushed it over.
+  sandbox.toolCallState.count += 1;
+  if (sandbox.toolCallState.count > sandbox.resourceLimits.maxToolCalls) {
+    getLogger().warn(
+      {
+        tool,
+        listingId: sandbox.listingId,
+        installId: sandbox.installId,
+        count: sandbox.toolCallState.count,
+        maxToolCalls: sandbox.resourceLimits.maxToolCalls,
+      },
+      'rbac.sandbox-tool-call-ceiling',
+    );
+    throw new AuthError(
+      `sandboxed invocation exceeded maxToolCalls ceiling (${sandbox.resourceLimits.maxToolCalls}) (ADR-027 §3)`,
+      429,
+      'SANDBOX_TOOL_CALL_CEILING',
+    );
+  }
 }
 
 /**
@@ -506,13 +614,27 @@ export const OPERATOR_ONLY_TOOLS: ReadonlySet<string> = new Set([
   // Erasure sweep — legal/compliance operator action (irreversible purge of
   // due GDPR/CCPA requests), all tenants. Same posture as data_retention_purge.
   'erasure_sweep',
+  // Cancellation-purge sweep — billing-driven data-retention purge-on-cancel
+  // (core/tenant-lifecycle.ts), all tenants. Same posture as erasure_sweep.
+  'cancellation_purge_sweep',
+  // Suspend/reactivate act on an arbitrary tenantId arg (not the caller's own
+  // ctx.tenantId) — an operator/fleet-console action, never self-serve.
+  'tenant_suspend', 'tenant_reactivate',
   // Task-lease reaper — walks status:'working' tasks past leaseUntil across
   // EVERY tenant to release runner-died stale claims, same cross-tenant
   // posture as data_retention_purge/erasure_sweep.
   'task_lease_reap',
+  // Recurring-task sweep — walks due recurring templates across EVERY tenant
+  // and enqueues each under its own tenant. The per-tenant recurring_tasks_*
+  // CRUD tools stay tenant-visible; only the fleet-wide sweep is operator-only.
+  'recurring_tasks_sweep',
   // Hosted-brain remote provisioning — operator-provisioned infra, not
   // self-serve (ADR-017).
   'brain_host_provision', 'brain_host_rotate',
+  // Starter-brain pack publishing — the pack registry is a global,
+  // operator-curated resource (tenants consume it via brain_seed, never
+  // write it).
+  'brain_template_publish',
   // Standing-agent framework health — operator/fleet observability, not a
   // tenant's own data.
   'standing_agents_status',

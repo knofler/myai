@@ -7,8 +7,12 @@ import { createChildLogger } from '../shared/logger.js';
 import { recordUsage, summarizeUsage } from '../shared/usage-store.js';
 import { randomUUID } from 'node:crypto';
 import { loadAgents, loadSkills } from '../agents/loader.js';
-import { createTask, updateTask, listTasks, nextTask, countTasks, claimTask, failTask, reapStaleLeases } from '../tasks/task-store.js';
+import { createTask, updateTask, listTasksPage, nextTask, countTasks, claimTask, failTask, reapStaleLeases } from '../tasks/task-store.js';
+import { bulkTaskOperations, BulkValidationError, MAX_BULK_OPS } from '../tasks/bulk-operations.js';
+import type { BulkTaskOperation } from '../tasks/bulk-operations.js';
 import { saveArtifact, listArtifacts } from '../tasks/artifact-store.js';
+import { recordJobHistory, searchJobHistory, JOB_HISTORY_STATUSES } from '../tasks/job-history-store.js';
+import type { JobHistoryStatus } from '../shared/db.js';
 import { runInlineCycle, inlineQuotaUsage, INLINE_OPERATIONS } from '../tasks/inline-executor.js';
 import { acquireLease, heartbeatLease, releaseLease, listLeases, listLeaseHistory } from '../tasks/runner-lease-store.js';
 import { recordHeartbeat, getRunnerLiveness } from '../tasks/runner-heartbeat-store.js';
@@ -33,7 +37,7 @@ import {
   buildMcpConfig,
 } from '../repos/connector-store.js';
 import type { ConnectorTransport } from '../repos/connector-bundle.js';
-import { setPlan, listPlan } from '../repos/plan-store.js';
+import { setPlan, listPlanPage } from '../repos/plan-store.js';
 import type { PlanDayInput } from '../repos/plan-store.js';
 import { writeHandoff, readHandoff, listLatestHandoffs } from '../repos/handoff-store.js';
 import { exportSession, importSession, recallSessionContext } from '../core/session-manager.js';
@@ -43,7 +47,7 @@ import {
   startFleetRun, updateFleetRepo, finishFleetRun, getFleetRun, latestFleetRun, listFleetRuns,
 } from '../repos/fleet-run-store.js';
 import type { FleetRepoInput, FleetRepoPatch, FleetRepoActionStatus } from '../repos/fleet-run-store.js';
-import { complete as llmComplete, isConfigured as isLlmConfigured, getAllProviderHealth, getProviderHealth, resetProvider, enterMaintenance, exitMaintenance, assertKnownProvider } from '../llm/provider.js';
+import { complete as llmComplete, isConfigured as isLlmConfigured, getAllProviderHealth, getProviderHealth, resetProvider, enterMaintenance, exitMaintenance, assertKnownProvider, getRecentDroppedHops } from '../llm/provider.js';
 import {
   createSchedule,
   updateSchedule,
@@ -54,51 +58,67 @@ import {
 } from '../scheduler/schedule-store.js';
 import { computeNextRun, isValidCronExpr } from '../scheduler/scheduler.js';
 import { seedDefaultSchedules } from '../scheduler/seed-schedules.js';
+import {
+  createRecurringTask, updateRecurringTask, getRecurringTask, listRecurringTasks, deleteRecurringTask,
+} from '../tasks/recurring-task-store.js';
+import type { RecurringOverlapPolicy } from '../shared/db.js';
+import { runRecurringTaskSweep, fireRecurringTask } from '../scheduler/recurring-task-sweep.js';
 import { runMorningSweep } from '../scheduler/morning-sweep.js';
 import { runEveningSweep } from '../scheduler/evening-sweep.js';
 import { runRetentionPurge } from '../core/data-retention.js';
 import { runMrrSnapshotSweep } from '../analytics/mrr-snapshot-job.js';
 import { runErasureSweep } from '../core/account-erasure.js';
+import { runCancellationPurgeSweep, suspendTenant, reactivateTenant } from '../core/tenant-lifecycle.js';
 import { runDispatchCycle } from '../scheduler/dispatch-worker.js';
-import { getBudgetStatus, getBudgetBreakdown } from '../llm/budget-stats.js';
+import { getBudgetStatus, getBudgetBreakdown, getCostAttribution } from '../llm/budget-stats.js';
 import { getBudgetCapSuggestions } from '../llm/budget-advisor.js';
+import { recordBudgetUsage } from '../llm/budget-guard.js';
 import { route as routeLlm, getRoutingConfig } from '../llm/router.js';
 // Work-type routing enum (13 rows of plan/MULTI_PROVIDER_ORCHESTRATION.md §3) is
 // inlined literally into the inputSchema enum fields below — scripts/build_docs.mjs
 // evaluates TOOL_DEFINITIONS in an empty VM, so tool defs must be pure literals
 // (no const references). Keep in sync with router.ts's WorkType union.
 import { isConnected, getDbFailoverState } from '../shared/db.js';
-import type { ArtifactKind, IVector, ScheduleKind, ScheduleStatus, TaskPriority, TaskSource, TaskStatus } from '../shared/db.js';
+import type { ArtifactKind, IVector, ScheduleKind, ScheduleStatus, TaskPriority, TaskSource, TaskStatus, TrashKind } from '../shared/db.js';
 import { sendNotification, getNotificationHistory } from '../notifications/notifier.js';
 import { runHealthCheck, getLatestHealthCheckResult, getHealthAlertStatus } from '../monitoring/health-alerter.js';
 import { recordContextServed, getContinuityStats, getUserSavings, estimateLegacyBootTokens } from '../monitoring/continuity-metrics.js';
 import { recordActivation, getActivationFunnel, getActivationRollup, getSelfServeConversion, getHostedBrainConversion } from '../monitoring/activation-funnel.js';
+import { getFunnelDropoff } from '../analytics/activation-cohorts.js';
 import { recordToolLatency, getPerfStats } from '../monitoring/perf-metrics.js';
 import { getSloAlertStatus, evaluateBreaches } from '../monitoring/slo-alerter.js';
+import { getSyntheticCanaryStatus, getLatestCanaryResult, getCanaryHistory } from '../monitoring/synthetic-canary.js';
 import { recordSpan, getSpans, getTraceIds, type SpanService, type SpanStatus } from '../tracing/tracer.js';
 import { recordLog, getLogs, type LogService, type LogLevel } from '../monitoring/log-store.js';
 import { performance } from 'node:perf_hooks';
 import { type ToolContext, SYSTEM_CONTEXT, AuthError, stripTenantFromArgs } from '../core/tenant-context.js';
-import { assertToolCapability, assertToolVisibility } from '../core/rbac.js';
+import { assertDeclaredCapability, assertToolCapability, assertToolVisibility } from '../core/rbac.js';
 import { verdictFor, tenantRepos, EntitlementError } from '../core/entitlements.js';
+import { loadEntitlementSnapshot } from '../core/entitlement-service.js';
 import { auditActorFromCtx } from '../core/audit-log.js';
+import { trashTask, restoreTask, trashPlanDays, restorePlan, listTrash } from '../core/trash-bin.js';
 import {
   brainBlame, brainExplore, brainInit, brainStatus, brainCheckout, brainDiff, brainLog, brainPop, brainRevert, brainStash,
-  ideaBranch, isBrainRepo, resolveBrainDir, sessionMerge, sessionStart, writeAtom,
+  ideaBranch, isBrainRepo, observeAppend, pinAtom, resolveBrainDir, sessionMerge, sessionStart, unpinAtom, writeAtom,
 } from '../core/brain.js';
 import type { AtomKind, BrainSection } from '../core/brain.js';
-import { brainDelta, brainEnvFor, brainLookup, brainManifest, distillAfterMerge, reconcileMain } from '../core/distill.js';
+import { brainDelta, brainEnvFor, brainLookup, brainManifest, distillAfterMergeWithDedup, reconcileMain } from '../core/distill.js';
 import { computeBrainHealth } from '../core/brain-health.js';
+import { recordRecallEvent } from '../core/recall-telemetry.js';
+import { computeRecallAnalytics } from '../core/recall-analytics.js';
 import { brainEntity, brainTimeline } from '../core/entity.js';
 import type { EntityKind } from '../core/entity.js';
 import { brainCommunities } from '../core/community.js';
 import { hostedBrainInfo, provisionHostedBrain, rotateHostedToken } from '../core/hosted-brain.js';
+import { getStarterPack, listStarterPacks, publishStarterPack, seedBrainFromPack, seededStarterPacks, type StarterPackInput } from '../core/brain-templates.js';
 import { federatedBrainSearch } from '../core/brain-search.js';
 import {
   grantNamespaceAccess, listNamespaceGrants, readSharedNamespace, revokeNamespaceAccess, writeSharedNamespaceAtom,
 } from '../core/namespace-share.js';
 import type { NamespaceGrantLevel } from '../core/namespace-share.js';
 import { publishSubmission } from '../marketplace/publish.js';
+import { searchListings, installListing } from '../marketplace/marketplace-store.js';
+import { registerPluginTool, listPluginTools, removePluginTool } from './plugin-tools.js';
 
 const log = createChildLogger({ module: 'mcp-tools' });
 
@@ -223,7 +243,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   // ── TASKS ─────────────────────────────────────────────
   {
     name: 'tasks_list',
-    description: 'List tasks in the queue. Filter by repo, status, priority, or assigned agent. Sorted by priority then creation time.',
+    description: 'List tasks in the queue. Filter by repo, status, priority, or assigned agent. Sorted by priority then creation time (taskId as tiebreaker). Bounded to `limit` rows (default 50); when more rows exist past this page, the response carries a `nextCursor` — pass it back as `cursor` to fetch the next page. Omitting `cursor` always starts from the beginning, so existing callers are unaffected.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -231,7 +251,8 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         status: { type: 'string', enum: ['pending', 'working', 'review', 'done', 'blocked', 'paused', 'dead_letter'], description: 'Filter by status (optional)' },
         priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'], description: 'Filter by priority (optional)' },
         assignedAgent: { type: 'string', description: 'Filter by assigned agent (optional)' },
-        limit: { type: 'number', description: 'Max results (default 50)' },
+        limit: { type: 'number', description: 'Max results per page (default 50)' },
+        cursor: { type: 'string', description: 'Opaque pagination cursor from a prior response\'s nextCursor (optional — omit for the first page)' },
       },
     },
   },
@@ -250,6 +271,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         source: { type: 'string', enum: ['manual', 'connect-hub', 'auto-detected', 'scheduler', 'telegram'], description: 'Where it originated (default: manual)' },
         sourceId: { type: 'string', description: 'External ref ID (e.g. bug-123)' },
         notes: { type: 'string', description: 'Additional notes (optional)' },
+        dependsOn: { type: 'array', items: { type: 'string' }, description: 'Upstream taskIds this task waits on (DAG scheduling): tasks_claim skips the task until every upstream is status done. Upstreams must exist — unknown IDs are rejected. Use for ordered multi-step plans, e.g. migrate-DB task first, build-UI task dependsOn it.' },
       },
       required: ['repo', 'title'],
     },
@@ -280,6 +302,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         supersededBy: { type: 'string', description: 'Explicit supersession record: taskId of the task that replaces this one. Authorizes a pending→blocked transition past the bulk-block guard threshold.' },
         operatorAuthorized: { type: 'boolean', description: 'Explicit human-consented authorization for a bulk block, in lieu of supersededBy. Never set true from an automated caller.' },
         routeExhausted: { type: 'boolean', description: 'Set true alongside status:pending by route_task_model\'s exhaustion-defer branch (every pool out of headroom for this claimed task). Tracked as a CONSECUTIVE-defer counter (monitoring/task-defer-alerter.ts) that fires its own starvation alert past a threshold; set false (or omit) on a normal working re-stamp to reset the streak.' },
+        dependsOn: { type: 'array', items: { type: 'string' }, description: 'REPLACE the task\'s upstream dependency list (DAG scheduling). Validated: upstreams must exist and the edit must not create a cycle (rejected otherwise). Empty array clears all dependencies — the operator escape hatch for a broken graph.' },
       },
       required: ['taskId'],
     },
@@ -296,7 +319,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'tasks_claim',
-    description: 'Atomically claim the highest-priority pending task (P0 first, then oldest), flipping it pending→working in a single findOneAndUpdate. Cross-machine safe: when two runners fire concurrently against the same queue, exactly one wins each task — no double-pick. Sets claimedBy/claimedAt/leaseUntil for stale-runner reclaim. Returns the claimed task, or {claimed:false} when nothing is claimable. Use this from the runner instead of tasks_list + tasks_update.',
+    description: 'Atomically claim the highest-priority pending task (P0 first, then oldest), flipping it pending→working in a single findOneAndUpdate. Cross-machine safe: when two runners fire concurrently against the same queue, exactly one wins each task — no double-pick. Sets claimedBy/claimedAt/leaseUntil for stale-runner reclaim. DAG scheduling: a task with dependsOn is skipped until every upstream task is status done — this applies to explicit taskId claims too (dependency order is correctness, not pacing). Returns the claimed task, or {claimed:false} when nothing is claimable. Use this from the runner instead of tasks_list + tasks_update.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -319,6 +342,67 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         error: { type: 'string', description: 'Failure detail (exit code, error summary, or 3-strikes postmortem) — stored as lastError/notes' },
       },
       required: ['taskId', 'error'],
+    },
+  },
+  {
+    name: 'tasks_delete',
+    description: 'Soft-delete a task: the full doc moves into the tenant\'s trash bin instead of being destroyed, recoverable via tasks_restore for the retention window (TRASH_RETENTION_DAYS, default 30 days) before the data-retention purge hard-deletes it. Audit-logged (task.trash). A working task is refused — release it first (tasks_fail or tasks_update), so a live runner is never stranded mid-run. Returns the trash entry handle (trashId) plus the deleted task snapshot.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'Task ID to delete' },
+        reason: { type: 'string', description: 'Why it is being deleted (kept on the trash entry + audit trail)' },
+      },
+      required: ['taskId'],
+    },
+  },
+  {
+    name: 'tasks_restore',
+    description: 'Restore a soft-deleted task from the trash bin: re-inserts the original doc (same taskId, fields, timestamps) and consumes the trash entry. Address by trashId (from tasks_delete/trash_list) or by the original taskId. Fails explicitly if an active task under the same taskId was recreated since the delete. Audit-logged (task.restore).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        trashId: { type: 'string', description: 'Trash entry handle (trash-…) to restore' },
+        taskId: { type: 'string', description: 'Original taskId, as an alternative lookup to trashId' },
+      },
+    },
+  },
+  {
+    name: 'tasks_bulk',
+    description: `Apply up to ${MAX_BULK_OPS} task mutations (create / update / cancel / reprioritize) in ONE call — the backend for the multi-repo orchestration board's multi-select actions, so the UI/CLI never needs N round-trips. Ops apply sequentially in array order; each op succeeds or fails INDEPENDENTLY (partial application) and the response reports a per-op verdict {index, action, ok, taskId, task|error+code} plus batch counters {total, succeeded, failed}. Pass stopOnError:true to halt at the first failure (remaining ops report code SKIPPED). Every op goes through the same tenant-scoped single-task write paths as tasks_create/tasks_update, so the bulk-block guard, dependency validation, and status stamps all still apply. Batch refs: anywhere a taskId is accepted (taskId, supersededBy, dependsOn entries), "$N" resolves to the taskId created by op index N earlier in the same batch — lets one call create a dependent chain (op 0 creates migrate-DB, op 1 creates build-UI with dependsOn:["$0"]). cancel = status blocked + a "Cancelled via bulk operation" note (pass reason to elaborate; supersededBy/operatorAuthorized authorize a mass pending→blocked past the guard threshold). reprioritize touches ONLY priority.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        operations: {
+          type: 'array',
+          description: `The mutations to apply, in order (max ${MAX_BULK_OPS})`,
+          items: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: ['create', 'update', 'cancel', 'reprioritize'], description: 'Which mutation this op performs' },
+              taskId: { type: 'string', description: 'Target task for update/cancel/reprioritize. Accepts a "$N" ref to an earlier create in this batch.' },
+              repo: { type: 'string', description: 'create: target repo (required). update: re-point a misfiled task.' },
+              title: { type: 'string', description: 'create: task title (required)' },
+              description: { type: 'string', description: 'create: task details' },
+              priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'], description: 'create (default P2) / update / reprioritize (required)' },
+              assignedAgent: { type: 'string' },
+              recommendedModel: { type: 'string' },
+              source: { type: 'string', enum: ['manual', 'connect-hub', 'auto-detected', 'scheduler', 'telegram'], description: 'create: where it originated (default manual)' },
+              sourceId: { type: 'string', description: 'create: external ref ID' },
+              notes: { type: 'string' },
+              status: { type: 'string', enum: ['pending', 'working', 'review', 'done', 'blocked', 'paused', 'dead_letter'], description: 'update only' },
+              prUrl: { type: 'string', description: 'update only' },
+              dependsOn: { type: 'array', items: { type: 'string' }, description: 'create: upstream taskIds (DAG). update: REPLACES the list ([] clears). Entries accept "$N" batch refs.' },
+              supersededBy: { type: 'string', description: 'update/cancel: taskId replacing this one — authorizes pending→blocked past the bulk-block guard. Accepts a "$N" batch ref.' },
+              operatorAuthorized: { type: 'boolean', description: 'update/cancel: explicit human-consented bulk-block authorization. Never set true from an automated caller.' },
+              reason: { type: 'string', description: 'cancel: recorded in the cancellation note' },
+            },
+            required: ['action'],
+          },
+        },
+        stopOnError: { type: 'boolean', description: 'Halt at the first failed op; remaining ops report code SKIPPED (default false — partial application)' },
+      },
+      required: ['operations'],
     },
   },
   // ── DISTRIBUTED TRACING (gateway→runner→agent spans) ──────
@@ -409,6 +493,44 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         taskId: { type: 'string', description: 'Task ID to list artifacts for' },
       },
       required: ['taskId'],
+    },
+  },
+  // ── RUNNER JOB HISTORY (searchable overnight-run archive, task-1873b3be) ──
+  {
+    name: 'job_history_record',
+    description: 'Record one runner fire into the tenant-scoped, searchable job-history archive (tasks/job-history-store.ts) — repo, task id, outcome (done|blocked|failed|no-result), the RESULT line and a bounded error excerpt. Called by the bash runner at close-off and by scripts/ingest_runner_history.sh backfilling ~/.ai-cli-runner/logs; passing logFile (the host log filename) makes ingestion idempotent (upsert, never a duplicate row). Text is redacted + capped server-side; retention (age + per-tenant cap) is applied on write.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'Repo the job ran in' },
+        taskId: { type: 'string', description: 'Fleet-queue task id the job worked' },
+        status: { type: 'string', enum: ['done', 'blocked', 'failed', 'no-result'], description: 'Run outcome — done (RESULT line, pushed), blocked (RESULT: BLOCKED), failed (non-zero exit), no-result (no RESULT line in the log)' },
+        resultLine: { type: 'string', description: 'The run\'s final "RESULT: " line (capped server-side)' },
+        errorExcerpt: { type: 'string', description: 'Bounded error/postmortem excerpt — e.g. the 3-strikes stop block or the tail of a failed run (capped server-side)' },
+        exitCode: { type: 'number', description: 'CLI exit code (optional)' },
+        machine: { type: 'string', description: 'Runner hostname (optional)' },
+        model: { type: 'string', description: 'Model the session ran on (optional)' },
+        logFile: { type: 'string', description: 'Source log filename on the runner host — idempotent-ingest dedupe key (optional but strongly recommended)' },
+        startedAtMs: { type: 'number', description: 'Epoch ms the job fired (from the log filename timestamp; default now)' },
+        durationSeconds: { type: 'number', description: 'Wall-clock seconds the job ran (optional)' },
+      },
+      required: ['repo', 'taskId', 'status'],
+    },
+  },
+  {
+    name: 'job_history_search',
+    description: 'Search the tenant-scoped runner job-history archive — past overnight/scheduled runs indexed by repo, task id, outcome status, and error/RESULT substring — instead of grepping raw log files on whichever Mac ran them. Backs the dashboard /runs page. Newest first; returns the pre-limit total for pagination.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'Only runs in this repo (exact match)' },
+        taskId: { type: 'string', description: 'Only runs for this task id (exact match)' },
+        status: { type: 'string', enum: ['done', 'blocked', 'failed', 'no-result'], description: 'Only runs with this outcome' },
+        q: { type: 'string', description: 'Case-insensitive substring over the RESULT line + error excerpt' },
+        since: { type: 'number', description: 'Only runs started at/after this epoch-ms timestamp' },
+        until: { type: 'number', description: 'Only runs started at/before this epoch-ms timestamp' },
+        limit: { type: 'number', description: 'Max entries to return (default 50, max 500)' },
+      },
     },
   },
   // ── RUNNER LEASES (ADR-011 slice 3 — fleet-wide concurrency) ──
@@ -625,10 +747,14 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'plan_list',
-    description: 'List the 10-day improvement plan (day-by-day focus schedule) for a repo (or all repos). Each day has a fire time (UTC, ≈9am Sydney), a one-line focus, and a status. Rendered as a table on the dashboard /plan page.',
+    description: 'List the 10-day improvement plan (day-by-day focus schedule) for a repo (or all repos). Each day has a fire time (UTC, ≈9am Sydney), a one-line focus, and a status. Rendered as a table on the dashboard /plan page. Bounded to `limit` rows (default 200); when more rows exist past this page, the response carries a `nextCursor` — pass it back as `cursor` to fetch the next page. Omitting `cursor` always starts from the beginning, so existing callers are unaffected.',
     inputSchema: {
       type: 'object',
-      properties: { repo: { type: 'string', description: 'Repo name (optional — omit for all repos)' } },
+      properties: {
+        repo: { type: 'string', description: 'Repo name (optional — omit for all repos)' },
+        limit: { type: 'number', description: 'Max results per page (default 200)' },
+        cursor: { type: 'string', description: 'Opaque pagination cursor from a prior response\'s nextCursor (optional — omit for the first page)' },
+      },
     },
   },
   {
@@ -640,7 +766,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         repo: { type: 'string', description: 'Repo name' },
         startDate: { type: 'string', description: 'ISO date for day 1 (default: today)' },
         fireHourUtc: { type: 'number', description: 'UTC hour each day fires (default 23 ≈ 9am Sydney AEST)' },
-        replace: { type: 'boolean', description: 'Clear existing days first (default false)' },
+        replace: { type: 'boolean', description: 'Clear existing days first (default false). SOFT delete: the replaced days move into the trash bin (recoverable via plan_restore for the retention window), never a hard wipe.' },
         days: {
           type: 'array',
           description: 'Array of {day:number, focus:string, status?:enabled|disabled|done|blocked}',
@@ -656,6 +782,41 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         },
       },
       required: ['repo', 'days'],
+    },
+  },
+  {
+    name: 'plan_delete',
+    description: 'Soft-delete a repo\'s entire multi-day plan: every PlanDay snapshots into ONE trash-bin entry instead of being destroyed, recoverable via plan_restore for the retention window (TRASH_RETENTION_DAYS, default 30 days). Audit-logged (plan.trash). Returns the trash entry handle (trashId) + day count.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'Repo whose plan to delete' },
+        reason: { type: 'string', description: 'Why it is being deleted (kept on the trash entry + audit trail)' },
+      },
+      required: ['repo'],
+    },
+  },
+  {
+    name: 'plan_restore',
+    description: 'Restore a soft-deleted plan from the trash bin. Address by trashId, or by repo to restore that repo\'s NEWEST trashed plan (covers the accidental plan_set replace:true — the replaced days are in trash). Days whose {repo, day} slot is now occupied by a live plan row are SKIPPED and stay in the trash entry (restore never clobbers current work); the response reports restoredDays vs skippedConflicts explicitly. Audit-logged (plan.restore).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        trashId: { type: 'string', description: 'Trash entry handle (trash-…) to restore' },
+        repo: { type: 'string', description: 'Repo name, as an alternative lookup — restores its newest trashed plan' },
+      },
+    },
+  },
+  {
+    name: 'trash_list',
+    description: 'List the tenant\'s trash bin — soft-deleted tasks and plans still inside the retention window (TRASH_RETENTION_DAYS, default 30 days), newest first. Each entry carries trashId (the tasks_restore/plan_restore handle), kind, label, repo, item count, who deleted it, why, when, and purgeAfter (when the data-retention purge may hard-delete it).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['task', 'plan'], description: 'Filter to one kind (optional)' },
+        repo: { type: 'string', description: 'Filter by repo (optional)' },
+        limit: { type: 'number', description: 'Max entries (default 50)' },
+      },
     },
   },
   // ── HANDOFF (betaC — first-class handoff store) ──────────
@@ -760,14 +921,16 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'activation_funnel',
-    description: 'The activation funnel — privacy-respecting product analytics with NO third-party tracker. Returns the tenant\'s own onboarding journey (steps signup → init → first_brain_boot → first_brain_delta → wrapup_merge, which are reached, when, and activation %). Pass `fleet:true` for the operator/product rollup instead: distinct tenants at each step, per-step conversion, and the headline `activationRate` (activated ÷ signed-up). Pass `selfServe:true` for the plain sellable-product view instead: signup → init → first task shipped → retained (2nd task shipped), with the headline `conversionRate` (retained ÷ signed-up) — the self-serve conversion number, distinct from the continuity-aha activation rate. Pass `hostedBrain:true` for the cross-machine-sync conversion KPI (ADR-023 Slice P3): signups vs. distinct tenants who completed their first hosted-brain provision, with the headline `conversionRate`. Milestones are stamped first-touch from existing gateway chokepoints (ADR-014 usage-metering write path) and surfaced on the dashboard /analytics page.',
+    description: 'The activation funnel — privacy-respecting product analytics with NO third-party tracker. Returns the tenant\'s own onboarding journey (steps signup → init → first_brain_boot → first_brain_delta → wrapup_merge, which are reached, when, and activation %). Pass `fleet:true` for the operator/product rollup instead: distinct tenants at each step, per-step conversion, and the headline `activationRate` (activated ÷ signed-up). Pass `selfServe:true` for the plain sellable-product view instead: signup → init → first task shipped → retained (2nd task shipped), with the headline `conversionRate` (retained ÷ signed-up) — the self-serve conversion number, distinct from the continuity-aha activation rate. Pass `hostedBrain:true` for the cross-machine-sync conversion KPI (ADR-023 Slice P3): signups vs. distinct tenants who completed their first hosted-brain provision, with the headline `conversionRate`. Pass `dropoff:true` for the operator activation-journey drop-off report instead (dashboard /analytics/funnel): the signup → project-connected → first-task-executed → first-task-shipped funnel with an explicit per-stage droppedOff count/%, the `worstStage` (largest leak), and the SAME funnel broken out per signup cohort (`cohort:"month"` default or `"week"`, `sinceDays` bounds the window) — the where-do-signups-fall-out view, distinct from the continuity-aha and self-serve funnels. Milestones are stamped first-touch from existing gateway chokepoints (ADR-014 usage-metering write path) and surfaced on the dashboard /analytics page.',
     inputSchema: {
       type: 'object',
       properties: {
         fleet: { type: 'boolean', description: 'Return the cross-tenant fleet rollup + activation rate instead of this tenant\'s own journey (operator view; default false)' },
-        sinceDays: { type: 'number', description: 'For the fleet rollup only — bound to tenants whose milestone occurred in the last N days (optional)' },
+        sinceDays: { type: 'number', description: 'For the fleet rollup and drop-off views — bound to milestones that occurred in the last N days (optional)' },
         selfServe: { type: 'boolean', description: 'Return the self-serve conversion funnel instead (signup → init → first task shipped → retained); takes precedence over `fleet` (default false)' },
         hostedBrain: { type: 'boolean', description: 'Return the cross-machine-sync (hosted brain) conversion funnel instead (signup → first hosted-brain provision); takes precedence over `fleet`/`selfServe` (default false)' },
+        dropoff: { type: 'boolean', description: 'Return the operator activation-journey drop-off + signup-cohort report instead (signup → init → first_task → first_ship with per-stage droppedOff, worstStage, and per-cohort funnels); takes precedence over the other views (default false)' },
+        cohort: { type: 'string', enum: ['month', 'week'], description: 'For `dropoff` only — signup-cohort granularity (default month)' },
       },
     },
   },
@@ -779,6 +942,11 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   {
     name: 'slo_status',
     description: 'Per-route SLO alerting status. Returns the active SLO configuration (default p95-latency + error-rate thresholds, per-route overrides, min-sample floor, cooldown), and — evaluating the live perf meter right now — the routes currently breaching their SLO. The gateway fires cooldown-guarded Telegram alerts on breach (via the notification engine); this tool is the read-only view of that alerter. Disable alerting with SLO_ALERTS_DISABLED=1; tune with MYAI_SLO_P95_MS / MYAI_SLO_ERROR_RATE_PCT / MYAI_SLO_ROUTES (JSON per-route overrides) / MYAI_SLO_MIN_SAMPLES / MYAI_SLO_COOLDOWN_MIN.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'canary_status',
+    description: 'Synthetic-canary probe status. The gateway proactively runs a scheduled end-to-end synthetic transaction through the control plane — signup → task dispatch → runner pickup (tasks_claim) → ship (review→done) — in a fully isolated, auto-purged synthetic tenant, and alerts via the notification engine (+ Telegram/Slack) when a stage fails or degrades past its latency budget. Distinct from slo_status (reactive, needs real traffic). Returns the active configuration (cadence, per-stage budgets, cooldown, degraded-streak threshold), the latest run (per-stage pass/fail + latency vs budget), and the bounded run history. Disable with SYNTHETIC_CANARY_DISABLED=1; tune with MYAI_CANARY_INTERVAL_MIN / MYAI_CANARY_BUDGETS_MS (JSON per-stage ms) / MYAI_CANARY_COOLDOWN_MIN / MYAI_CANARY_DEGRADED_STREAK.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -1093,6 +1261,101 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       },
     },
   },
+  // ── RECURRING RUNNER TASKS (cron-cadenced queue templates) ──
+  {
+    name: 'recurring_tasks_list',
+    description: 'List recurring runner-task templates sorted by nextFireAt. A recurring task re-enqueues a one-shot queue Task on a cron cadence (e.g. nightly state rotation, weekly dep-scan) instead of the operator re-adding one-shots. Distinct from schedules_list: schedules dispatch MCP tools/agents in-gateway; recurring tasks enqueue WORK for the CLI runner.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean', description: 'Filter by enabled flag (optional)' },
+        repo: { type: 'string', description: 'Filter by target repo (optional)' },
+        limit: { type: 'number', description: 'Max results (default 100)' },
+      },
+    },
+  },
+  {
+    name: 'recurring_tasks_create',
+    description: 'Create a recurring runner-task template. On each cron fire the sweep enqueues a one-shot queue Task (source=scheduler, sourceId=recurringId) from this template for the CLI runner. Validates the cron expression and computes nextFireAt. overlapPolicy=skip (default) never enqueues while the previous instance is still open; overlapPolicy=stack always enqueues.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Human-readable name (e.g. nightly_state_rotation)' },
+        cronExpr: { type: 'string', description: '5-field cron expression (min hour day month dow), e.g. "0 3 * * *" for 03:00 UTC nightly' },
+        repo: { type: 'string', description: 'Repo the enqueued task targets' },
+        title: { type: 'string', description: 'Title for each enqueued one-shot task' },
+        description: { type: 'string', description: 'Task description/details (optional)' },
+        priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'], description: 'Priority for enqueued tasks (default P2)' },
+        assignedAgent: { type: 'string', description: 'Specialist agent hint for enqueued tasks (optional)' },
+        recommendedModel: { type: 'string', description: 'Model hint for enqueued tasks (optional)' },
+        notes: { type: 'string', description: 'Notes carried onto each enqueued task (optional)' },
+        overlapPolicy: { type: 'string', enum: ['skip', 'stack'], description: 'skip (default): do not enqueue while the previous instance is still open. stack: always enqueue.' },
+        enabled: { type: 'boolean', description: 'Whether the template fires (default true)' },
+      },
+      required: ['name', 'cronExpr', 'repo', 'title'],
+    },
+  },
+  {
+    name: 'recurring_tasks_update',
+    description: 'Update a recurring runner-task template by recurringId (e.g. toggle enabled, change cadence or the task template). Recomputes nextFireAt if cronExpr changes. Pass only the fields you want to change.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        recurringId: { type: 'string', description: 'Recurring task ID to update' },
+        name: { type: 'string' },
+        cronExpr: { type: 'string', description: 'New cron expression — if changed, nextFireAt is recomputed from now' },
+        repo: { type: 'string' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+        assignedAgent: { type: 'string' },
+        recommendedModel: { type: 'string' },
+        notes: { type: 'string' },
+        overlapPolicy: { type: 'string', enum: ['skip', 'stack'] },
+        enabled: { type: 'boolean', description: 'Toggle the template on/off' },
+      },
+      required: ['recurringId'],
+    },
+  },
+  {
+    name: 'recurring_tasks_run_now',
+    description: 'Fire a recurring template immediately, enqueuing its one-shot task now while preserving the existing nextFireAt (the cron cadence is unaffected — mirrors schedules_run_now). Honors the template\'s overlapPolicy.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        recurringId: { type: 'string', description: 'Recurring task ID to fire now' },
+      },
+      required: ['recurringId'],
+    },
+  },
+  {
+    name: 'recurring_tasks_delete',
+    description: 'Delete a recurring runner-task template by recurringId. Already-enqueued one-shot tasks are untouched.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        recurringId: { type: 'string', description: 'Recurring task ID to delete' },
+      },
+      required: ['recurringId'],
+    },
+  },
+  {
+    name: 'recurring_tasks_sweep',
+    description: 'Recurring-task sweep (scheduler/recurring-task-sweep.ts): finds every due, enabled recurring template ACROSS ALL TENANTS and enqueues each as a one-shot queue Task under its own tenant, advancing nextFireAt per its cron. Designed to run as a frequent cron schedule (kind=tool, target=recurring_tasks_sweep — seeded as recurring_task_sweep_5min) or on demand.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  // ── ENTITLEMENTS (central plan-entitlement service, read-only) ──
+  {
+    name: 'entitlements_status',
+    description: 'The single plan-entitlement snapshot for the calling tenant — Solo/Team/Scale feature gating + repo/seat/off-hours-minutes/generation-credit quota limits and current usage. Same computation as the dashboard\'s GET /api/entitlements (core/entitlement-service.ts, composing billing.ts\'s subscription gate + entitlements.ts\'s per-dimension caps) — the source of truth for "is this tenant entitled to do X", replacing ad-hoc plan checks. Read-only; never gated for the local operator.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
   // ── BUDGETS (read-only) ───────────────────────────────
   {
     name: 'budgets_status',
@@ -1186,6 +1449,37 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     },
   },
   {
+    name: 'cancellation_purge_sweep',
+    description: 'Billing-driven data-retention purge-on-cancel (core/tenant-lifecycle.ts): finds every tenant whose subscription-cancellation grace window (CANCELLATION_PURGE_GRACE_DAYS, default 30, started by the billing webhook on customer.subscription.deleted) has elapsed and irreversibly purges its scoped data — tasks/plans/schedules/directory cards/... (same collection set account-erasure.ts wipes) PLUS its audit trail — then scrubs the tenant row to a tombstone. Skips legal-hold tenants. Each tenant handled independently; one failure never blocks the rest. Designed to run as a daily cron schedule (kind=tool, target=cancellation_purge_sweep) or on demand.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'tenant_suspend',
+    description: 'Operator action: suspend a tenant (status=suspended), instantly blocking every gateway API-key call (auth.ts) for that tenant. Idempotent; refuses an already-deleted tenant. Uses `targetTenantId` (not `tenantId`) because executeTool() unconditionally strips an inbound `tenantId` — this tool genuinely targets a DIFFERENT tenant than the operator\'s own ctx.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        targetTenantId: { type: 'string', description: 'Tenant to suspend' },
+        reason: { type: 'string', description: 'Optional free-text reason, recorded on the audit trail' },
+      },
+      required: ['targetTenantId'],
+    },
+  },
+  {
+    name: 'tenant_reactivate',
+    description: 'Operator action: restore a suspended tenant to status=active and clear any pending cancellation-purge schedule. Idempotent; refuses an already-deleted tenant. Uses `targetTenantId` (not `tenantId`) — see tenant_suspend.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        targetTenantId: { type: 'string', description: 'Tenant to reactivate' },
+      },
+      required: ['targetTenantId'],
+    },
+  },
+  {
     name: 'task_lease_reap',
     description: 'Task-lease reaper (tasks/task-store.ts reapStaleLeases): finds every task stuck in status=working whose leaseUntil has passed — the runner that claimed it died or was killed mid-task and nothing ever requeued the TASK itself (runner-lease-store\'s TTL index only reaps the SLOT lease, letting a new runner start, while the task document stays frozen). Releases each through the same failTask path a genuine runner failure uses, so retryCount/backoff/maxRetries→dead_letter semantics are identical. Designed to run as a frequent cron schedule (kind=tool, target=task_lease_reap) or on demand.',
     inputSchema: {
@@ -1204,7 +1498,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'provider_health',
-    description: 'Get detailed resilience health for LLM providers. Shows per-provider circuit breaker state (closed/open/half-open), failure/success counts, rate limiter token availability, and total acquired/rejected tokens. Optionally filter to a single provider.',
+    description: 'Get detailed resilience health for LLM providers. Shows per-provider circuit breaker state (closed/open/half-open), failure/success counts, rate limiter token availability, total acquired/rejected tokens, and failover-chain data (inter-hop backoff config, hops attempted/succeeded-as-fallback, hops dropped for retry-budget/cost-budget). The "all providers" response (no `provider` filter) also includes the chain-wide configured retry budget (`retryBudget.maxHops`) and the most recent dropped fallback hops (`recentDroppedHops`). Optionally filter to a single provider.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1420,6 +1714,19 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     },
   },
   {
+    name: 'brain_recall_analytics',
+    description: 'Per-atom recall analytics over the W3.3 live-recall telemetry log — the breakdown brain_health deliberately is NOT. Joins the recorded context_boot/brain_search/brain_delta recall events against a scan of the atom store and returns: most-recalled atoms (recall counts, per-tool split, chosen-vs-candidate, first/last recalled), a staleness heatmap (atom age × last-recall recency buckets, so "old but still recalled" separates from "old and cold"), and never-recalled DEAD atoms (unpinned, older than minDeadAgeDays) surfaced as a gc-actionable report: gc.candidatePaths carries repo-relative atom paths in exactly the BrainGcPlan format for `brain gc` / the operator to review and prune. Conservative by design — pinned atoms are never dead, fresh atoms are never dead, and an empty telemetry log yields zero candidates (no observations ≠ evidence of death). Read-only: telemetry log + directory walk; never mutates the brain.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'Scope the atom scan to one repo namespace (repos/<ns>/ only). Omit for the whole store including cross-repo memory/ atoms.' },
+        topLimit: { type: 'number', description: 'Max most-recalled rows returned (default 20)' },
+        deadLimit: { type: 'number', description: 'Max dead-atom detail rows returned (default 50); gc.candidatePaths is always the full list' },
+        minDeadAgeDays: { type: 'number', description: 'Never-recalled atoms younger than this many days are excluded from the dead list (default 14)' },
+      },
+    },
+  },
+  {
     name: 'brain_manifest',
     description: 'Control-plane boot manifest (BRAIN B2): "know where what is without reading it." A tiny table-of-contents over the stores the 3-plane router dispatches against (brain-git, repo-sqlite-index, atlas-vectors — each with its fetch tools), this brain\'s namespaces (name + hasBrief/hasWorking + atom counts, NO bodies), the cross-repo memory atom count, and `freshnessSha` (the brain main HEAD SHA to anchor a later brain_delta({since})). Extends ADR-020\'s tiered topic index one level up — which store/namespace to descend into, not which topic within one. Cheap by construction: directory listings + git rev-parse only, never an atom read.',
     inputSchema: { type: 'object', properties: {} },
@@ -1456,12 +1763,29 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         content: { type: 'string', description: 'The atom body (markdown)' },
         topic: { type: 'string', description: 'ADR-020 topic tag (controlled set: runner-ops, cost-policy, gateway-infra, go-live, continuity, distribution, billing, brain, security, docs — extensible). Missing → \'general\' + a lint warning.' },
         supersedes: { type: 'string', description: 'ADR-020: slug or sha8 of a prior atom this one replaces. Retires it from the GOLD/SILVER hot path (stays in rollup/BRONZE history).' },
+        pin: { type: 'boolean', description: 'Mark this atom load-bearing at write time: the distiller NEVER drops it (exempt from supersession retirement, near-dup collapse, and budget cuts — renders in the dedicated pinned section of brief/working), and recall ranking never age-decays it. Pin an EXISTING atom with brain_pin instead.' },
         code_repo: { type: 'string', description: 'Provenance: code repo name (defaults to `repo`)' },
         code_branch: { type: 'string', description: 'Provenance: code branch the work happened on (e.g. test)' },
         code_sha: { type: 'string', description: 'Provenance: code HEAD SHA at write time' },
         code_commits: { type: 'array', items: { type: 'string' }, description: 'Provenance: code commit SHAs this session produced' },
       },
       required: ['kind', 'slug', 'content'],
+    },
+  },
+  {
+    name: 'brain_observe',
+    description: 'Append one raw observation record to the zero-LLM ring-buffer capture buffer (BRAIN W1.1/W1.4) — the MCP-tool twin of the `hooks/post-tool/07-brain-observe.sh` PostToolUse hook, for agents that don\'t run Claude Code hooks (Gemini/Codex/opencode connected via `myai connect-agent`). Same JSONL shape, same per-repo/per-session file, same bounded rotation — one buffer, fed from either path, so no connected agent\'s session is silently lost. This is scratch capture, NOT a committed atom: it is never git-added and is not a substitute for `brain_commit` — a future distiller folds it into real atoms.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'Project namespace (matches the repo folder name the hook uses — same string lands on the same buffer file)' },
+        session: { type: 'string', description: 'Caller session id. Omit to fall back to an hour-bucketed key (imperfect but distinct across concurrent callers).' },
+        tool: { type: 'string', description: 'Name of the tool call being observed' },
+        target: { type: 'string', description: 'Short description of what was acted on (path, command, query, …) — truncated to 300 chars' },
+        exit: { type: 'string', enum: ['ok', 'error', 'unknown'], description: 'Outcome of the observed call (default: unknown)' },
+        files: { type: 'array', items: { type: 'string' }, description: 'Files touched by the observed call, if known' },
+      },
+      required: ['repo', 'tool'],
     },
   },
   {
@@ -1485,6 +1809,28 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       properties: {
         slug: { type: 'string', description: 'Pop the newest stash with this slug (default: newest of all)' },
       },
+    },
+  },
+  {
+    name: 'brain_pin',
+    description: 'Pin a load-bearing EXISTING atom (by content sha8 or repo-relative atom path) so the distiller NEVER drops it: pinned atoms are exempt from supersession retirement, near-duplicate collapse, and budget-driven omission — they render first in a dedicated "pinned" section of brief.md (GOLD) and working.md (SILVER) — and recall ranking never age-decays them. The pin is a tiny registry marker committed to brain main (pins/<sha8>.md); the atom itself stays immutable. Content-addressed: every atom sharing the sha8 is pinned. Idempotent; throws if no such atom exists on main. New atoms can be pinned at write time via brain_commit\'s `pin` flag instead.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Atom content sha8 (the 8-hex filename tail) or repo-relative atom path (memory/… or repos/<ns>/{sessions,handoffs}/…)' },
+      },
+      required: ['ref'],
+    },
+  },
+  {
+    name: 'brain_unpin',
+    description: 'Remove a never-drop pin (by atom sha8 or path): deletes the pins/<sha8>.md registry marker from brain main with a normal commit. The atom itself is untouched — it simply becomes subject to normal distiller compaction (supersession, near-dup collapse, budget cuts) and recall age-decay again.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Atom content sha8 (8 hex chars) or atom path whose pin to remove' },
+      },
+      required: ['ref'],
     },
   },
   {
@@ -1744,6 +2090,70 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'brain_template_publish',
+    description: 'Publish one immutable version of a STARTER-BRAIN pack (operator only): a curated bundle of brain atoms (domain conventions, common patterns) new tenants seed their brain from instead of starting cold. Versions are strict X.Y.Z semver and immutable — a re-publish of an existing version is refused (fix forward: bump the version). Atom topics are normalized warn-only (ADR-020); non-blocking nudges come back in `warnings`. Distinct from brain backup/restore (a tenant\'s OWN data) and from marketplace packages (agents/skills) — this is brain CONTENT templating.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Pack identity slug, stable across versions (e.g. nextjs-saas)' },
+        version: { type: 'string', description: 'Strict X.Y.Z semver — immutable once published' },
+        title: { type: 'string', description: 'Human-readable pack title' },
+        description: { type: 'string', description: 'What domain baseline this pack seeds' },
+        atoms: {
+          type: 'array',
+          description: 'Curated atoms (max 200, 1 MB total content). Each: {kind: session|handoff|memory, repo? (required for session/handoff), slug, topic?, content}',
+          items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: ['session', 'handoff', 'memory'] },
+              repo: { type: 'string', description: 'Project namespace; omit for cross-repo memory atoms' },
+              slug: { type: 'string' },
+              topic: { type: 'string', description: 'ADR-020 topic tag (BRAIN_TOPICS set)' },
+              content: { type: 'string' },
+            },
+            required: ['kind', 'slug', 'content'],
+          },
+        },
+      },
+      required: ['id', 'version', 'title', 'atoms'],
+    },
+  },
+  {
+    name: 'brain_template_list',
+    description: 'Browse the starter-brain pack catalog — every operator-published pack with its latest version, all published versions, and atom count. Pair with brain_template_get to inspect a pack\'s atoms, and brain_seed to seed this tenant\'s brain from one.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'brain_template_get',
+    description: 'Fetch one published starter-brain pack (latest version unless `version` is pinned) including its full curated atoms — inspect what a brain_seed would write before running it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Pack id (from brain_template_list)' },
+        version: { type: 'string', description: 'Specific X.Y.Z version; defaults to the latest published' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'brain_seed',
+    description: 'Seed THIS tenant\'s brain from a published starter pack — the new-tenant bootstrap that replaces an empty store with a curated domain baseline. Creates the (tenant-scoped, ADR-010) brain repo if missing, writes every pack atom through the ordinary append-only path (content-hash dedup — nothing is ever overwritten), and records a marker memory atom (pack@version) so re-seeding the same version is an idempotent no-op. Refused once the brain has real session history (pass force:true to layer a pack onto a lived-in brain anyway). Distinct from brain backup/restore: this seeds CURATED shared content, not the tenant\'s own data.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pack: { type: 'string', description: 'Pack id to seed from (see brain_template_list)' },
+        version: { type: 'string', description: 'Specific X.Y.Z version; defaults to the latest published' },
+        force: { type: 'boolean', description: 'Seed even though the brain already has session history (default false)' },
+      },
+      required: ['pack'],
+    },
+  },
+  {
+    name: 'brain_seed_status',
+    description: 'Which starter packs already seeded this tenant\'s brain (parsed from the marker atoms brain_seed writes): pack id, version, and when — the provenance/audit view of seeding.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'marketplace_publish',
     description: 'Submit a marketplace package for review (ADR-019 Implementation checklist #2). Accepts the same `pack()`-shaped `marketplace.manifest.json` body a future `myai-marketplace` CLI would produce (ADR-028 §2) and re-runs its four submission checks SERVER-SIDE, fail-fast in order — schema validity (incl. manifestHash integrity against the submitted artifact bytes), declaredTools ⊆ the marketplace-exposable tool allowlist (ADR-028 §5), semver/immutability rules (ADR-028 §4 — no re-publish of an already-published version), and an injection-pattern scan mirroring the security-integrity agent\'s scan. Any local CLI validation is advisory-fast only; this is the actual security boundary (ADR-028 §3). On a pass, uploads the artifact bytes to the ADR-029 artifact store\'s `staging/` keyspace under a content-addressed key derived from `manifestHash`, re-verifies the round-tripped bytes hash (ADR-029 §4), and creates or refreshes an `in_review` ListingVersion row with that real `artifactUri`, returning it plus any non-blocking scan warnings. On failure (including a failed artifact upload/integrity re-check), returns a structured rejection naming which check failed and why — never throws for an ordinary validation failure.',
     inputSchema: {
@@ -1753,6 +2163,63 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         artifactContent: { type: 'string', description: 'Raw content of the packaged artifact (agent.md, or the concatenated skill/ tree) — used for the manifestHash integrity check and the injection-pattern scan; never persisted as artifact bytes.' },
       },
       required: ['manifest', 'artifactContent'],
+    },
+  },
+  {
+    name: 'marketplace_search',
+    description: 'Browse the published marketplace catalog (ADR-019 Implementation checklist #2) — free-text match against title/summary/slug/tags, optionally narrowed by kind (agent|skill) and/or category. Only `published` listings are discoverable (ADR-019 §3 listing-lifecycle); draft/in_review/suspended/delisted listings never appear. Currently served against the local filesystem artifact backend (ADR-029 §2\'s self-hosted default) — the S3/CDN production backend is a later swap-in behind the same catalog, not a blocker. Returns catalog summaries only (no install action taken); pair with marketplace_install to install a result by slug.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        q: { type: 'string', description: 'Free-text query matched against title, summary, slug, category, and tags (case-insensitive substring)' },
+        kind: { type: 'string', enum: ['agent', 'skill'], description: 'Restrict to agents or skills' },
+        category: { type: 'string', description: 'Exact category match' },
+        limit: { type: 'number', description: 'Max results to return (default 20, cap 100)' },
+      },
+    },
+  },
+  {
+    name: 'marketplace_install',
+    description: 'Install a published marketplace listing by slug for the caller\'s tenant (ADR-019 Implementation checklist #2). Requires the listing published AND the target version published — not yanked (the ADR-019 §3 install gate). Before completing, re-fetches the version\'s artifact bytes from the ADR-029 local filesystem artifact backend and re-verifies sha256(bytes) === manifestHash (ADR-029 §4 fetch-integrity re-check) — a mismatch or missing artifact fails closed with no install created. One live install per tenant per listing (reinstall requires uninstalling first — not yet exposed by this tool). Free listings only for now: one_time/subscription/usage pricing requires the billing checkout flow (dashboard `/api/marketplace/checkout`), not this tool — a paid listing returns a structured rejection rather than a silent free install.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'The listing slug to install (from marketplace_search results)' },
+        version: { type: 'string', description: 'Specific semver to pin; defaults to the listing\'s latest published version' },
+      },
+      required: ['slug'],
+    },
+  },
+  {
+    name: 'plugin_tools_register',
+    description: 'Register (or update, upsert-by-name) a CUSTOM MCP tool for the caller\'s tenant (task-6f9ae8ea) — name + JSON-Schema input contract + an HTTPS handler URL the gateway proxies tools/call to with a per-plugin timeout, extending the built-in tool surface at runtime without a redeploy. ENV-GATED, off by default (MYAI_TENANT_TOOL_PLUGINS=1); strictly tenant-scoped (a plugin never appears in another tenant\'s tools/list); a plugin can never shadow a built-in tool (registration refuses colliding names, and built-ins win at dispatch). handlerUrl must be https (http for loopback only); timeoutMs is clamped to [250, 30000] (default 10000); max 20 plugins per tenant. Every registry change is audited (plugintool.change) and every proxied invocation is audited (plugintool.invoke). Requires the configure capability (admin+), same rung as connectors_set / webhook management.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Tool name, snake_case 3-64 chars ([a-z][a-z0-9_]{2,63}); must not collide with a built-in tool' },
+        description: { type: 'string', description: 'What the tool does — shown verbatim in tools/list' },
+        schema: { type: 'object', description: 'The tool\'s MCP inputSchema (JSON Schema; type must be "object")' },
+        handlerUrl: { type: 'string', description: 'HTTPS endpoint the gateway POSTs {tool, arguments, tenantId} to (http allowed only for loopback)' },
+        timeoutMs: { type: 'number', description: 'Per-call proxy timeout in ms, clamped to [250, 30000]; default 10000' },
+        enabled: { type: 'boolean', description: 'Register disabled (hidden from tools/list, refuses dispatch); default true' },
+      },
+      required: ['name', 'description', 'schema', 'handlerUrl'],
+    },
+  },
+  {
+    name: 'plugin_tools_list',
+    description: 'List the caller tenant\'s registered custom MCP tool plugins (plugin_tools_register) — name, description, inputSchema, handler URL, timeout, enabled flag, timestamps. Returns an empty list when the plugin system is env-gated off (MYAI_TENANT_TOOL_PLUGINS unset) or nothing is registered. Registry view only — the enabled subset is what tools/list appends after the built-in surface.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'plugin_tools_remove',
+    description: 'Remove one of the caller tenant\'s custom MCP tool plugins by name (see plugin_tools_register / plugin_tools_list). The tool disappears from tools/list immediately and further calls to it fall through to the normal Unknown-tool error. Audited (plugintool.change). Requires the configure capability (admin+). Env-gated like the rest of the plugin system.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The registered plugin tool name to remove' },
+      },
+      required: ['name'],
     },
   },
 ];
@@ -1773,6 +2240,13 @@ export async function executeTool(
     throw new AuthError('no tenant in context', 401, 'NO_TENANT_CONTEXT');
   }
   args = stripTenantFromArgs(args);
+
+  // ADR-027 §3: the sandboxed marketplace-package gate — evaluated FIRST,
+  // before the ordinary RBAC gates below. No-op unless `ctx.sandbox` is set
+  // (a running sandboxed invocation, server-derived only). Intersective: it
+  // narrows what a sandboxed call may reach, never widens what the caller's
+  // real role permits.
+  assertDeclaredCapability(ctx, name);
 
   // RBAC v1 slice 2 (ADR-013 §3): the tool→capability inventory applied at this
   // single dispatch chokepoint — MCP parity with the REST enforceRbac gate.
@@ -1826,12 +2300,17 @@ async function dispatchTool(
     case 'tasks_next': return handleTasksNext(tenantId, args);
     case 'tasks_claim': return handleTasksClaim(tenantId, args);
     case 'tasks_fail': return handleTasksFail(tenantId, args);
+    case 'tasks_delete': return handleTasksDelete(tenantId, args, ctx);
+    case 'tasks_restore': return handleTasksRestore(tenantId, args, ctx);
+    case 'tasks_bulk': return handleTasksBulk(tenantId, args, ctx);
     case 'traces_record': return handleTracesRecord(args);
     case 'traces_list': return handleTracesList(args);
     case 'logs_record': return handleLogsRecord(tenantId, args);
     case 'logs_list': return handleLogsList(tenantId, args);
     case 'artifacts_register': return handleArtifactsRegister(tenantId, args);
     case 'artifacts_list': return handleArtifactsList(tenantId, args);
+    case 'job_history_record': return handleJobHistoryRecord(tenantId, args);
+    case 'job_history_search': return handleJobHistorySearch(tenantId, args);
     case 'runner_lease_acquire': return handleRunnerLeaseAcquire(tenantId, args);
     case 'runner_lease_heartbeat': return handleRunnerLeaseHeartbeat(tenantId, args);
     case 'runner_lease_release': return handleRunnerLeaseRelease(tenantId, args);
@@ -1857,8 +2336,14 @@ async function dispatchTool(
     case 'connectors_toggle': return handleConnectorsToggle(tenantId, args, ctx);
     case 'connectors_remove': return handleConnectorsRemove(tenantId, args, ctx);
     case 'connectors_mcp_config': return handleConnectorsMcpConfig(tenantId);
+    case 'plugin_tools_register': return handlePluginToolsRegister(tenantId, args, ctx);
+    case 'plugin_tools_list': return handlePluginToolsList(tenantId);
+    case 'plugin_tools_remove': return handlePluginToolsRemove(tenantId, args, ctx);
     case 'plan_list': return handlePlanList(tenantId, args);
     case 'plan_set': return handlePlanSet(tenantId, args);
+    case 'plan_delete': return handlePlanDelete(tenantId, args, ctx);
+    case 'plan_restore': return handlePlanRestore(tenantId, args, ctx);
+    case 'trash_list': return handleTrashList(tenantId, args);
     case 'handoff_write': return handleHandoffWrite(tenantId, args);
     case 'handoff_read': return handleHandoffRead(tenantId, args);
     case 'session_export': return handleSessionExport(tenantId, args);
@@ -1870,6 +2355,7 @@ async function dispatchTool(
     case 'activation_funnel': return handleActivationFunnel(tenantId, args);
     case 'perf_stats': return handlePerfStats();
     case 'slo_status': return handleSloStatus();
+    case 'canary_status': return handleCanaryStatus();
     case 'fleet_run_start': return handleFleetRunStart(tenantId, args);
     case 'fleet_run_repo_update': return handleFleetRunRepoUpdate(tenantId, args);
     case 'fleet_run_finish': return handleFleetRunFinish(tenantId, args);
@@ -1885,12 +2371,22 @@ async function dispatchTool(
     case 'schedules_run_now': return handleSchedulesRunNow(ctx, args);
     case 'schedules_delete': return handleSchedulesDelete(tenantId, args);
     case 'schedules_seed': return handleSchedulesSeed(args);
+    case 'recurring_tasks_list': return handleRecurringTasksList(tenantId, args);
+    case 'recurring_tasks_create': return handleRecurringTasksCreate(tenantId, args);
+    case 'recurring_tasks_update': return handleRecurringTasksUpdate(tenantId, args);
+    case 'recurring_tasks_run_now': return handleRecurringTasksRunNow(tenantId, args);
+    case 'recurring_tasks_delete': return handleRecurringTasksDelete(tenantId, args);
+    case 'recurring_tasks_sweep': return handleRecurringTasksSweep();
     case 'morning_sweep': return handleMorningSweep(args);
     case 'evening_sweep': return handleEveningSweep(args);
     case 'data_retention_purge': return handleDataRetentionPurge();
     case 'mrr_snapshot_sweep': return handleMrrSnapshotSweep();
     case 'erasure_sweep': return handleErasureSweep();
+    case 'cancellation_purge_sweep': return handleCancellationPurgeSweep();
+    case 'tenant_suspend': return handleTenantSuspend(ctx, args);
+    case 'tenant_reactivate': return handleTenantReactivate(ctx, args);
     case 'task_lease_reap': return handleTaskLeaseReap();
+    case 'entitlements_status': return handleEntitlementsStatus(tenantId, ctx);
     case 'budgets_status': return handleBudgetsStatus(tenantId);
     case 'budgets_breakdown': return handleBudgetsBreakdown(tenantId, args);
     case 'budgets_suggestions': return handleBudgetsSuggestions(tenantId, args);
@@ -1916,12 +2412,16 @@ async function dispatchTool(
     case 'health_alerts_run': return handleHealthAlertsRun();
     case 'brain_status': return handleBrainStatus(tenantId);
     case 'brain_health': return handleBrainHealth(tenantId, args);
+    case 'brain_recall_analytics': return handleBrainRecallAnalytics(tenantId, args);
     case 'brain_manifest': return handleBrainManifest(tenantId);
     case 'brain_bandit_stats': return getBanditStats();
     case 'brain_explore': return handleBrainExplore(tenantId, args);
     case 'brain_commit': return handleBrainCommit(tenantId, args);
+    case 'brain_observe': return handleBrainObserve(tenantId, args);
     case 'brain_stash': return handleBrainStash(tenantId, args);
     case 'brain_pop': return handleBrainPop(tenantId, args);
+    case 'brain_pin': return handleBrainPin(tenantId, args);
+    case 'brain_unpin': return handleBrainUnpin(tenantId, args);
     case 'brain_branch': return handleBrainBranch(tenantId, args);
     case 'brain_checkout': return handleBrainCheckout(tenantId, args);
     case 'brain_merge': return handleBrainMerge(tenantId, args);
@@ -1943,7 +2443,14 @@ async function dispatchTool(
     case 'brain_host_provision': return handleBrainHostProvision(ctx);
     case 'brain_host_status': return handleBrainHostStatus(ctx);
     case 'brain_host_rotate': return handleBrainHostRotate(ctx);
+    case 'brain_template_publish': return handleBrainTemplatePublish(ctx, args);
+    case 'brain_template_list': return listStarterPacks();
+    case 'brain_template_get': return getStarterPack(args.id as string, args.version as string | undefined);
+    case 'brain_seed': return handleBrainSeed(tenantId, args);
+    case 'brain_seed_status': return handleBrainSeedStatus(tenantId);
     case 'marketplace_publish': return handleMarketplacePublish(tenantId, ctx, args);
+    case 'marketplace_search': return handleMarketplaceSearch(args);
+    case 'marketplace_install': return handleMarketplaceInstall(tenantId, ctx, args);
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -2184,14 +2691,15 @@ async function handleStateUpdate(args: Record<string, unknown>) {
 // ── TASK handlers ─────────────────────────────────────────
 
 async function handleTasksList(tenantId: string, args: Record<string, unknown>) {
-  const tasks = await listTasks(tenantId, {
+  const { tasks, nextCursor } = await listTasksPage(tenantId, {
     repo: args.repo as string | undefined,
     status: args.status as TaskStatus | undefined,
     priority: args.priority as TaskPriority | undefined,
     assignedAgent: args.assignedAgent as string | undefined,
     limit: args.limit as number | undefined,
+    cursor: args.cursor as string | undefined,
   });
-  return { count: tasks.length, tasks };
+  return { count: tasks.length, tasks, ...(nextCursor ? { nextCursor } : {}) };
 }
 
 async function handleTasksCreate(tenantId: string, args: Record<string, unknown>, ctx: ToolContext = SYSTEM_CONTEXT) {
@@ -2218,6 +2726,9 @@ async function handleTasksCreate(tenantId: string, args: Record<string, unknown>
     source: args.source as TaskSource | undefined,
     sourceId: args.sourceId as string | undefined,
     notes: args.notes as string | undefined,
+    dependsOn: Array.isArray(args.dependsOn)
+      ? (args.dependsOn as unknown[]).filter((d): d is string => typeof d === 'string')
+      : undefined,
   });
   return task;
 }
@@ -2245,6 +2756,10 @@ async function handleTasksUpdate(tenantId: string, args: Record<string, unknown>
     supersededBy: args.supersededBy as string | undefined,
     operatorAuthorized: args.operatorAuthorized as boolean | undefined,
     routeExhausted: args.routeExhausted as boolean | undefined,
+    // Empty array is meaningful (clears the graph) — only omit when absent.
+    dependsOn: Array.isArray(args.dependsOn)
+      ? (args.dependsOn as unknown[]).filter((d): d is string => typeof d === 'string')
+      : undefined,
   });
   if (!task) return { error: `Task not found: ${args.taskId}` };
   return task;
@@ -2282,6 +2797,65 @@ async function handleTasksFail(tenantId: string, args: Record<string, unknown>) 
   const task = await failTask(tenantId, { taskId, error });
   if (!task) return { error: `Task not found: ${taskId}` };
   return task;
+}
+
+async function handleTasksDelete(tenantId: string, args: Record<string, unknown>, ctx: ToolContext = SYSTEM_CONTEXT) {
+  const taskId = args.taskId as string | undefined;
+  if (!taskId || typeof taskId !== 'string') return { error: 'taskId is required' };
+  try {
+    const result = await trashTask(tenantId, { taskId, reason: args.reason as string | undefined }, auditActorFromCtx(ctx));
+    if (!result) return { error: `Task not found: ${taskId}` };
+    return { deleted: true, trashId: result.trash.trashId, purgeAfter: result.trash.purgeAfter, task: result.task };
+  } catch (err) {
+    // Working-task refusal (and any store error) surfaces as a structured
+    // error, matching this file's handler convention.
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function handleTasksRestore(tenantId: string, args: Record<string, unknown>, ctx: ToolContext = SYSTEM_CONTEXT) {
+  const trashId = args.trashId as string | undefined;
+  const taskId = args.taskId as string | undefined;
+  if (!trashId && !taskId) return { error: 'trashId or taskId is required' };
+  try {
+    const task = await restoreTask(tenantId, { trashId, taskId }, auditActorFromCtx(ctx));
+    if (!task) return { error: `No trashed task found for ${trashId ?? taskId}` };
+    return { restored: true, task };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function handleTasksBulk(tenantId: string, args: Record<string, unknown>, ctx: ToolContext = SYSTEM_CONTEXT) {
+  const operations = args.operations;
+  if (!Array.isArray(operations) || operations.length === 0) {
+    return { error: 'operations must be a non-empty array' };
+  }
+  // Plan-tier repo hard-cap — mirror handleTasksCreate, evaluated ONCE against
+  // the whole batch's distinct NEW repos (a batch of creates must not sidestep
+  // the cap one op at a time). A cap breach rejects the batch upfront: nothing
+  // is applied, matching the single-create surface's throw-before-write posture.
+  if (!ctx.local) {
+    const newRepos = new Set<string>();
+    for (const op of operations as Array<Record<string, unknown>>) {
+      if (op && op.action === 'create' && typeof op.repo === 'string' && op.repo.trim()) newRepos.add(op.repo.trim());
+    }
+    if (newRepos.size) {
+      const known = await tenantRepos(tenantId);
+      const addedCount = [...newRepos].filter((r) => !known.includes(r)).length;
+      const verdict = verdictFor('repos', ctx.plan ?? 'free', known.length + addedCount);
+      if (!verdict.allowed) throw new EntitlementError(verdict);
+    }
+  }
+  try {
+    return await bulkTaskOperations(tenantId, {
+      operations: operations as BulkTaskOperation[],
+      stopOnError: args.stopOnError === true,
+    });
+  } catch (err) {
+    if (err instanceof BulkValidationError) return { error: err.message };
+    throw err;
+  }
 }
 
 // ── DISTRIBUTED TRACING handlers ──────────────────────────
@@ -2388,6 +2962,46 @@ async function handleArtifactsList(tenantId: string, args: Record<string, unknow
   return { count: artifacts.length, artifacts };
 }
 
+// ── RUNNER JOB HISTORY handlers (task-1873b3be) ───────────
+
+async function handleJobHistoryRecord(tenantId: string, args: Record<string, unknown>) {
+  const repo = args.repo as string | undefined;
+  const taskId = args.taskId as string | undefined;
+  const status = args.status as JobHistoryStatus | undefined;
+  if (!repo || typeof repo !== 'string') return { error: 'repo is required' };
+  if (!taskId || typeof taskId !== 'string') return { error: 'taskId is required' };
+  if (!status || !JOB_HISTORY_STATUSES.includes(status)) {
+    return { error: `status must be one of ${JOB_HISTORY_STATUSES.join('|')}` };
+  }
+  const entry = await recordJobHistory(tenantId, {
+    repo,
+    taskId,
+    status,
+    resultLine: typeof args.resultLine === 'string' ? args.resultLine : undefined,
+    errorExcerpt: typeof args.errorExcerpt === 'string' ? args.errorExcerpt : undefined,
+    exitCode: typeof args.exitCode === 'number' ? args.exitCode : undefined,
+    machine: typeof args.machine === 'string' ? args.machine : undefined,
+    model: typeof args.model === 'string' ? args.model : undefined,
+    logFile: typeof args.logFile === 'string' ? args.logFile : undefined,
+    startedAtMs: typeof args.startedAtMs === 'number' ? args.startedAtMs : undefined,
+    durationSeconds: typeof args.durationSeconds === 'number' ? args.durationSeconds : undefined,
+  });
+  return { recorded: true, entry };
+}
+
+async function handleJobHistorySearch(tenantId: string, args: Record<string, unknown>) {
+  const status = args.status as JobHistoryStatus | undefined;
+  return searchJobHistory(tenantId, {
+    repo: typeof args.repo === 'string' ? args.repo : undefined,
+    taskId: typeof args.taskId === 'string' ? args.taskId : undefined,
+    status: status && JOB_HISTORY_STATUSES.includes(status) ? status : undefined,
+    q: typeof args.q === 'string' ? args.q : undefined,
+    since: typeof args.since === 'number' ? args.since : undefined,
+    until: typeof args.until === 'number' ? args.until : undefined,
+    limit: typeof args.limit === 'number' ? args.limit : undefined,
+  });
+}
+
 // ── RUNNER LEASE handlers (ADR-011 slice 3) ───────────────
 
 async function handleRunnerLeaseAcquire(tenantId: string, args: Record<string, unknown>) {
@@ -2472,8 +3086,12 @@ async function handleReposCardList(tenantId: string) {
 }
 
 async function handlePlanList(tenantId: string, args: Record<string, unknown>) {
-  const days = await listPlan(tenantId, args.repo as string | undefined);
-  return { count: days.length, days };
+  const { days, nextCursor } = await listPlanPage(tenantId, {
+    repo: args.repo as string | undefined,
+    limit: args.limit as number | undefined,
+    cursor: args.cursor as string | undefined,
+  });
+  return { count: days.length, days, ...(nextCursor ? { nextCursor } : {}) };
 }
 
 async function handlePlanSet(tenantId: string, args: Record<string, unknown>) {
@@ -2490,6 +3108,32 @@ async function handlePlanSet(tenantId: string, args: Record<string, unknown>) {
   });
   if (!result) return { error: 'DB not connected — plan not saved' };
   return { saved: true, ...result };
+}
+
+async function handlePlanDelete(tenantId: string, args: Record<string, unknown>, ctx: ToolContext = SYSTEM_CONTEXT) {
+  const repo = args.repo as string | undefined;
+  if (!repo || typeof repo !== 'string') return { error: 'repo is required' };
+  const result = await trashPlanDays(tenantId, { repo, reason: args.reason as string | undefined }, auditActorFromCtx(ctx));
+  if (!result) return { error: `No plan days found for repo: ${repo}` };
+  return { deleted: true, trashId: result.trash.trashId, days: result.dayCount, purgeAfter: result.trash.purgeAfter };
+}
+
+async function handlePlanRestore(tenantId: string, args: Record<string, unknown>, ctx: ToolContext = SYSTEM_CONTEXT) {
+  const trashId = args.trashId as string | undefined;
+  const repo = args.repo as string | undefined;
+  if (!trashId && !repo) return { error: 'trashId or repo is required' };
+  const result = await restorePlan(tenantId, { trashId, repo }, auditActorFromCtx(ctx));
+  if (!result) return { error: `No trashed plan found for ${trashId ?? repo}` };
+  return { restored: result.restoredDays.length > 0, ...result };
+}
+
+async function handleTrashList(tenantId: string, args: Record<string, unknown>) {
+  const entries = await listTrash(tenantId, {
+    kind: args.kind as TrashKind | undefined,
+    repo: args.repo as string | undefined,
+    limit: args.limit as number | undefined,
+  });
+  return { count: entries.length, entries };
 }
 
 // ── HANDOFF handlers ──────────────────────────────────────
@@ -2576,6 +3220,20 @@ async function handleContextBoot(tenantId: string, args: Record<string, unknown>
   // Idempotent + fire-and-forget (ADR-014 posture) — every boot re-fires, only
   // the first stamps the milestone.
   void recordActivation(tenantId, 'first_brain_boot', { repo: bundle.parts.activeProject });
+  // W3.3 live recall telemetry (B-7 logging half): only the lazy `deeper`
+  // search actually surfaces atom-level candidates worth scoring — the tight
+  // brief with no query runs no search and has nothing to log.
+  if (bundle.deeper && bundle.deeper.length > 0) {
+    const refFor = (s: { repo: string; source: string; snippet: string }) =>
+      `${s.repo}:${s.source}:${s.snippet.slice(0, 40)}`;
+    recordRecallEvent({
+      tool: 'context_boot',
+      repo: bundle.parts.activeProject,
+      query: args.query as string | undefined,
+      candidates: bundle.deeper.map(refFor),
+      chosen: bundle.deeper.slice(0, 1).map(refFor),
+    });
+  }
   return bundle;
 }
 
@@ -2588,6 +3246,13 @@ async function handleUserSavings(tenantId: string, args: Record<string, unknown>
 }
 
 async function handleActivationFunnel(tenantId: string, args: Record<string, unknown>) {
+  if (args.dropoff === true) {
+    const days = typeof args.sinceDays === 'number' && args.sinceDays > 0 ? args.sinceDays : undefined;
+    return getFunnelDropoff({
+      granularity: args.cohort === 'week' ? 'week' : 'month',
+      since: days ? new Date(Date.now() - days * 86_400_000) : undefined,
+    });
+  }
   if (args.selfServe === true) {
     return getSelfServeConversion();
   }
@@ -2612,6 +3277,12 @@ function handleSloStatus() {
   // Process-wide, like perf_stats — SLOs are a property of the gateway process.
   // Evaluate current breaches live off the perf meter alongside the config.
   return { ...getSloAlertStatus(), currentBreaches: evaluateBreaches(getPerfStats().tools) };
+}
+
+function handleCanaryStatus() {
+  // Process-wide, like slo_status — the canary probes the gateway process's own
+  // control plane; its synthetic tenants never belong to any real tenant.
+  return { ...getSyntheticCanaryStatus(), latestRun: getLatestCanaryResult(), history: getCanaryHistory() };
 }
 
 async function handleFleetRunStart(tenantId: string, args: Record<string, unknown>) {
@@ -2749,6 +3420,42 @@ async function handleConnectorsSet(tenantId: string, args: Record<string, unknow
     }, auditActorFromCtx(ctx));
     if (!connector) return { error: 'DB not connected — connector not saved' };
     return { saved: true, connector };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+// ── Tenant MCP tool plugins (task-6f9ae8ea, env-gated) ────────────────
+// Registry surface only — plugin DISPATCH lives in mcp/handler.ts (the
+// tools/call fallthrough after a TOOL_DEFINITIONS miss), so a plugin can
+// never shadow a built-in tool. `reservedNames` hands the built-in surface
+// to the validator without a plugin-tools → tools import cycle.
+const BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set(TOOL_DEFINITIONS.map((t) => t.name));
+
+async function handlePluginToolsRegister(tenantId: string, args: Record<string, unknown>, ctx: ToolContext) {
+  try {
+    // Tool arg is `schema` (check_capability_counts.sh derives the shipped
+    // tool count from `inputSchema:` occurrences in this file — a property
+    // literally named inputSchema would inflate it); the store field stays
+    // `inputSchema` to mirror the MCP tools/list shape it feeds.
+    const plugin = await registerPluginTool(tenantId, { ...args, inputSchema: args.schema }, {
+      reservedNames: BUILTIN_TOOL_NAMES,
+      actor: auditActorFromCtx(ctx),
+    });
+    return { saved: true, plugin };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+async function handlePluginToolsList(tenantId: string) {
+  const plugins = await listPluginTools(tenantId);
+  return { count: plugins.length, plugins };
+}
+
+async function handlePluginToolsRemove(tenantId: string, args: Record<string, unknown>, ctx: ToolContext) {
+  try {
+    return await removePluginTool(tenantId, args.name, auditActorFromCtx(ctx));
   } catch (err) {
     return { error: (err as Error).message };
   }
@@ -3002,14 +3709,30 @@ async function handleAgentsInvoke(tenantId: string, args: Record<string, unknown
 
   if (!response) return { error: 'LLM returned no response' };
 
+  // premium=true marks a runner-claimed autonomous agentic session (the
+  // billable unit the pricing page sells — same lane signal as
+  // task-store.ts's product-meter stamping, ADR-014 follow-up 2). Callers
+  // outside the runner (interactive chat) never set this.
+  const premium = !!args.premium;
+
   // Product meter (ADR-014): agent.invoked — the interactive premium surface.
   await recordUsage(tenantId, {
     eventId: `usage-agent-${randomUUID()}`,
     type: 'agent.invoked',
     source: 'gateway',
     repo,
-    metadata: { tool: 'agents_invoke', agent: agentName, model: response.model },
+    metadata: { tool: 'agents_invoke', agent: agentName, model: response.model, ...(premium ? { premium: true } : {}) },
   });
+
+  // Cost meter (this change) — agents_invoke previously never wrote a
+  // BudgetUsage row, so its $ cost was invisible to the budget guard and to
+  // any cost-attribution breakdown. Record it here with the repo/task-type/
+  // premium dimensions the breakdown groups by.
+  await recordBudgetUsage(
+    { systemPrompt: agent.instructions, messages: [{ role: 'user', content: userContent }] },
+    response,
+    { tenantId, agentName, repo, taskType: agent.category, premium },
+  );
 
   return {
     agent: agent.name,
@@ -3255,6 +3978,118 @@ async function handleSchedulesSeed(args: Record<string, unknown>) {
   });
 }
 
+// ── RECURRING RUNNER TASK handlers ────────────────────────
+
+async function handleRecurringTasksList(tenantId: string, args: Record<string, unknown>) {
+  const recurring = await listRecurringTasks(tenantId, {
+    enabled: args.enabled as boolean | undefined,
+    repo: args.repo as string | undefined,
+    limit: args.limit as number | undefined,
+  });
+  return { count: recurring.length, recurring };
+}
+
+async function handleRecurringTasksCreate(tenantId: string, args: Record<string, unknown>) {
+  const name = args.name as string | undefined;
+  const cronExpr = args.cronExpr as string | undefined;
+  const repo = args.repo as string | undefined;
+  const title = args.title as string | undefined;
+
+  if (!name || typeof name !== 'string') return { error: 'name is required' };
+  if (!cronExpr || typeof cronExpr !== 'string') return { error: 'cronExpr is required' };
+  if (!repo || typeof repo !== 'string') return { error: 'repo is required' };
+  if (!title || typeof title !== 'string') return { error: 'title is required' };
+
+  if (!isValidCronExpr(cronExpr)) {
+    return { error: `Invalid cron expression: "${cronExpr}". Use 5-field format (min hour day month dow), e.g. "0 3 * * *".` };
+  }
+  const overlapPolicy = args.overlapPolicy as RecurringOverlapPolicy | undefined;
+  if (overlapPolicy !== undefined && overlapPolicy !== 'skip' && overlapPolicy !== 'stack') {
+    return { error: "overlapPolicy must be 'skip' or 'stack'" };
+  }
+
+  return createRecurringTask(tenantId, {
+    name,
+    cronExpr,
+    repo,
+    title,
+    description: args.description as string | undefined,
+    priority: args.priority as TaskPriority | undefined,
+    assignedAgent: args.assignedAgent as string | undefined,
+    recommendedModel: args.recommendedModel as string | undefined,
+    notes: args.notes as string | undefined,
+    overlapPolicy,
+    enabled: args.enabled as boolean | undefined,
+    nextFireAt: computeNextRun(cronExpr),
+  });
+}
+
+async function handleRecurringTasksUpdate(tenantId: string, args: Record<string, unknown>) {
+  if (!args.recurringId || typeof args.recurringId !== 'string') return { error: 'recurringId is required' };
+  const recurringId = args.recurringId as string;
+  const cronExpr = args.cronExpr as string | undefined;
+
+  if (cronExpr !== undefined && !isValidCronExpr(cronExpr)) {
+    return { error: `Invalid cron expression: "${cronExpr}".` };
+  }
+  const overlapPolicy = args.overlapPolicy as RecurringOverlapPolicy | undefined;
+  if (overlapPolicy !== undefined && overlapPolicy !== 'skip' && overlapPolicy !== 'stack') {
+    return { error: "overlapPolicy must be 'skip' or 'stack'" };
+  }
+
+  const updated = await updateRecurringTask(tenantId, {
+    recurringId,
+    name: args.name as string | undefined,
+    cronExpr,
+    repo: args.repo as string | undefined,
+    title: args.title as string | undefined,
+    description: args.description as string | undefined,
+    priority: args.priority as TaskPriority | undefined,
+    assignedAgent: args.assignedAgent as string | undefined,
+    recommendedModel: args.recommendedModel as string | undefined,
+    notes: args.notes as string | undefined,
+    overlapPolicy,
+    enabled: args.enabled as boolean | undefined,
+    nextFireAt: cronExpr !== undefined ? computeNextRun(cronExpr) : undefined,
+  });
+
+  if (!updated) return { error: `Recurring task not found: ${recurringId}` };
+  return updated;
+}
+
+async function handleRecurringTasksRunNow(tenantId: string, args: Record<string, unknown>) {
+  if (!args.recurringId || typeof args.recurringId !== 'string') return { error: 'recurringId is required' };
+  const recurringId = args.recurringId as string;
+  const rt = await getRecurringTask(tenantId, recurringId);
+  if (!rt) return { error: `Recurring task not found: ${recurringId}` };
+
+  const outcome = await fireRecurringTask(rt, { preserveNextFire: true });
+  const after = await getRecurringTask(tenantId, recurringId);
+  return {
+    content: `Recurring "${rt.name}": ${outcome}${outcome === 'enqueued' && after?.lastTaskId ? ` (${after.lastTaskId})` : ''}`,
+    outcome,
+    recurring: after ?? rt,
+  };
+}
+
+async function handleRecurringTasksDelete(tenantId: string, args: Record<string, unknown>) {
+  if (!args.recurringId || typeof args.recurringId !== 'string') return { error: 'recurringId is required' };
+  const recurringId = args.recurringId as string;
+  const deleted = await deleteRecurringTask(tenantId, recurringId);
+  if (!deleted) return { error: `Recurring task not found: ${recurringId}` };
+  return { deleted: true, recurringId };
+}
+
+async function handleRecurringTasksSweep() {
+  const result = await runRecurringTaskSweep();
+  // Return .content so the schedule dispatcher's summary extraction (kind=tool)
+  // surfaces a readable last-run line in the dashboard instead of raw JSON.
+  return {
+    content: `Recurring sweep: ${result.due} due, ${result.enqueued} enqueued, ${result.skipped} skipped, ${result.failed} failed`,
+    ...result,
+  };
+}
+
 // ── SWEEP handlers ────────────────────────────────────────
 
 async function handleMorningSweep(args: Record<string, unknown>) {
@@ -3316,6 +4151,34 @@ async function handleErasureSweep() {
   };
 }
 
+async function handleCancellationPurgeSweep() {
+  const result = await runCancellationPurgeSweep();
+  // Return .content so the schedule dispatcher's summary extraction (kind=tool)
+  // surfaces a readable last-run line in the dashboard instead of raw JSON.
+  return {
+    content: `Cancellation purge sweep: purged ${result.purged.length}, failed ${result.failed.length}`,
+    purgedCount: result.purged.length,
+    failedCount: result.failed.length,
+    purged: result.purged,
+    failed: result.failed,
+  };
+}
+
+async function handleTenantSuspend(ctx: ToolContext, args: Record<string, unknown>) {
+  const tenantId = typeof args.targetTenantId === 'string' ? args.targetTenantId : '';
+  if (!tenantId) throw new Error('tenant_suspend: targetTenantId is required');
+  const reason = typeof args.reason === 'string' ? args.reason : undefined;
+  const status = await suspendTenant({ tenantId, reason, actorUserId: ctx.userId, actorRole: ctx.role ?? 'operator' });
+  return { content: `Tenant '${tenantId}' suspended`, tenantId, status };
+}
+
+async function handleTenantReactivate(ctx: ToolContext, args: Record<string, unknown>) {
+  const tenantId = typeof args.targetTenantId === 'string' ? args.targetTenantId : '';
+  if (!tenantId) throw new Error('tenant_reactivate: targetTenantId is required');
+  const status = await reactivateTenant({ tenantId, actorUserId: ctx.userId, actorRole: ctx.role ?? 'operator' });
+  return { content: `Tenant '${tenantId}' reactivated`, tenantId, status };
+}
+
 async function handleTaskLeaseReap() {
   const result = await reapStaleLeases();
   // Return .content so the schedule dispatcher's summary extraction (kind=tool)
@@ -3330,6 +4193,10 @@ async function handleTaskLeaseReap() {
 }
 
 // ── BUDGET handlers (read-only) ───────────────────────────
+
+async function handleEntitlementsStatus(tenantId: string, ctx: ToolContext) {
+  return loadEntitlementSnapshot(tenantId, { plan: ctx.plan, local: ctx.local });
+}
 
 async function handleBudgetsStatus(tenantId: string) {
   return getBudgetStatus(tenantId);
@@ -3486,7 +4353,13 @@ function handleProviderHealth(args: Record<string, unknown>) {
   if (provider) {
     return getProviderHealth(provider);
   }
-  return { providers: getAllProviderHealth() };
+  // retryBudget/recentDroppedHops (plan §4a remainder) are chain-wide, not
+  // per-provider, so only surfaced on the "all providers" response.
+  return {
+    providers: getAllProviderHealth(),
+    retryBudget: { maxHops: getConfig().llm.maxFailoverHops ?? null },
+    recentDroppedHops: getRecentDroppedHops(),
+  };
 }
 
 function handleProviderReset(args: Record<string, unknown>) {
@@ -3892,6 +4765,15 @@ function handleBrainManifest(tenantId: string) {
   return brainManifest(brainEnvFor(tenantId));
 }
 
+function handleBrainRecallAnalytics(tenantId: string, args: Record<string, unknown>) {
+  return computeRecallAnalytics({
+    repo: args.repo as string | undefined,
+    topLimit: args.topLimit as number | undefined,
+    deadLimit: args.deadLimit as number | undefined,
+    minDeadAgeDays: args.minDeadAgeDays as number | undefined,
+  }, brainEnvFor(tenantId));
+}
+
 async function handleBrainLookup(tenantId: string, args: Record<string, unknown>) {
   return brainLookup(
     {
@@ -3919,6 +4801,7 @@ function handleBrainCommit(tenantId: string, args: Record<string, unknown>) {
     content: args.content as string,
     topic: args.topic as string | undefined,
     supersedes: args.supersedes as string | undefined,
+    pin: args.pin as boolean | undefined,
     code: hasProvenance ? {
       repo: args.code_repo as string | undefined,
       branch: args.code_branch as string | undefined,
@@ -3934,6 +4817,17 @@ function handleBrainCommit(tenantId: string, args: Record<string, unknown>) {
   return { ...result, deduped: !result.created };
 }
 
+function handleBrainObserve(tenantId: string, args: Record<string, unknown>) {
+  return observeAppend({
+    repo: args.repo as string,
+    session: args.session as string | undefined,
+    tool: args.tool as string,
+    target: args.target as string | undefined,
+    exit: args.exit as 'ok' | 'error' | 'unknown' | undefined,
+    files: args.files as string[] | undefined,
+  }, brainEnvEnsured(tenantId));
+}
+
 function handleBrainStash(tenantId: string, args: Record<string, unknown>) {
   return brainStash({
     slug: args.slug as string,
@@ -3944,6 +4838,14 @@ function handleBrainStash(tenantId: string, args: Record<string, unknown>) {
 
 function handleBrainPop(tenantId: string, args: Record<string, unknown>) {
   return brainPop(args.slug as string | undefined, brainEnvFor(tenantId));
+}
+
+function handleBrainPin(tenantId: string, args: Record<string, unknown>) {
+  return pinAtom(args.ref as string, brainEnvFor(tenantId));
+}
+
+function handleBrainUnpin(tenantId: string, args: Record<string, unknown>) {
+  return unpinAtom(args.ref as string, brainEnvFor(tenantId));
 }
 
 function handleBrainBranch(tenantId: string, args: Record<string, unknown>) {
@@ -3957,12 +4859,14 @@ function handleBrainCheckout(tenantId: string, args: Record<string, unknown>) {
   return { branch: brainCheckout(args.ref as string, brainEnvFor(tenantId)) };
 }
 
-function handleBrainMerge(tenantId: string, args: Record<string, unknown>) {
+async function handleBrainMerge(tenantId: string, args: Record<string, unknown>) {
   const env = brainEnvFor(tenantId);
   const merged = sessionMerge(args.branch as string | undefined, env);
   // Compile-at-write (BRAIN B3): the merge is the write, so regenerate the
   // compiled artifacts on main right here — extractive, zero LLM tokens.
-  const distilled = distillAfterMerge(env);
+  // (W2.3: distillAfterMergeWithDedup falls straight through to the plain
+  // distillAfterMerge when BRAIN_DISTILL_DEDUP is unset — zero extra cost.)
+  const distilled = await distillAfterMergeWithDedup(env);
   // Publish-and-reconcile: instead of a bare push (which another machine's
   // concurrent merge would reject, leaving the two mains diverged forever),
   // reconcileMain fetches origin and — if a second device already pushed —
@@ -4043,13 +4947,27 @@ async function handleBrainSearch(tenantId: string, args: Record<string, unknown>
     since = d;
   }
 
-  return federatedBrainSearch(tenantId, {
+  const result = await federatedBrainSearch(tenantId, {
     query,
     repo: args.repo as string | undefined,
     k: args.k as number | undefined,
     since,
     atomLimit: args.atomLimit as number | undefined,
   }, brainEnvFor(tenantId));
+
+  // W3.3 live recall telemetry (B-7 logging half) — see recall-telemetry.ts.
+  if (result.hits.length > 0) {
+    const refFor = (h: { kind: string; repo: string; path?: string; sessionId?: string; written: string }) =>
+      `${h.kind}:${h.repo}:${h.path ?? h.sessionId ?? h.written}`;
+    recordRecallEvent({
+      tool: 'brain_search',
+      repo: args.repo as string | undefined,
+      query,
+      candidates: result.hits.map(refFor),
+      chosen: result.hits.slice(0, 1).map(refFor),
+    }, brainEnvFor(tenantId));
+  }
+  return result;
 }
 
 // ── entity/temporal layer handlers (BRAIN B10) ────────────────────────────
@@ -4175,6 +5093,39 @@ function handleBrainHostRotate(ctx: ToolContext) {
   return rotateHostedToken(ctx.tenantId, ctx.plan ?? 'free');
 }
 
+// ── Starter-brain pack handlers (brain templates) ──────────────────────────
+// The pack registry is GLOBAL (operator-owned, <myai home>/brain-templates) —
+// publish/list/get run against process.env. Seeding is tenant-confined via
+// brainEnvFor(ctx.tenantId) (ADR-010): a tenant can only seed its OWN store.
+
+function handleBrainTemplatePublish(ctx: ToolContext, args: Record<string, unknown>) {
+  return publishStarterPack(
+    {
+      id: args.id as string,
+      version: args.version as string,
+      title: args.title as string,
+      description: args.description as string | undefined,
+      atoms: args.atoms as StarterPackInput['atoms'],
+    },
+    ctx.userId,
+  );
+}
+
+function handleBrainSeed(tenantId: string, args: Record<string, unknown>) {
+  return seedBrainFromPack(
+    {
+      pack: args.pack as string,
+      version: args.version as string | undefined,
+      force: args.force as boolean | undefined,
+    },
+    brainEnvFor(tenantId),
+  );
+}
+
+function handleBrainSeedStatus(tenantId: string) {
+  return { seeded: seededStarterPacks(brainEnvFor(tenantId)) };
+}
+
 function handleBrainDelta(tenantId: string, args: Record<string, unknown>) {
   const result = brainDelta({
     since: args.since as string | undefined,
@@ -4194,6 +5145,20 @@ function handleBrainDelta(tenantId: string, args: Record<string, unknown>) {
   // Activation funnel: first delta catch-up = the tenant reached "first brain
   // delta" — a returning session got the cheap diff. Idempotent, fire-and-forget.
   void recordActivation(tenantId, 'first_brain_delta', { repo: args.repo as string | undefined });
+  // W3.3 live recall telemetry (B-7 logging half): the delta's served atoms
+  // ARE the refs this recall surfaced — record them so recall-analytics
+  // (most-recalled / staleness / dead-atom detection) sees delta traffic, not
+  // just brain_search/context_boot. Everything served counts as chosen: a
+  // delta has no narrower ranking step. Best-effort, never blocks the delta.
+  if (result.atoms && result.atoms.length > 0) {
+    const paths = result.atoms.map((a) => a.path);
+    recordRecallEvent({
+      tool: 'brain_delta',
+      repo: args.repo as string | undefined,
+      candidates: paths,
+      chosen: paths,
+    }, brainEnvFor(tenantId));
+  }
   return result;
 }
 
@@ -4207,5 +5172,23 @@ function handleMarketplacePublish(tenantId: string, ctx: ToolContext, args: Reco
     // tenant, same "never gated" posture billing.ts/entitlements.ts already
     // apply for that context.
     plan: ctx.local ? undefined : (ctx.plan ?? 'free'),
+  });
+}
+
+function handleMarketplaceSearch(args: Record<string, unknown>) {
+  return searchListings({
+    q: args.q as string | undefined,
+    kind: args.kind as 'agent' | 'skill' | undefined,
+    category: args.category as string | undefined,
+    limit: args.limit as number | undefined,
+  });
+}
+
+function handleMarketplaceInstall(tenantId: string, ctx: ToolContext, args: Record<string, unknown>) {
+  return installListing({
+    tenantId,
+    userId: ctx.userId ?? 'system',
+    slug: args.slug as string,
+    version: args.version as string | undefined,
   });
 }

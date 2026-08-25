@@ -60,7 +60,7 @@ export function UploadContextForm() {
   return (
     <form onSubmit={onSubmit} className="space-y-3" data-testid="context-upload-form">
       <div className="flex flex-wrap items-center gap-3">
-        <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-zinc-800/70 border border-zinc-700 text-zinc-300 hover:bg-zinc-800 cursor-pointer transition-colors">
+        <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-[rgb(var(--bg-hover))]/70 border border-zinc-700 text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--bg-hover))] cursor-pointer transition-colors">
           <span aria-hidden>↑</span> Choose bundle…
           <input
             ref={inputRef}
@@ -71,7 +71,7 @@ export function UploadContextForm() {
             data-testid="context-upload-input"
           />
         </label>
-        {fileName && <span className="text-xs text-zinc-400 font-mono truncate max-w-[16rem]">{fileName}</span>}
+        {fileName && <span className="text-xs text-[rgb(var(--text-secondary))] font-mono truncate max-w-[16rem]">{fileName}</span>}
         <button
           type="submit"
           disabled={state.status === 'uploading'}

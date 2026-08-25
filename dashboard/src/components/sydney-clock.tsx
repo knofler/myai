@@ -14,7 +14,7 @@ export function SydneyClock() {
     return () => clearInterval(id);
   }, []);
   return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-800/80 border border-zinc-700/60 text-xs font-mono text-zinc-300 tabular-nums">
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[rgb(var(--bg-hover))]/80 border border-zinc-700/60 text-xs font-mono text-[rgb(var(--text-primary))] tabular-nums">
       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
       SYD {now ?? '—'}
     </span>

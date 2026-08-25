@@ -40,7 +40,7 @@ export function NotificationBell() {
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="relative flex items-center justify-center w-9 h-9 rounded-lg border border-zinc-800 text-zinc-300 hover:text-teal-300 hover:border-zinc-700 transition-colors active:scale-95"
+        className="relative flex items-center justify-center w-9 h-9 rounded-lg border border-[rgb(var(--border-subtle))] text-[rgb(var(--text-primary))] hover:text-teal-300 hover:border-zinc-700 transition-colors active:scale-95"
       >
         <span className="text-base leading-none">🔔</span>
         {unreadCount > 0 && (
@@ -56,9 +56,9 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-80 max-w-[90vw] z-[60] rounded-xl border border-zinc-800 bg-zinc-900/98 backdrop-blur shadow-2xl overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-            <span className="text-sm font-semibold text-zinc-200">Notifications</span>
+        <div className="absolute right-0 mt-2 w-80 max-w-[90vw] z-[60] rounded-xl border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))]/98 backdrop-blur shadow-2xl overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[rgb(var(--border-subtle))]">
+            <span className="text-sm font-semibold text-[rgb(var(--text-primary))]">Notifications</span>
             {unreadCount > 0 && (
               <button
                 type="button"
@@ -70,21 +70,21 @@ export function NotificationBell() {
             )}
           </div>
 
-          <div className="max-h-96 overflow-y-auto divide-y divide-zinc-800/70">
+          <div className="max-h-96 overflow-y-auto divide-y divide-[rgb(var(--border-subtle))]/70">
             {recent.length === 0 ? (
-              <div className="px-4 py-8 text-center text-xs text-zinc-500">
+              <div className="px-4 py-8 text-center text-xs text-[rgb(var(--text-muted))]">
                 No notifications yet.
               </div>
             ) : (
               recent.map((n) => {
                 const style = LEVEL_STYLE[n.level] ?? LEVEL_STYLE.info;
                 return (
-                  <div key={n.id} className="flex gap-2.5 px-4 py-3 hover:bg-zinc-800/40 transition-colors">
+                  <div key={n.id} className="flex gap-2.5 px-4 py-3 hover:bg-[rgb(var(--bg-hover))]/40 transition-colors">
                     <span className="text-sm leading-5 shrink-0" aria-hidden="true">{style.icon}</span>
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs text-zinc-200 leading-snug">{displayTitle(n)}</p>
+                      <p className="text-xs text-[rgb(var(--text-primary))] leading-snug">{displayTitle(n)}</p>
                       <div className="flex items-center gap-2 mt-1">
-                        <span className="text-[10px] text-zinc-500">{timeAgo(n.sentAt)}</span>
+                        <span className="text-[10px] text-[rgb(var(--text-muted))]">{timeAgo(n.sentAt)}</span>
                         {n.source && (
                           <span className="text-[10px] text-zinc-600 font-mono truncate">· {n.source}</span>
                         )}
@@ -102,7 +102,7 @@ export function NotificationBell() {
           <Link
             href="/notifications"
             onClick={() => setOpen(false)}
-            className="block px-4 py-2.5 text-center text-[11px] text-zinc-400 hover:text-teal-300 border-t border-zinc-800 transition-colors"
+            className="block px-4 py-2.5 text-center text-[11px] text-[rgb(var(--text-secondary))] hover:text-teal-300 border-t border-[rgb(var(--border-subtle))] transition-colors"
           >
             View all notifications →
           </Link>

@@ -66,6 +66,7 @@ export interface GiftCodeView {
   grantPlan?: TenantPlan;
   grantMonths?: number;
   grantCredits?: number;
+  grantDays?: number;
   maxRedemptions: number;
   redemptionCount: number;
   status: GiftCodeStatus;
@@ -83,6 +84,7 @@ function toView(doc: IGiftCode): GiftCodeView {
     grantPlan: doc.grantPlan,
     grantMonths: doc.grantMonths,
     grantCredits: doc.grantCredits,
+    grantDays: doc.grantDays,
     maxRedemptions: doc.maxRedemptions,
     redemptionCount: doc.redemptionCount,
     status: doc.status,
@@ -99,9 +101,10 @@ export interface MintGiftCodeInput {
   createdBy: string;        // operator identity (userId, or a script/ops label)
   actorRole: CtxRole;
   grantType: GiftCodeGrantType;
-  grantPlan?: TenantPlan;   // required for grantType 'plan_months' — solo/team/scale only
+  grantPlan?: TenantPlan;   // required for grantType 'plan_months' | 'trial_days' — solo/team/scale only
   grantMonths?: number;     // required for grantType 'plan_months'
   grantCredits?: number;    // required for grantType 'credits'
+  grantDays?: number;       // required for grantType 'trial_days'
   maxRedemptions?: number;  // default 1 — set higher for a shared partnership code
   expiresInDays?: number;   // omit for a code that never expires
   note?: string;
@@ -127,8 +130,15 @@ export async function mintGiftCode(input: MintGiftCodeInput): Promise<GiftCodeVi
     if (!Number.isFinite(input.grantCredits) || (input.grantCredits as number) <= 0) {
       throw new AuthError('grantCredits must be a positive number', 400, 'BAD_REQUEST');
     }
+  } else if (input.grantType === 'trial_days') {
+    if (!input.grantPlan || !(PAID_PLANS as readonly string[]).includes(input.grantPlan)) {
+      throw new AuthError('grantPlan must be one of: solo, team, scale', 400, 'BAD_REQUEST');
+    }
+    if (!Number.isFinite(input.grantDays) || (input.grantDays as number) <= 0) {
+      throw new AuthError('grantDays must be a positive number', 400, 'BAD_REQUEST');
+    }
   } else {
-    throw new AuthError('grantType must be one of: plan_months, credits', 400, 'BAD_REQUEST');
+    throw new AuthError('grantType must be one of: plan_months, credits, trial_days', 400, 'BAD_REQUEST');
   }
 
   const maxRedemptions = input.maxRedemptions && input.maxRedemptions > 0
@@ -155,9 +165,10 @@ export async function mintGiftCode(input: MintGiftCodeInput): Promise<GiftCodeVi
     codeId: `gift_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`,
     code,
     grantType: input.grantType,
-    grantPlan: input.grantType === 'plan_months' ? input.grantPlan : undefined,
+    grantPlan: input.grantType === 'plan_months' || input.grantType === 'trial_days' ? input.grantPlan : undefined,
     grantMonths: input.grantType === 'plan_months' ? Math.floor(input.grantMonths as number) : undefined,
     grantCredits: input.grantType === 'credits' ? Math.floor(input.grantCredits as number) : undefined,
+    grantDays: input.grantType === 'trial_days' ? Math.floor(input.grantDays as number) : undefined,
     maxRedemptions,
     redemptionCount: 0,
     status: 'active',
@@ -172,7 +183,7 @@ export async function mintGiftCode(input: MintGiftCodeInput): Promise<GiftCodeVi
     actor: { userId: input.createdBy, role: input.actorRole, via: input.actorRole === 'operator' ? 'operator' : 'jwt' },
     action: 'giftcode.mint',
     target: code,
-    detail: { grantType: input.grantType, grantPlan: input.grantPlan, grantMonths: input.grantMonths, grantCredits: input.grantCredits, maxRedemptions },
+    detail: { grantType: input.grantType, grantPlan: input.grantPlan, grantMonths: input.grantMonths, grantCredits: input.grantCredits, grantDays: input.grantDays, maxRedemptions },
   });
   return toView(doc as IGiftCode);
 }
@@ -186,6 +197,7 @@ export interface GiftCodePreview {
   grantPlan?: TenantPlan;
   grantMonths?: number;
   grantCredits?: number;
+  grantDays?: number;
 }
 
 export async function previewGiftCode(rawCode: string): Promise<GiftCodePreview> {
@@ -199,6 +211,7 @@ export async function previewGiftCode(rawCode: string): Promise<GiftCodePreview>
     grantPlan: doc.grantPlan,
     grantMonths: doc.grantMonths,
     grantCredits: doc.grantCredits,
+    grantDays: doc.grantDays,
   };
 }
 
@@ -227,11 +240,14 @@ export interface RedeemGiftCodeResult {
   grantPlan?: TenantPlan;
   grantMonths?: number;
   grantCredits?: number;
-  /** The tenant's resulting plan/period-end (plan_months grants only). */
+  grantDays?: number;
+  /** The tenant's resulting plan/period-end (plan_months + trial_days grants). */
   plan?: TenantPlan;
   currentPeriodEnd?: Date;
   /** The tenant's resulting credit balance (credits grants only). */
   creditBalance?: number;
+  /** trial_days grants only — set to 'trialing' on the tenant, distinct from a paid 'active' grant. */
+  subscriptionStatus?: string;
 }
 
 export async function redeemGiftCode(input: RedeemGiftCodeInput): Promise<RedeemGiftCodeResult> {
@@ -277,6 +293,7 @@ export async function redeemGiftCode(input: RedeemGiftCodeInput): Promise<Redeem
       grantPlan: giftCode.grantPlan,
       grantMonths: giftCode.grantMonths,
       grantCredits: giftCode.grantCredits,
+      grantDays: giftCode.grantDays,
       redeemedBy: input.redeemedBy,
       redeemedAt: new Date(),
     });
@@ -339,6 +356,35 @@ export async function redeemGiftCode(input: RedeemGiftCodeInput): Promise<Redeem
     result.grantMonths = grantMonths;
     result.plan = tenant.plan;
     result.currentPeriodEnd = tenant.currentPeriodEnd;
+  } else if (giftCode.grantType === 'trial_days') {
+    const grantPlan = giftCode.grantPlan as TenantPlan;
+    const grantDays = giftCode.grantDays as number;
+
+    // Same extend-from-later-of-{now, existing period end} posture as
+    // plan_months (stacks with an active subscription/prior grant), but marks
+    // the tenant 'trialing' rather than 'active' — a design-partner trial
+    // reads as a trial in billing UI/entitlement checks, not a paid grant.
+    // Never downgrade a tenant already on an equal-or-higher tier or already
+    // on a currently-active paid subscription.
+    const base = tenant.currentPeriodEnd && tenant.currentPeriodEnd.getTime() > Date.now()
+      ? tenant.currentPeriodEnd
+      : new Date();
+    const extended = new Date(base.getTime() + grantDays * 86_400_000);
+
+    if (planRank(grantPlan) >= planRank(tenant.plan)) {
+      tenant.plan = grantPlan;
+    }
+    tenant.currentPeriodEnd = extended;
+    if (tenant.subscriptionStatus !== 'active') {
+      tenant.subscriptionStatus = 'trialing';
+    }
+    await tenant.save();
+
+    result.grantPlan = grantPlan;
+    result.grantDays = grantDays;
+    result.plan = tenant.plan;
+    result.currentPeriodEnd = tenant.currentPeriodEnd;
+    result.subscriptionStatus = tenant.subscriptionStatus;
   } else {
     const grantCredits = giftCode.grantCredits as number;
     tenant.creditBalance = (tenant.creditBalance ?? 0) + grantCredits;
@@ -359,6 +405,7 @@ export async function redeemGiftCode(input: RedeemGiftCodeInput): Promise<Redeem
       grantPlan: giftCode.grantPlan,
       grantMonths: giftCode.grantMonths,
       grantCredits: giftCode.grantCredits,
+      grantDays: giftCode.grantDays,
     },
   });
 

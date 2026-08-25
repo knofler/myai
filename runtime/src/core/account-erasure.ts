@@ -46,8 +46,10 @@ import {
   WebhookDeliveryModel,
   InboundWebhookDeliveryModel,
   ArtifactModel,
+  RunnerJobHistoryModel,
   MagicLinkModel,
   GiftRedemptionModel,
+  TenantToolPluginModel,
   type IErasureRequest,
   type ErasureRequestStatus,
 } from '../shared/db.js';
@@ -103,7 +105,9 @@ function purgeTargets() {
     ['webhookDeliveries', WebhookDeliveryModel],
     ['inboundWebhookDeliveries', InboundWebhookDeliveryModel],
     ['artifacts', ArtifactModel],
+    ['runnerJobHistory', RunnerJobHistoryModel],
     ['giftRedemptions', GiftRedemptionModel],
+    ['tenantToolPlugins', TenantToolPluginModel],
   ] as const;
 }
 
@@ -233,8 +237,14 @@ export async function cancelErasure(input: CancelErasureInput): Promise<ErasureR
  * a PII-free `status='deleted'` tombstone (kept so the erasure record itself,
  * and any audit trail entry, still resolves to a tenantId). Returns a
  * collection→deleted-count map — the evidence stored on the request.
+ *
+ * Exported so `tenant-lifecycle.ts`'s cancellation-purge sweep (billing
+ * subscription lapse — an operator-side purge, distinct from this
+ * user-initiated right-to-erasure flow per this file's header) reuses the
+ * SAME collection list + tombstone shape rather than re-deriving it —
+ * "what gets wiped when a tenant's data is destroyed" has one definition.
  */
-async function purgeTenantData(tenantId: string): Promise<Record<string, number>> {
+export async function purgeTenantData(tenantId: string): Promise<Record<string, number>> {
   const summary: Record<string, number> = {};
   for (const [label, model] of purgeTargets()) {
     const res = await scopedDeleteMany(model, tenantId);

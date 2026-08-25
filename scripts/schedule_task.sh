@@ -106,18 +106,44 @@ mcp_call() { # $1 tool, $2 args-json
 }
 
 if [ "$ACTION" = "list" ] || [ "$ACTION" = "list-all" ]; then
-  if [ "$ACTION" = "list" ]; then ARGS="{\"repo\":\"$REPO\",\"limit\":200}"; HDR="Queued tasks for '$REPO'";
-  else ARGS='{"limit":500}'; HDR="Full queue"; fi
+  # Query each non-done status server-side rather than pulling one
+  # unfiltered window and filtering out 'done' client-side after
+  # truncation. tasks_list's status filter is exact-match only (no
+  # server-side "not done"), and with thousands of done tasks in the
+  # store, a single unfiltered limit=200/500 query fills entirely with
+  # done rows — silently hiding every pending/working/review/blocked/
+  # paused task. (2026-08-10 incident: 20 freshly queued tasks showed as
+  # only 2 via --list, inviting 18 duplicate re-queues.)
+  OPEN_STATUSES="pending working review blocked paused dead_letter"
+  if [ "$ACTION" = "list" ]; then HDR="Queued tasks for '$REPO'"; LIMIT=200;
+  else HDR="Full queue"; LIMIT=500; fi
   echo "== $HDR =="
-  mcp_call tasks_list "$ARGS" | python3 -c "
+  RESPONSES=()
+  for st in $OPEN_STATUSES; do
+    if [ "$ACTION" = "list" ]; then
+      ARGS="{\"repo\":\"$REPO\",\"status\":\"$st\",\"limit\":$LIMIT}"
+    else
+      ARGS="{\"status\":\"$st\",\"limit\":$LIMIT}"
+    fi
+    RESPONSES+=("$(mcp_call tasks_list "$ARGS")")
+  done
+  python3 -c "
 import sys,json
-d=json.load(sys.stdin); t=json.loads(d['result']['content'][0]['text'])
-t=t if isinstance(t,list) else t.get('tasks',[])
-op=[x for x in t if x.get('status')!='done']
-for x in sorted(op,key=lambda r:(r.get('priority','P9'),r.get('repo',''))):
+tasks={}
+for raw in sys.argv[1:]:
+    d=json.loads(raw); t=json.loads(d['result']['content'][0]['text'])
+    t=t if isinstance(t,list) else t.get('tasks',[])
+    for x in t:
+        tasks[x.get('taskId')]=x
+counts={}
+for x in tasks.values():
+    counts[x.get('status','?')]=counts.get(x.get('status','?'),0)+1
+for x in sorted(tasks.values(),key=lambda r:(r.get('priority','P9'),r.get('repo',''))):
     print(f\"  [{x.get('status'):8}] {x.get('priority')} {x.get('repo'):16} {x.get('title','')[:60]} (model={x.get('recommendedModel') or 'tier-default'})\")
-print(f'  -- {len(op)} open --')
-"
+print(f'  -- {len(tasks)} open --')
+if counts:
+    print('  by status: ' + ', '.join(f'{k}={v}' for k,v in sorted(counts.items())))
+" "${RESPONSES[@]}"
   echo "Dashboard: $DASH/tasks   ·   $DASH/schedule"
   exit 0
 fi

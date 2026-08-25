@@ -1,19 +1,30 @@
 /**
  * Pluggable mail transport (Team tier — password reset et al).
  *
- * Two built-in transports, selected by env at first send:
+ * Built-in transports, selected by env at first send:
+ *  • resend  — HTTP-API provider (api.resend.com style) when RESEND_API_KEY
+ *              is set. The reference implementation of the provider registry;
+ *              SES et al plug in the same way via registerMailProvider().
  *  • smtp    — when SMTP_HOST is set. Zero-dependency SMTP client over
  *              node:net/node:tls: implicit TLS on port 465, STARTTLS upgrade
  *              otherwise (disable with SMTP_STARTTLS=0 for a trusted relay),
- *              AUTH LOGIN when SMTP_USER/SMTP_PASS are set.
+ *              AUTH LOGIN when SMTP_USER/SMTP_PASS are set. (Amazon SES works
+ *              today through its SMTP interface with these vars.)
  *  • console — self-host fallback: the full message (including any action
  *              link) is written to the gateway log, so a single-operator
  *              deployment works with no mail infrastructure at all.
  *
- * Env: SMTP_HOST, SMTP_PORT (default 587; 465 → implicit TLS), SMTP_USER,
+ * Selection: EMAIL_PROVIDER pins one explicitly ('resend' | 'smtp' |
+ * 'console' | anything registered); when unset, auto-detect in that order.
+ * A pinned provider whose env is incomplete (e.g. EMAIL_PROVIDER=resend with
+ * no RESEND_API_KEY) logs an error and falls back to auto-detect rather than
+ * crashing the gateway.
+ *
+ * Env: EMAIL_PROVIDER, RESEND_API_KEY, RESEND_BASE_URL (test override),
+ * SMTP_HOST, SMTP_PORT (default 587; 465 → implicit TLS), SMTP_USER,
  * SMTP_PASS, SMTP_FROM (default MAIL_FROM or myai@localhost), SMTP_STARTTLS.
  *
- * Tests (and future providers — SES, Resend, …) plug in via setMailTransport().
+ * Tests (and one-off custom transports) still plug in via setMailTransport().
  */
 import net from 'node:net';
 import tls from 'node:tls';
@@ -34,9 +45,19 @@ export interface MailMessage {
   replyTo?: string;
 }
 
+/**
+ * What a transport learned about the accepted message. providerMessageId is
+ * the provider's own id (Resend id, SES MessageId, …) — the join key the
+ * delivery log uses to match later bounce/complaint webhooks back to a send.
+ */
+export interface MailSendResult {
+  providerMessageId?: string;
+}
+
 export interface MailTransport {
   name: string;
-  send(msg: MailMessage): Promise<void>;
+  /** Transports without a provider id (console, SMTP, test fakes) may resolve void. */
+  send(msg: MailMessage): Promise<MailSendResult | void>;
 }
 
 // ── Console transport (self-host default) ──────────────────────────────────
@@ -245,7 +266,73 @@ function makeSmtpTransport(cfg: SmtpConfig): MailTransport {
   };
 }
 
-// ── Selection + plug point ──────────────────────────────────────────────────
+// ── Resend transport (HTTP-API provider) ───────────────────────────────────
+
+function defaultFrom(): string {
+  return process.env.SMTP_FROM || process.env.MAIL_FROM || 'myai@localhost';
+}
+
+function makeResendTransport(): MailTransport | null {
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  if (!apiKey) return null;
+  const baseUrl = (process.env.RESEND_BASE_URL || 'https://api.resend.com').replace(/\/$/, '');
+  return {
+    name: 'resend',
+    async send(msg: MailMessage): Promise<MailSendResult> {
+      const res = await fetch(`${baseUrl}/emails`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: msg.from || defaultFrom(),
+          to: [msg.to],
+          subject: msg.subject,
+          text: msg.text,
+          ...(msg.html ? { html: msg.html } : {}),
+          ...(msg.replyTo ? { reply_to: msg.replyTo } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`resend send failed: HTTP ${res.status} ${body.slice(0, 200)}`);
+      }
+      const data = (await res.json().catch(() => ({}))) as { id?: string };
+      log.info({ to: msg.to, subject: msg.subject, id: data.id }, 'mail sent via resend');
+      return { providerMessageId: data.id };
+    },
+  };
+}
+
+// ── Selection + plug points ─────────────────────────────────────────────────
+
+/**
+ * Provider registry: EMAIL_PROVIDER=<name> selects a factory by name. A
+ * factory returns null when its env is incomplete (missing API key, …), which
+ * falls the selection back to auto-detect. registerMailProvider() is how an
+ * out-of-tree provider (SES SigV4, Postmark, …) joins the same env gate.
+ */
+const providerFactories = new Map<string, () => MailTransport | null>([
+  ['resend', makeResendTransport],
+  ['smtp', () => { const cfg = smtpConfigFromEnv(); return cfg ? makeSmtpTransport(cfg) : null; }],
+  ['console', () => consoleTransport],
+]);
+
+export function registerMailProvider(name: string, factory: () => MailTransport | null): void {
+  providerFactories.set(name.toLowerCase(), factory);
+}
+
+function detectTransport(): MailTransport {
+  const pinned = process.env.EMAIL_PROVIDER?.trim().toLowerCase();
+  if (pinned) {
+    const factory = providerFactories.get(pinned);
+    const transport = factory ? factory() : null;
+    if (transport) return transport;
+    log.error(
+      { provider: pinned, known: !!factory },
+      'EMAIL_PROVIDER is set but unusable (unknown name or incomplete env) — falling back to auto-detect',
+    );
+  }
+  return makeResendTransport() ?? (smtpConfigFromEnv() ? makeSmtpTransport(smtpConfigFromEnv()!) : consoleTransport);
+}
 
 let activeTransport: MailTransport | null = null;
 
@@ -256,12 +343,11 @@ export function setMailTransport(transport: MailTransport | null): void {
 
 export function getMailTransport(): MailTransport {
   if (activeTransport) return activeTransport;
-  const smtp = smtpConfigFromEnv();
-  activeTransport = smtp ? makeSmtpTransport(smtp) : consoleTransport;
+  activeTransport = detectTransport();
   log.info({ transport: activeTransport.name }, 'mail transport selected');
   return activeTransport;
 }
 
-export async function sendMail(msg: MailMessage): Promise<void> {
-  await getMailTransport().send(msg);
+export async function sendMail(msg: MailMessage): Promise<MailSendResult> {
+  return (await getMailTransport().send(msg)) ?? {};
 }

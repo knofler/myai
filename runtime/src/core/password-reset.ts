@@ -17,7 +17,7 @@
  */
 import crypto from 'node:crypto';
 import { PasswordResetModel, UserModel, type IPasswordReset, type IUser } from '../shared/db.js';
-import { sendMail } from '../shared/mailer.js';
+import { sendTransactionalEmail } from '../notifications/email-service.js';
 import { AuthError } from './tenant-context.js';
 import { hashPassword, MIN_PASSWORD_LENGTH } from './user-auth.js';
 import { revokeAllSessions } from './user-sessions.js';
@@ -66,17 +66,14 @@ export async function requestPasswordReset(rawEmail: string): Promise<{ ok: true
   });
 
   const link = `${DASHBOARD_BASE_URL}/login?reset=${encodeURIComponent(token)}`;
-  await sendMail({
+  const send = await sendTransactionalEmail({
     to: email,
-    subject: 'Reset your myAI password',
-    text:
-      `Someone (hopefully you) asked to reset the myAI password for ${email}.\n\n` +
-      `Reset it here (link expires in ${RESET_EXPIRES_MINUTES} minutes and works once):\n\n` +
-      `${link}\n\n` +
-      `If you didn't ask for this, ignore this email — your password is unchanged.\n`,
+    template: 'password-reset',
+    tenantId: user.tenantId,
+    data: { email, link, expiresMinutes: RESET_EXPIRES_MINUTES },
   });
 
-  log.info({ email, userId: user.userId }, 'password reset email sent');
+  log.info({ email, userId: user.userId, status: send.status }, 'password reset email sent');
   return { ok: true };
 }
 

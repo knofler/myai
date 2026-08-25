@@ -1,7 +1,7 @@
 const COLORS: Record<string, string> = {
   analysis: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
   content: 'bg-pink-500/10 text-pink-400 border-pink-500/20',
-  core: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20',
+  core: 'bg-zinc-500/10 text-[rgb(var(--text-secondary))] border-zinc-500/20',
   data: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
   dev: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
   devops: 'bg-orange-500/10 text-orange-400 border-orange-500/20',

@@ -165,24 +165,32 @@ function formatBreachMessage(b: SloBreach): string {
 }
 
 async function sendBreachAlert(b: SloBreach): Promise<boolean> {
-  const telegram = getAdapter('telegram');
-  if (!telegram || !telegram.enabled) {
-    log.debug({ tool: b.tool, metric: b.metric }, 'No enabled Telegram adapter — SLO alert not sent');
+  const message = formatBreachMessage(b);
+  // Fan out to every fleet-wide ops channel that's configured — Telegram and
+  // Slack (SLACK_DEFAULT_WEBHOOK) are independent, so one being unset doesn't
+  // block the other. `sent` is true if at least one channel delivered.
+  const telegramSent = await sendBreachAlertVia('telegram', process.env.TELEGRAM_DEFAULT_CHAT, message, b);
+  const slackSent = await sendBreachAlertVia('slack', process.env.SLACK_DEFAULT_WEBHOOK, message, b);
+  return telegramSent || slackSent;
+}
+
+async function sendBreachAlertVia(channel: string, chatId: string | undefined, message: string, b: SloBreach): Promise<boolean> {
+  const adapter = getAdapter(channel);
+  if (!adapter || !adapter.enabled) {
+    log.debug({ tool: b.tool, metric: b.metric, channel }, `No enabled ${channel} adapter — SLO alert not sent`);
     return false;
   }
-
-  const chatId = process.env.TELEGRAM_DEFAULT_CHAT;
   if (!chatId) {
-    log.debug({ tool: b.tool, metric: b.metric }, 'TELEGRAM_DEFAULT_CHAT not set — SLO alert not sent');
+    log.debug({ tool: b.tool, metric: b.metric, channel }, `Default chat/webhook not set for ${channel} — SLO alert not sent`);
     return false;
   }
 
   try {
-    await telegram.send(chatId, formatBreachMessage(b));
-    log.info({ tool: b.tool, metric: b.metric, observed: b.observed, threshold: b.threshold }, 'SLO breach alert sent');
+    await adapter.send(chatId, message);
+    log.info({ tool: b.tool, metric: b.metric, channel, observed: b.observed, threshold: b.threshold }, 'SLO breach alert sent');
     return true;
   } catch (err) {
-    log.error({ tool: b.tool, metric: b.metric, err }, 'Failed to send SLO breach alert');
+    log.error({ tool: b.tool, metric: b.metric, channel, err }, 'Failed to send SLO breach alert');
     return false;
   }
 }

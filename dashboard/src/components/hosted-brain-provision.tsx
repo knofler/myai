@@ -24,7 +24,7 @@ function CopyField({ label, value }: { label: string; value: string }) {
 
   return (
     <div>
-      <p className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">{label}</p>
+      <p className="text-[10px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1">{label}</p>
       <div className="flex items-center gap-2">
         <code className="flex-1 select-all break-all rounded bg-black/50 px-3 py-2 font-mono text-xs text-emerald-200">
           {value}
@@ -91,7 +91,7 @@ export function HostedBrainProvision({ provisioned }: { provisioned: boolean }) 
           <button
             type="button"
             onClick={() => setReveal(null)}
-            className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800"
+            className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-[rgb(var(--text-secondary))] hover:bg-[rgb(var(--bg-hover))]"
           >
             Done
           </button>

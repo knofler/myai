@@ -4,6 +4,18 @@ Measures `recall_session` retrieval quality against a hand-labelled query→sess
 gold set, so **threshold and chunking changes can be measured instead of guessed**
 (RAG Phase B).
 
+A sibling harness in this folder — `brain-search-eval.ts` / `brain-search-dataset.ts`
+/ `run-brain-search-eval.ts` — measures the `brain_search` MCP tool's atom side
+(`searchAtoms`, the deterministic keyword-TF git-brain scan) the same way, against
+a fixture brain written through the real `writeAtom` path. See BRAIN W3.2. Its
+report + regression baseline live under `state/reports/` (project-state
+artifacts, read by future sessions) rather than next to the code:
+
+```bash
+npm run eval:brain-search         # run + write state/reports/brain-search-recall-{benchmark.md,baseline.json}
+npm run eval:brain-search:check   # run + exit 1 on regression vs the committed baseline
+```
+
 ## Run
 
 ```bash

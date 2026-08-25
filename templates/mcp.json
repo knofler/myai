@@ -1,11 +1,8 @@
 {
   "mcpServers": {
     "myai": {
-      "type": "http",
-      "url": "http://localhost:3100/mcp",
-      "headers": {
-        "x-gateway-local-token": "${GATEWAY_LOCAL_TOKEN:-}"
-      }
+      "command": "bash",
+      "args": ["${CLAUDE_PROJECT_DIR}/AI/scripts/lib/mcp_myai_stdio.sh"]
     },
     "context7": {
       "command": "npx",

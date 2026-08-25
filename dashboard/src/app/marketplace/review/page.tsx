@@ -37,18 +37,18 @@ export default function MarketplaceReviewQueuePage() {
             />
             <tbody>
               {entries.map((entry) => (
-                <tr key={`${entry.listing.listingId}::${entry.version.version}`} className="border-b border-zinc-800/60 last:border-0">
+                <tr key={`${entry.listing.listingId}::${entry.version.version}`} className="border-b border-[rgb(var(--border-subtle))]/60 last:border-0">
                   <td className="px-4 py-3">
-                    <div className="text-zinc-200 font-medium">{entry.listing.title}</div>
-                    <div className="text-xs text-zinc-500">{entry.listing.slug}</div>
+                    <div className="text-[rgb(var(--text-primary))] font-medium">{entry.listing.title}</div>
+                    <div className="text-xs text-[rgb(var(--text-muted))]">{entry.listing.slug}</div>
                   </td>
-                  <td className="px-4 py-3 text-zinc-300">
+                  <td className="px-4 py-3 text-[rgb(var(--text-primary))]">
                     {entry.version.version}
                     {entry.priorApproved && (
-                      <div className="text-xs text-zinc-500">resubmission (prior: {entry.priorApproved.version})</div>
+                      <div className="text-xs text-[rgb(var(--text-muted))]">resubmission (prior: {entry.priorApproved.version})</div>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-zinc-500 text-xs">{new Date(entry.version.createdAt).toLocaleString()}</td>
+                  <td className="px-4 py-3 text-[rgb(var(--text-muted))] text-xs">{new Date(entry.version.createdAt).toLocaleString()}</td>
                   <td className="px-4 py-3">
                     {entry.declaredToolsDiff.added.length > 0 ? (
                       <Badge className="bg-amber-500/15 text-amber-400 border-amber-500/40">
@@ -61,7 +61,7 @@ export default function MarketplaceReviewQueuePage() {
                   <td className="px-4 py-3 text-right">
                     <Link
                       href={`/marketplace/review/${entry.listing.listingId}/${encodeURIComponent(entry.version.version)}`}
-                      className="text-xs px-3 py-1.5 rounded-md bg-zinc-800 border border-zinc-700 text-zinc-300 hover:border-emerald-500/40"
+                      className="text-xs px-3 py-1.5 rounded-md bg-[rgb(var(--bg-hover))] border border-zinc-700 text-[rgb(var(--text-primary))] hover:border-emerald-500/40"
                     >
                       Review
                     </Link>

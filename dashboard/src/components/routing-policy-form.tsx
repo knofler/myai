@@ -17,10 +17,10 @@ import {
 } from '@/lib/routing-policy';
 
 const inputCls =
-  'px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-100 placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
+  'px-3 py-2 rounded-lg bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
 
 const TIER_STYLE: Record<string, string> = {
-  budget: 'text-zinc-400',
+  budget: 'text-[rgb(var(--text-secondary))]',
   standard: 'text-emerald-400',
   premium: 'text-blue-300',
   ultra: 'text-purple-300',
@@ -110,10 +110,10 @@ export default function RoutingPolicyForm({
   return (
     <div className="space-y-6">
       {/* ── Enable toggle ─────────────────────────────────────── */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 flex items-center justify-between">
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5 flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-zinc-200">Per-tenant routing policy</h2>
-          <p className="text-xs text-zinc-500 mt-1">
+          <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Per-tenant routing policy</h2>
+          <p className="text-xs text-[rgb(var(--text-muted))] mt-1">
             When enabled, this tenant&apos;s tasks route per the rules below instead of the global gateway config.
           </p>
         </div>
@@ -124,23 +124,23 @@ export default function RoutingPolicyForm({
             onChange={(e) => patch({ enabled: e.target.checked })}
             className="h-4 w-4 accent-teal-600"
           />
-          <span className={`text-xs font-mono ${policy.enabled ? 'text-emerald-400' : 'text-zinc-500'}`}>
+          <span className={`text-xs font-mono ${policy.enabled ? 'text-emerald-400' : 'text-[rgb(var(--text-muted))]'}`}>
             {policy.enabled ? 'ENABLED' : 'DISABLED'}
           </span>
         </label>
       </div>
 
       {/* ── Model routing rules ───────────────────────────────── */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 space-y-4">
-        <h2 className="text-sm font-semibold text-zinc-200">Model routing</h2>
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5 space-y-4">
+        <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Model routing</h2>
         <div>
-          <label htmlFor="default-model" className="block text-xs text-zinc-400 mb-1">Default model</label>
+          <label htmlFor="default-model" className="block text-xs text-[rgb(var(--text-secondary))] mb-1">Default model</label>
           <ModelSelect id="default-model" value={policy.defaultModel} onChange={(v) => patch({ defaultModel: v })} />
           <p className="text-xs text-zinc-600 mt-1">Used for any priority without an explicit override.</p>
         </div>
 
         <div>
-          <div className="text-xs text-zinc-400 mb-2">Per-priority overrides</div>
+          <div className="text-xs text-[rgb(var(--text-secondary))] mb-2">Per-priority overrides</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {PRIORITIES.map((pr) => {
               const val = policy.priorityOverrides[pr] ?? '';
@@ -149,8 +149,8 @@ export default function RoutingPolicyForm({
               return (
                 <div key={pr}>
                   <label htmlFor={`ov-${pr}`} className="flex items-center justify-between text-xs mb-1">
-                    <span className="font-mono text-zinc-300">{pr}</span>
-                    <span className={TIER_STYLE[tier] ?? 'text-zinc-500'}>{tier || '—'}</span>
+                    <span className="font-mono text-[rgb(var(--text-primary))]">{pr}</span>
+                    <span className={TIER_STYLE[tier] ?? 'text-[rgb(var(--text-muted))]'}>{tier || '—'}</span>
                   </label>
                   <ModelSelect id={`ov-${pr}`} value={val} onChange={(v) => setOverride(pr, v)} allowInherit />
                 </div>
@@ -161,15 +161,15 @@ export default function RoutingPolicyForm({
       </div>
 
       {/* ── Budget cap ────────────────────────────────────────── */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 space-y-4">
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5 space-y-4">
         <div className="flex items-baseline justify-between">
-          <h2 className="text-sm font-semibold text-zinc-200">Monthly budget cap</h2>
+          <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Monthly budget cap</h2>
           <span className={`text-xs font-mono px-2 py-0.5 rounded ${style.badge}`}>{style.label}</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <label htmlFor="budget" className="block text-xs text-zinc-400 mb-1">Cap (USD / month)</label>
+            <label htmlFor="budget" className="block text-xs text-[rgb(var(--text-secondary))] mb-1">Cap (USD / month)</label>
             <input
               id="budget"
               type="number"
@@ -182,7 +182,7 @@ export default function RoutingPolicyForm({
             <p className="text-xs text-zinc-600 mt-1">0 = unlimited.</p>
           </div>
           <div>
-            <label htmlFor="soft" className="block text-xs text-zinc-400 mb-1">
+            <label htmlFor="soft" className="block text-xs text-[rgb(var(--text-secondary))] mb-1">
               Soft limit — {(policy.softLimitPct * 100).toFixed(0)}%
             </label>
             <input
@@ -198,7 +198,7 @@ export default function RoutingPolicyForm({
             <p className="text-xs text-zinc-600 mt-1">Token guard downgrades premium/ultra above this.</p>
           </div>
           <div>
-            <label htmlFor="hard" className="block text-xs text-zinc-400 mb-1">
+            <label htmlFor="hard" className="block text-xs text-[rgb(var(--text-secondary))] mb-1">
               Hard limit — {(policy.hardLimitPct * 100).toFixed(0)}%
             </label>
             <input
@@ -218,13 +218,13 @@ export default function RoutingPolicyForm({
         {/* Live budget meter */}
         <div>
           <div className="flex justify-between text-xs mb-1">
-            <span className="text-zinc-400">Month-to-date spend</span>
-            <span className="font-mono text-zinc-300">
+            <span className="text-[rgb(var(--text-secondary))]">Month-to-date spend</span>
+            <span className="font-mono text-[rgb(var(--text-primary))]">
               {fmtUsd(state.spentUsd)}
-              {state.capUsd > 0 && <span className="text-zinc-500"> / {fmtUsd(state.capUsd)} ({state.pct.toFixed(0)}%)</span>}
+              {state.capUsd > 0 && <span className="text-[rgb(var(--text-muted))]"> / {fmtUsd(state.capUsd)} ({state.pct.toFixed(0)}%)</span>}
             </span>
           </div>
-          <div className="relative h-2 bg-zinc-800 rounded-full overflow-hidden">
+          <div className="relative h-2 bg-[rgb(var(--bg-hover))] rounded-full overflow-hidden">
             <div className={`absolute left-0 top-0 h-full ${style.bar}`} style={{ width: `${Math.min(100, state.pct)}%` }} />
             {state.capUsd > 0 && (
               <>

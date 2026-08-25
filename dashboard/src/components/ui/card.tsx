@@ -28,11 +28,11 @@ export function Card({
     amber: 'text-amber-300',
   };
   return (
-    <section className={`gel-surface bg-zinc-900/70 border ${accent ? accentBorder[accent] : 'border-zinc-800'} rounded-xl overflow-hidden ${className}`}>
+    <section className={`gel-surface bg-[rgb(var(--bg-surface))]/70 border ${accent ? accentBorder[accent] : 'border-[rgb(var(--border-subtle))]'} rounded-xl overflow-hidden ${className}`}>
       {(title || meta) && (
-        <div className="px-4 py-3 border-b border-zinc-800/80 flex flex-wrap items-center justify-between gap-2">
-          <h2 className={`text-sm font-semibold ${accent ? accentTitle[accent] : 'text-zinc-200'}`}>{title}</h2>
-          {meta && <span className="text-xs text-zinc-500">{meta}</span>}
+        <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))]/80 flex flex-wrap items-center justify-between gap-2">
+          <h2 className={`text-sm font-semibold ${accent ? accentTitle[accent] : 'text-[rgb(var(--text-primary))]'}`}>{title}</h2>
+          {meta && <span className="text-xs text-[rgb(var(--text-muted))]">{meta}</span>}
         </div>
       )}
       {children}
@@ -46,7 +46,7 @@ const STAT_ACCENTS: Record<string, string> = {
   blue: 'text-blue-400',
   yellow: 'text-yellow-400',
   purple: 'text-purple-300',
-  gray: 'text-zinc-100',
+  gray: 'text-[rgb(var(--text-primary))]',
 };
 
 export function StatCard({
@@ -61,10 +61,10 @@ export function StatCard({
   accent?: keyof typeof STAT_ACCENTS;
 }) {
   return (
-    <div className="gel-surface bg-zinc-900/70 border border-zinc-800 rounded-xl p-4">
-      <p className="text-[11px] text-zinc-500 uppercase tracking-wider">{label}</p>
+    <div className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl p-4">
+      <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider">{label}</p>
       <p className={`text-2xl font-bold mt-1 ${STAT_ACCENTS[accent]}`}>{value}</p>
-      {sub && <p className="text-xs text-zinc-500 mt-1">{sub}</p>}
+      {sub && <p className="text-xs text-[rgb(var(--text-muted))] mt-1">{sub}</p>}
     </div>
   );
 }
@@ -78,7 +78,7 @@ export function EmptyState({ children }: { children: React.ReactNode }) {
 export function THead({ cols }: { cols: { label: string; align?: 'left' | 'right' | 'center'; className?: string }[] }) {
   return (
     <thead>
-      <tr className="text-left text-[11px] text-zinc-500 border-b border-zinc-800 uppercase tracking-wider">
+      <tr className="text-left text-[11px] text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
         {cols.map((c) => (
           <th key={c.label} className={`px-4 py-2.5 font-medium ${c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : ''} ${c.className ?? ''}`}>
             {c.label}

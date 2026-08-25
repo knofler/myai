@@ -13,9 +13,9 @@ export const dynamic = 'force-dynamic';
 export default function GiftCodesView() {
   return (
     <div className="max-w-4xl">
-      <p className="mb-5 text-sm text-zinc-500">
+      <p className="mb-5 text-sm text-[rgb(var(--text-muted))]">
         Mint promo/redeemable subscription codes, review active/redeemed/revoked codes, and revoke a code.
-        Operator-only — requires <code className="bg-zinc-800 px-1 rounded">ADMIN_API_TOKEN</code> configured
+        Operator-only — requires <code className="bg-[rgb(var(--bg-hover))] px-1 rounded">ADMIN_API_TOKEN</code> configured
         on both the dashboard and the gateway.
       </p>
       <GiftCodesPanel />

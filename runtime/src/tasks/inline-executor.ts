@@ -33,7 +33,7 @@
 
 import { getConfig } from '../shared/config.js';
 import { createChildLogger } from '../shared/logger.js';
-import { listTasks, updateTask, type TaskView } from './task-store.js';
+import { listTasks, updateTask, unmetDependencies, type TaskView } from './task-store.js';
 import { recordUsage, usageEventId } from '../shared/usage-store.js';
 
 const log = createChildLogger({ module: 'inline-executor' });
@@ -315,6 +315,14 @@ export async function runInlineCycle(
         break;
       }
       continue;
+    }
+
+    // Task dependency gate (task-cafdd778): the inline lane picks pending
+    // tasks outside claimTask, so it must honor the same DAG ordering — a
+    // task whose upstreams aren't all 'done' is skipped, not executed early.
+    if (task.dependsOn?.length) {
+      const unmet = await unmetDependencies(tenantId, task.dependsOn);
+      if (unmet.length) continue;
     }
 
     const r = await runInlineTask(tenantId, task, exec, nowMs);

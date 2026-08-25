@@ -4,7 +4,7 @@
 const BASE = 'inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border whitespace-nowrap';
 
 export function Badge({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <span className={`${BASE} ${className || 'bg-zinc-700/40 text-zinc-300 border-zinc-600/50'}`}>{children}</span>;
+  return <span className={`${BASE} ${className || 'bg-zinc-700/40 text-[rgb(var(--text-primary))] border-zinc-600/50'}`}>{children}</span>;
 }
 
 /* ── Task priority ─────────────────────────────────────────── */
@@ -13,7 +13,7 @@ const PRIORITY: Record<string, string> = {
   P0: 'bg-red-500/15 text-red-400 border-red-500/30',
   P1: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
   P2: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
-  P3: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30',
+  P3: 'bg-zinc-500/15 text-[rgb(var(--text-secondary))] border-zinc-500/30',
 };
 
 export function PriorityBadge({ priority }: { priority: string }) {
@@ -23,7 +23,7 @@ export function PriorityBadge({ priority }: { priority: string }) {
 /* ── Task status ───────────────────────────────────────────── */
 
 const TASK_STATUS: Record<string, string> = {
-  pending: 'bg-zinc-700/40 text-zinc-300 border-zinc-600/50',
+  pending: 'bg-zinc-700/40 text-[rgb(var(--text-primary))] border-zinc-600/50',
   working: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
   review: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
   done: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
@@ -42,7 +42,7 @@ const MODEL: Record<string, string> = {
   'claude-fable-5': 'bg-purple-500/15 text-purple-300 border-purple-500/40',
   'claude-opus-4-8': 'bg-blue-500/15 text-blue-300 border-blue-500/40',
   'claude-sonnet-4-6': 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
-  'claude-haiku-4-5': 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30',
+  'claude-haiku-4-5': 'bg-zinc-500/15 text-[rgb(var(--text-secondary))] border-zinc-500/30',
   'deepseek-chat': 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
 };
 
@@ -74,7 +74,7 @@ export function RunStatusBadge({ status }: { status?: string }) {
   const cls =
     s === 'success' ? 'text-emerald-400' :
     s === 'error' || s === 'failed' ? 'text-red-400' :
-    'text-zinc-500';
+    'text-[rgb(var(--text-muted))]';
   return <span className={`text-xs ${cls}`}>{s}</span>;
 }
 
@@ -83,7 +83,7 @@ export function RunStatusBadge({ status }: { status?: string }) {
 const PLAN_STATUS: Record<string, string> = {
   enabled: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
   done: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-  disabled: 'bg-zinc-600/20 text-zinc-400 border-zinc-600/30',
+  disabled: 'bg-zinc-600/20 text-[rgb(var(--text-secondary))] border-zinc-600/30',
   blocked: 'bg-red-500/15 text-red-400 border-red-500/30',
 };
 
@@ -132,7 +132,7 @@ export function CircuitBadge({ state }: { state: string }) {
 const SOURCE: Record<string, string> = {
   state: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
   handoff: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
-  archive: 'bg-zinc-600/25 text-zinc-400 border-zinc-600/40',
+  archive: 'bg-zinc-600/25 text-[rgb(var(--text-secondary))] border-zinc-600/40',
   commit: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
   pr: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
   pattern: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
@@ -209,7 +209,7 @@ const RECOMMENDATION: Record<string, string> = {
   increase: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
   decrease: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
   keep: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
-  insufficient_data: 'bg-zinc-600/20 text-zinc-400 border-zinc-600/30',
+  insufficient_data: 'bg-zinc-600/20 text-[rgb(var(--text-secondary))] border-zinc-600/30',
 };
 
 export function RecommendationBadge({ recommendation }: { recommendation: string }) {

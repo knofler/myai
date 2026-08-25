@@ -35,10 +35,10 @@ function deviceLabel(ua?: string): string {
 }
 
 function Th({ children }: { children: React.ReactNode }) {
-  return <th className="text-left font-medium text-zinc-300 px-3 py-2 border-b border-zinc-800 whitespace-nowrap">{children}</th>;
+  return <th className="text-left font-medium text-[rgb(var(--text-primary))] px-3 py-2 border-b border-[rgb(var(--border-subtle))] whitespace-nowrap">{children}</th>;
 }
 function Td({ children }: { children: React.ReactNode }) {
-  return <td className="px-3 py-2 border-b border-zinc-900 text-zinc-400 align-top">{children}</td>;
+  return <td className="px-3 py-2 border-b border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] align-top">{children}</td>;
 }
 
 export default function SessionsManager() {
@@ -77,7 +77,7 @@ export default function SessionsManager() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       if (json.currentRevoked) {
-        window.location.href = '/login';
+        window.location.href = '/operator-login';
         return;
       }
       await load();
@@ -117,7 +117,7 @@ export default function SessionsManager() {
       )}
 
       <div className="flex items-center justify-between">
-        <p className="text-sm text-zinc-500">{sessions.length} active session{sessions.length === 1 ? '' : 's'}</p>
+        <p className="text-sm text-[rgb(var(--text-muted))]">{sessions.length} active session{sessions.length === 1 ? '' : 's'}</p>
         <button
           onClick={() => void revokeAll()}
           disabled={busy || otherCount === 0}
@@ -125,7 +125,7 @@ export default function SessionsManager() {
         >Sign out all other devices</button>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-zinc-800">
+      <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
         <table className="w-full text-sm">
           <thead>
             <tr>
@@ -141,12 +141,12 @@ export default function SessionsManager() {
               sessions.map((s) => (
                 <tr key={s.sessionId}>
                   <Td>
-                    <span className="text-zinc-200">{deviceLabel(s.userAgent)}</span>
+                    <span className="text-[rgb(var(--text-primary))]">{deviceLabel(s.userAgent)}</span>
                     {s.current && (
                       <span className="ml-2 rounded bg-emerald-950/40 px-1.5 py-0.5 text-[10px] uppercase text-emerald-400">this device</span>
                     )}
                   </Td>
-                  <Td><code className="font-mono text-xs text-zinc-300">{s.ip || '—'}</code></Td>
+                  <Td><code className="font-mono text-xs text-[rgb(var(--text-primary))]">{s.ip || '—'}</code></Td>
                   <Td>{fmt(s.lastSeenAt)}</Td>
                   <Td>{fmt(s.createdAt)}</Td>
                   <Td>

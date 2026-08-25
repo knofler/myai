@@ -125,8 +125,8 @@ export default async function ProjectsPage() {
         <Card title="No repos yet">
           <EmptyState>
             No repos registered. Repos appear here once they report an App Directory card
-            (<code className="text-zinc-400">repo_card.sh</code>) or have queued tasks. Group them with
-            <code className="text-zinc-400"> RepoCard.group</code> to form projects.
+            (<code className="text-[rgb(var(--text-secondary))]">repo_card.sh</code>) or have queued tasks. Group them with
+            <code className="text-[rgb(var(--text-secondary))]"> RepoCard.group</code> to form projects.
           </EmptyState>
         </Card>
       ) : (
@@ -148,16 +148,16 @@ export default async function ProjectsPage() {
                   <span className="inline-flex items-center gap-2">
                     <LevelDot level={p.level} />
                     {p.label}
-                    <span className="text-xs font-normal text-zinc-500">· {p.repoCount} repo{p.repoCount === 1 ? '' : 's'}</span>
+                    <span className="text-xs font-normal text-[rgb(var(--text-muted))]">· {p.repoCount} repo{p.repoCount === 1 ? '' : 's'}</span>
                   </span>
                 }
                 meta={`${p.open} open · ${p.counts.review} review · ${p.counts.blocked} blocked`}
               >
                 <div className="p-4">
-                  {p.description && <p className="text-xs text-zinc-500 mb-3">{p.description}</p>}
+                  {p.description && <p className="text-xs text-[rgb(var(--text-muted))] mb-3">{p.description}</p>}
                   <table className="card-table w-full text-sm">
                     <thead>
-                      <tr className="text-left text-[11px] text-zinc-500 border-b border-zinc-800 uppercase tracking-wider">
+                      <tr className="text-left text-[11px] text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
                         <th className="px-2 py-2 font-medium">Repo</th>
                         <th className="px-2 py-2 font-medium text-right">Pending</th>
                         <th className="px-2 py-2 font-medium text-right">Working</th>
@@ -167,28 +167,28 @@ export default async function ProjectsPage() {
                         <th className="px-2 py-2 font-medium">Last ship</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-zinc-800/50">
+                    <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                       {p.repos.map((r) => {
                         const inFlight = inFlightByRepo[r.repo];
                         const lastShip = lastShipByRepo[r.repo];
                         return (
-                          <tr key={r.repo} className="hover:bg-zinc-800/30">
+                          <tr key={r.repo} className="hover:bg-[rgb(var(--bg-hover))]/30">
                             <td className="px-2 py-2">
-                              <a href={`/work?repo=${encodeURIComponent(r.repo)}`} className="inline-flex items-center gap-2 text-zinc-200 hover:text-teal-300">
+                              <a href={`/work?repo=${encodeURIComponent(r.repo)}`} className="inline-flex items-center gap-2 text-[rgb(var(--text-primary))] hover:text-teal-300">
                                 <LevelDot level={r.level} className="w-2 h-2" />
                                 <span className="font-mono text-xs">{r.repo}</span>
                               </a>
                             </td>
-                            <td className="px-2 py-2 text-right text-zinc-300 tabular-nums">{r.counts.pending || <span className="text-zinc-700">·</span>}</td>
+                            <td className="px-2 py-2 text-right text-[rgb(var(--text-primary))] tabular-nums">{r.counts.pending || <span className="text-zinc-700">·</span>}</td>
                             <td className="px-2 py-2 text-right text-blue-400 tabular-nums">{r.counts.working || <span className="text-zinc-700">·</span>}</td>
                             <td className="px-2 py-2 text-right text-purple-400 tabular-nums">{r.counts.review || <span className="text-zinc-700">·</span>}</td>
                             <td className="px-2 py-2 text-right text-red-400 tabular-nums">{r.counts.blocked || <span className="text-zinc-700">·</span>}</td>
-                            <td className="px-2 py-2 text-xs text-zinc-400 whitespace-nowrap">
+                            <td className="px-2 py-2 text-xs text-[rgb(var(--text-secondary))] whitespace-nowrap">
                               {inFlight
                                 ? <>{inFlight.assignedAgent ?? 'agent —'} <span className="text-zinc-600">· {formatDuration(inFlight.startedAt)}</span></>
                                 : <span className="text-zinc-700">—</span>}
                             </td>
-                            <td className="px-2 py-2 text-xs text-zinc-400 whitespace-nowrap">
+                            <td className="px-2 py-2 text-xs text-[rgb(var(--text-secondary))] whitespace-nowrap">
                               {lastShip
                                 ? (
                                   <span className="inline-flex items-center gap-1.5">

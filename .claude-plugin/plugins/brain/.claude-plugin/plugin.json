@@ -1,0 +1,13 @@
+{
+  "name": "myai-brain",
+  "version": "0.7.2",
+  "description": "Git-versioned agent memory for myAI — capture, compress, and recall session context across agents and machines without re-reading state files every boot.",
+  "author": {
+    "name": "knofler",
+    "url": "https://github.com/knofler/myai"
+  },
+  "homepage": "https://github.com/knofler/myai#readme",
+  "repository": "https://github.com/knofler/myai",
+  "license": "MIT",
+  "keywords": ["memory", "brain", "context", "sona", "continuity"]
+}

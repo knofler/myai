@@ -90,7 +90,7 @@ export function WhatsNewWidget() {
         aria-label={`What's new${unread > 0 ? ` (${unread} new)` : ''}`}
         aria-expanded={open}
         onClick={toggle}
-        className="relative flex items-center justify-center w-9 h-9 rounded-lg border border-zinc-800 text-zinc-300 hover:text-teal-300 hover:border-zinc-700 transition-colors active:scale-95"
+        className="relative flex items-center justify-center w-9 h-9 rounded-lg border border-[rgb(var(--border-subtle))] text-[rgb(var(--text-primary))] hover:text-teal-300 hover:border-zinc-700 transition-colors active:scale-95"
       >
         <span className="text-base leading-none">🎁</span>
         {unread > 0 && (
@@ -101,26 +101,26 @@ export function WhatsNewWidget() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-80 max-w-[90vw] z-[60] rounded-xl border border-zinc-800 bg-zinc-900/98 backdrop-blur shadow-2xl overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-            <span className="text-sm font-semibold text-zinc-200">What&rsquo;s new</span>
+        <div className="absolute right-0 mt-2 w-80 max-w-[90vw] z-[60] rounded-xl border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))]/98 backdrop-blur shadow-2xl overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[rgb(var(--border-subtle))]">
+            <span className="text-sm font-semibold text-[rgb(var(--text-primary))]">What&rsquo;s new</span>
           </div>
 
-          <div className="max-h-96 overflow-y-auto divide-y divide-zinc-800/70">
+          <div className="max-h-96 overflow-y-auto divide-y divide-[rgb(var(--border-subtle))]/70">
             {releases.length === 0 ? (
-              <div className="px-4 py-8 text-center text-xs text-zinc-500">
+              <div className="px-4 py-8 text-center text-xs text-[rgb(var(--text-muted))]">
                 No release notes yet.
               </div>
             ) : (
               releases.map((r) => (
-                <div key={r.version} className="px-4 py-3 hover:bg-zinc-800/40 transition-colors">
+                <div key={r.version} className="px-4 py-3 hover:bg-[rgb(var(--bg-hover))]/40 transition-colors">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-zinc-200">v{r.version}</span>
-                    {r.date && <span className="text-[10px] text-zinc-500">{r.date}</span>}
+                    <span className="text-xs font-semibold text-[rgb(var(--text-primary))]">v{r.version}</span>
+                    {r.date && <span className="text-[10px] text-[rgb(var(--text-muted))]">{r.date}</span>}
                   </div>
                   <ul className="mt-1.5 space-y-1">
                     {r.sections.flatMap((s) => s.items).slice(0, 4).map((item, i) => (
-                      <li key={i} className="text-[11px] text-zinc-400 leading-snug line-clamp-2">
+                      <li key={i} className="text-[11px] text-[rgb(var(--text-secondary))] leading-snug line-clamp-2">
                         {item}
                       </li>
                     ))}
@@ -135,7 +135,7 @@ export function WhatsNewWidget() {
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => setOpen(false)}
-            className="block px-4 py-2.5 text-center text-[11px] text-zinc-400 hover:text-teal-300 border-t border-zinc-800 transition-colors"
+            className="block px-4 py-2.5 text-center text-[11px] text-[rgb(var(--text-secondary))] hover:text-teal-300 border-t border-[rgb(var(--border-subtle))] transition-colors"
           >
             Full changelog →
           </Link>

@@ -4,31 +4,31 @@ export default function RootLoading() {
       {/* Header skeleton */}
       <div className="flex items-center justify-between">
         <div>
-          <div className="h-7 w-48 bg-zinc-800 rounded" />
-          <div className="h-4 w-72 bg-zinc-800/60 rounded mt-2" />
+          <div className="h-7 w-48 bg-[rgb(var(--bg-hover))] rounded" />
+          <div className="h-4 w-72 bg-[rgb(var(--bg-hover))]/60 rounded mt-2" />
         </div>
         <div className="flex gap-2">
-          <div className="h-7 w-20 bg-zinc-800 rounded-md" />
-          <div className="h-7 w-20 bg-zinc-800 rounded-md" />
+          <div className="h-7 w-20 bg-[rgb(var(--bg-hover))] rounded-md" />
+          <div className="h-7 w-20 bg-[rgb(var(--bg-hover))] rounded-md" />
         </div>
       </div>
 
       {/* Three-column card skeleton */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="bg-zinc-900/70 border border-zinc-800 rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-zinc-800/80 flex justify-between">
-              <div className="h-4 w-28 bg-zinc-800 rounded" />
-              <div className="h-4 w-16 bg-zinc-800/60 rounded" />
+          <div key={i} className="bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))]/80 flex justify-between">
+              <div className="h-4 w-28 bg-[rgb(var(--bg-hover))] rounded" />
+              <div className="h-4 w-16 bg-[rgb(var(--bg-hover))]/60 rounded" />
             </div>
             <div className="p-4 space-y-3">
               {[1, 2, 3].map((j) => (
                 <div key={j} className="flex justify-between items-center">
                   <div className="space-y-1.5">
-                    <div className="h-4 w-44 bg-zinc-800 rounded" />
-                    <div className="h-3 w-32 bg-zinc-800/60 rounded" />
+                    <div className="h-4 w-44 bg-[rgb(var(--bg-hover))] rounded" />
+                    <div className="h-3 w-32 bg-[rgb(var(--bg-hover))]/60 rounded" />
                   </div>
-                  <div className="h-5 w-16 bg-zinc-800 rounded-full" />
+                  <div className="h-5 w-16 bg-[rgb(var(--bg-hover))] rounded-full" />
                 </div>
               ))}
             </div>

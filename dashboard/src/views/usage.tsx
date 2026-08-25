@@ -163,37 +163,37 @@ export default async function UsagePage() {
       </div>
 
       {!anyData && (
-        <div className="mb-8 bg-zinc-900 border border-zinc-800 rounded-lg p-8 text-center text-sm text-zinc-500">
+        <div className="mb-8 bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-8 text-center text-sm text-[rgb(var(--text-muted))]">
           No product-usage events recorded yet for this tenant. Metering is on by default (set
-          <code className="text-zinc-400"> METERING_ENABLED=false</code> to disable); events are emitted fire-and-forget
+          <code className="text-[rgb(var(--text-secondary))]"> METERING_ENABLED=false</code> to disable); events are emitted fire-and-forget
           from gateway chokepoints — run a task, generate an app, or invoke an agent to populate the meter.
         </div>
       )}
 
       {/* ── By tool (event type) — MTD ─────────────────────────── */}
-      <div className="mb-8 bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-800 flex items-baseline justify-between">
+      <div className="mb-8 bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))] flex items-baseline justify-between">
           <h2 className="text-lg font-semibold">By tool (MTD)</h2>
-          <span className="text-xs text-zinc-500">{byType.length} type(s)</span>
+          <span className="text-xs text-[rgb(var(--text-muted))]">{byType.length} type(s)</span>
         </div>
         {byType.length === 0 ? (
-          <div className="p-8 text-center text-sm text-zinc-500">No events this month.</div>
+          <div className="p-8 text-center text-sm text-[rgb(var(--text-muted))]">No events this month.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="card-table w-full text-sm">
               <thead>
-                <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+                <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
                   <th className="px-4 py-3">Event type</th>
                   <th className="px-4 py-3 text-right">Events</th>
                   <th className="px-4 py-3 text-right">Quantity</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                 {byType.map((row) => (
-                  <tr key={row._id ?? 'unknown'} className="hover:bg-zinc-800/30 transition-colors">
-                    <td className="m-title px-4 py-2.5 text-zinc-300">{labelType(row._id)}</td>
-                    <td data-label="Events" className="px-4 py-2.5 text-right text-zinc-400 font-mono">{numFmt.format(row.events)}</td>
-                    <td data-label="Quantity" className="px-4 py-2.5 text-right text-zinc-200 font-mono font-semibold">{numFmt.format(row.quantity)}</td>
+                  <tr key={row._id ?? 'unknown'} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                    <td className="m-title px-4 py-2.5 text-[rgb(var(--text-primary))]">{labelType(row._id)}</td>
+                    <td data-label="Events" className="px-4 py-2.5 text-right text-[rgb(var(--text-secondary))] font-mono">{numFmt.format(row.events)}</td>
+                    <td data-label="Quantity" className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono font-semibold">{numFmt.format(row.quantity)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -203,31 +203,31 @@ export default async function UsagePage() {
       </div>
 
       {/* ── By member — MTD ────────────────────────────────────── */}
-      <div className="mb-8 bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-800 flex items-baseline justify-between">
+      <div className="mb-8 bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))] flex items-baseline justify-between">
           <h2 className="text-lg font-semibold">By member (MTD)</h2>
-          <span className="text-xs text-zinc-500">{byUserRaw.length} principal(s)</span>
+          <span className="text-xs text-[rgb(var(--text-muted))]">{byUserRaw.length} principal(s)</span>
         </div>
         {byUserRaw.length === 0 ? (
-          <div className="p-8 text-center text-sm text-zinc-500">No events this month.</div>
+          <div className="p-8 text-center text-sm text-[rgb(var(--text-muted))]">No events this month.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="card-table w-full text-sm">
               <thead>
-                <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+                <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
                   <th className="px-4 py-3">Member</th>
                   <th className="px-4 py-3 text-right">Events</th>
                   <th className="px-4 py-3 text-right">Quantity</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                 {byUserRaw.map((row) => (
-                  <tr key={row._id ?? 'system'} className="hover:bg-zinc-800/30 transition-colors">
-                    <td className="m-title px-4 py-2.5 text-zinc-300">
-                      {row._id ? (nameByUser.get(row._id) ?? row._id) : <span className="text-zinc-500 italic">system / unattributed</span>}
+                  <tr key={row._id ?? 'system'} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                    <td className="m-title px-4 py-2.5 text-[rgb(var(--text-primary))]">
+                      {row._id ? (nameByUser.get(row._id) ?? row._id) : <span className="text-[rgb(var(--text-muted))] italic">system / unattributed</span>}
                     </td>
-                    <td data-label="Events" className="px-4 py-2.5 text-right text-zinc-400 font-mono">{numFmt.format(row.events)}</td>
-                    <td data-label="Quantity" className="px-4 py-2.5 text-right text-zinc-200 font-mono font-semibold">{numFmt.format(row.quantity)}</td>
+                    <td data-label="Events" className="px-4 py-2.5 text-right text-[rgb(var(--text-secondary))] font-mono">{numFmt.format(row.events)}</td>
+                    <td data-label="Quantity" className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono font-semibold">{numFmt.format(row.quantity)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -237,7 +237,7 @@ export default async function UsagePage() {
       </div>
 
       {/* ── Daily units (30 days) ──────────────────────────────── */}
-      <div className="mb-8 bg-zinc-900 border border-zinc-800 rounded-lg p-5">
+      <div className="mb-8 bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
         <h2 className="text-lg font-semibold mb-4">Daily units (30 days)</h2>
         <div className="space-y-1">
           {daySeries.map((d) => {
@@ -245,14 +245,14 @@ export default async function UsagePage() {
             const isToday = d._id === dates[dates.length - 1];
             return (
               <div key={d._id} className="flex items-center gap-3 text-xs font-mono">
-                <span className={`w-20 text-right ${isToday ? 'text-teal-400' : 'text-zinc-500'}`}>{d._id.slice(5)}</span>
-                <div className="flex-1 h-4 bg-zinc-950 rounded overflow-hidden relative">
+                <span className={`w-20 text-right ${isToday ? 'text-teal-400' : 'text-[rgb(var(--text-muted))]'}`}>{d._id.slice(5)}</span>
+                <div className="flex-1 h-4 bg-[rgb(var(--bg-page))] rounded overflow-hidden relative">
                   <div
                     className={`absolute left-0 top-0 h-full rounded ${isToday ? 'bg-teal-500/60' : 'bg-zinc-600'}`}
                     style={{ width: `${widthPct}%` }}
                   />
                 </div>
-                <span className={`w-16 text-right ${d.quantity > 0 ? 'text-zinc-300' : 'text-zinc-700'}`}>
+                <span className={`w-16 text-right ${d.quantity > 0 ? 'text-[rgb(var(--text-primary))]' : 'text-zinc-700'}`}>
                   {d.quantity > 0 ? numFmt.format(d.quantity) : '—'}
                 </span>
                 <span className="w-10 text-right text-zinc-600">{d.events > 0 ? `${d.events}` : ''}</span>
@@ -267,26 +267,26 @@ export default async function UsagePage() {
 
       {/* ── By repo — MTD ──────────────────────────────────────── */}
       {byRepo.some(r => r._id) && (
-        <div className="mb-8 bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-          <div className="px-4 py-3 border-b border-zinc-800 flex items-baseline justify-between">
+        <div className="mb-8 bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))] flex items-baseline justify-between">
             <h2 className="text-lg font-semibold">By repo (MTD)</h2>
-            <span className="text-xs text-zinc-500">{byRepo.filter(r => r._id).length} repo(s)</span>
+            <span className="text-xs text-[rgb(var(--text-muted))]">{byRepo.filter(r => r._id).length} repo(s)</span>
           </div>
           <div className="overflow-x-auto">
             <table className="card-table w-full text-sm">
               <thead>
-                <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+                <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
                   <th className="px-4 py-3">Repo</th>
                   <th className="px-4 py-3 text-right">Events</th>
                   <th className="px-4 py-3 text-right">Quantity</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
                 {byRepo.filter(r => r._id).map((row) => (
-                  <tr key={row._id as string} className="hover:bg-zinc-800/30 transition-colors">
-                    <td className="m-title px-4 py-2.5 font-mono text-zinc-300">{row._id}</td>
-                    <td data-label="Events" className="px-4 py-2.5 text-right text-zinc-400 font-mono">{numFmt.format(row.events)}</td>
-                    <td data-label="Quantity" className="px-4 py-2.5 text-right text-zinc-200 font-mono font-semibold">{numFmt.format(row.quantity)}</td>
+                  <tr key={row._id as string} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
+                    <td className="m-title px-4 py-2.5 font-mono text-[rgb(var(--text-primary))]">{row._id}</td>
+                    <td data-label="Events" className="px-4 py-2.5 text-right text-[rgb(var(--text-secondary))] font-mono">{numFmt.format(row.events)}</td>
+                    <td data-label="Quantity" className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono font-semibold">{numFmt.format(row.quantity)}</td>
                   </tr>
                 ))}
               </tbody>

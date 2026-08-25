@@ -36,20 +36,20 @@ function Toast({
     <div
       role="status"
       aria-live="polite"
-      className={`pointer-events-auto w-80 max-w-[90vw] rounded-xl border ${style.accent} bg-zinc-900/95 backdrop-blur shadow-2xl p-3.5 flex gap-2.5 animate-[toast-in_0.2s_ease-out]`}
+      className={`pointer-events-auto w-80 max-w-[90vw] rounded-xl border ${style.accent} bg-[rgb(var(--bg-surface))]/95 backdrop-blur shadow-2xl p-3.5 flex gap-2.5 animate-[toast-in_0.2s_ease-out]`}
     >
       <span className="text-base leading-5 shrink-0" aria-hidden="true">{style.icon}</span>
       <div className="min-w-0 flex-1">
-        <p className="text-xs font-semibold text-zinc-100 leading-snug">{title}</p>
+        <p className="text-xs font-semibold text-[rgb(var(--text-primary))] leading-snug">{title}</p>
         {body && (
-          <p className="text-[11px] text-zinc-400 mt-0.5 leading-snug line-clamp-3">{body}</p>
+          <p className="text-[11px] text-[rgb(var(--text-secondary))] mt-0.5 leading-snug line-clamp-3">{body}</p>
         )}
       </div>
       <button
         type="button"
         aria-label="Dismiss notification"
         onClick={onDismiss}
-        className="text-zinc-500 hover:text-zinc-300 text-sm leading-none shrink-0"
+        className="text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] text-sm leading-none shrink-0"
       >
         ✕
       </button>

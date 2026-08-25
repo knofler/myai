@@ -169,8 +169,8 @@ export function TenantSwitcher() {
   if (!current) {
     return (
       <Link
-        href="/login"
-        className="gel-surface flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg border border-zinc-800 text-sm text-teal-300 hover:text-teal-200 transition-colors"
+        href="/operator-login"
+        className="gel-surface flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-teal-300 hover:text-teal-200 transition-colors"
       >
         <span className="text-xs">→</span> Sign in
       </Link>
@@ -184,14 +184,14 @@ export function TenantSwitcher() {
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="gel-surface flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg border border-zinc-800 text-left hover:border-zinc-700 transition-colors"
+        className="gel-surface flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-left hover:border-zinc-700 transition-colors"
       >
         <span className="gel-brand flex items-center justify-center w-7 h-7 rounded-md text-[11px] font-bold text-teal-200 shrink-0">
           {initials(current.name)}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-xs font-medium text-zinc-200 truncate">{current.name}</span>
-          <span className="block text-[10px] text-zinc-500">{PLAN_LABEL[current.plan] ?? current.plan} plan</span>
+          <span className="block text-xs font-medium text-[rgb(var(--text-primary))] truncate">{current.name}</span>
+          <span className="block text-[10px] text-[rgb(var(--text-muted))]">{PLAN_LABEL[current.plan] ?? current.plan} plan</span>
         </span>
         <span className="text-zinc-600 text-[10px]">{open ? '▾' : '▸'}</span>
       </button>
@@ -199,7 +199,7 @@ export function TenantSwitcher() {
       {open && (
         <div
           role="menu"
-          className="absolute bottom-full left-0 right-0 mb-2 gel-surface bg-zinc-900 border border-zinc-800 rounded-lg p-1.5 shadow-xl z-50"
+          className="absolute bottom-full left-0 right-0 mb-2 gel-surface bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-1.5 shadow-xl z-50"
         >
           {tenants.length > 1 && (
             <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-600">Switch tenant</div>
@@ -215,10 +215,10 @@ export function TenantSwitcher() {
                   setOpen(false);
                 }}
                 className={`flex items-center gap-2.5 w-full px-2 py-1.5 rounded-md text-left text-xs transition-colors ${
-                  active ? 'gel-brand text-teal-200' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                  active ? 'gel-brand text-teal-200' : 'text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--bg-hover))]'
                 }`}
               >
-                <span className="flex items-center justify-center w-5 h-5 rounded text-[9px] font-bold bg-zinc-800 text-zinc-300 shrink-0">
+                <span className="flex items-center justify-center w-5 h-5 rounded text-[9px] font-bold bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-primary))] shrink-0">
                   {initials(t.name)}
                 </span>
                 <span className="min-w-0 flex-1 truncate">{t.name}</span>
@@ -229,7 +229,7 @@ export function TenantSwitcher() {
           {/* ── Members (Team tier) — visible whenever a JWT session exists ── */}
           {members !== null && (
             <>
-              <div className="my-1 border-t border-zinc-800" />
+              <div className="my-1 border-t border-[rgb(var(--border-subtle))]" />
               <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-600">
                 Members ({members.length})
               </div>
@@ -244,10 +244,10 @@ export function TenantSwitcher() {
                   return (
                     <div key={m.userId} className="px-2 py-1 text-xs">
                       <div className="flex items-center gap-2.5">
-                        <span className="flex items-center justify-center w-5 h-5 rounded text-[9px] font-bold bg-zinc-800 text-zinc-300 shrink-0">
+                        <span className="flex items-center justify-center w-5 h-5 rounded text-[9px] font-bold bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-primary))] shrink-0">
                           {initials(m.displayName || m.email)}
                         </span>
-                        <span className="min-w-0 flex-1 truncate text-zinc-400">
+                        <span className="min-w-0 flex-1 truncate text-[rgb(var(--text-secondary))]">
                           {m.displayName || m.email}
                           {m.userId === myUserId && <span className="text-zinc-600"> (you)</span>}
                         </span>
@@ -257,7 +257,7 @@ export function TenantSwitcher() {
                             value={m.role}
                             disabled={roleBusyId === m.userId}
                             onChange={(e) => changeRole(m.userId, e.target.value)}
-                            className="bg-zinc-950 border border-zinc-800 rounded px-1 py-0.5 text-[9px] uppercase tracking-wide text-zinc-300 focus:border-teal-600 outline-none disabled:opacity-40 transition-colors"
+                            className="bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded px-1 py-0.5 text-[9px] uppercase tracking-wide text-[rgb(var(--text-primary))] focus:border-teal-600 outline-none disabled:opacity-40 transition-colors"
                           >
                             {ASSIGNABLE_ROLES.map((r) => (
                               <option key={r} value={r}>
@@ -296,10 +296,10 @@ export function TenantSwitcher() {
                     </button>
                   ) : inviteLink ? (
                     <div className="space-y-1.5">
-                      <p className="text-[10px] text-zinc-500">
+                      <p className="text-[10px] text-[rgb(var(--text-muted))]">
                         Share this link — it expires and only works for the invited email:
                       </p>
-                      <code className="block px-2 py-1 rounded bg-zinc-950 border border-zinc-800 text-[10px] text-teal-300 break-all select-all">
+                      <code className="block px-2 py-1 rounded bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] text-[10px] text-teal-300 break-all select-all">
                         {inviteLink}
                       </code>
                       <div className="flex gap-2">
@@ -314,7 +314,7 @@ export function TenantSwitcher() {
                             setInviteOpen(false);
                             setInviteLink(null);
                           }}
-                          className="px-2 py-1 rounded text-[11px] text-zinc-500 hover:text-zinc-300 transition"
+                          className="px-2 py-1 rounded text-[11px] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
                         >
                           Done
                         </button>
@@ -327,7 +327,7 @@ export function TenantSwitcher() {
                         value={inviteEmail}
                         onChange={(e) => setInviteEmail(e.target.value)}
                         placeholder="teammate@acme.com"
-                        className="w-full px-2 py-1 rounded bg-zinc-950 border border-zinc-800 text-[11px] text-zinc-100 placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors"
+                        className="w-full px-2 py-1 rounded bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] text-[11px] text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors"
                         required
                       />
                       {inviteErr && <p className="text-[10px] text-rose-400">{inviteErr}</p>}
@@ -342,7 +342,7 @@ export function TenantSwitcher() {
                         <button
                           type="button"
                           onClick={() => setInviteOpen(false)}
-                          className="px-2 py-1 rounded text-[11px] text-zinc-500 hover:text-zinc-300 transition"
+                          className="px-2 py-1 rounded text-[11px] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
                         >
                           Cancel
                         </button>
@@ -354,12 +354,12 @@ export function TenantSwitcher() {
             </>
           )}
 
-          <div className="my-1 border-t border-zinc-800" />
+          <div className="my-1 border-t border-[rgb(var(--border-subtle))]" />
           <Link
-            href="/login"
+            href="/operator-login"
             role="menuitem"
             onClick={() => setOpen(false)}
-            className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-left text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+            className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-left text-xs text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--bg-hover))] transition-colors"
           >
             <span className="w-5 text-center text-zinc-600">+</span> Add account
           </Link>
@@ -369,7 +369,7 @@ export function TenantSwitcher() {
               logout(current.tenantId);
               setOpen(false);
             }}
-            className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-left text-xs text-rose-400/80 hover:text-rose-300 hover:bg-zinc-800 transition-colors"
+            className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-left text-xs text-rose-400/80 hover:text-rose-300 hover:bg-[rgb(var(--bg-hover))] transition-colors"
           >
             <span className="w-5 text-center">⏻</span> Sign out
           </button>

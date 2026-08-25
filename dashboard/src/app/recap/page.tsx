@@ -66,7 +66,7 @@ export default async function RecapPage() {
       <div className="mb-8">
         <Card title="Your recap card" meta="Copy it into Slack, X, or a deck" accent="purple">
           <div className="p-5 space-y-4">
-            <div className="rounded-xl overflow-hidden border border-zinc-800 bg-black">
+            <div className="rounded-xl overflow-hidden border border-[rgb(var(--border-subtle))] bg-black">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/recap/card" alt={shareText} className="w-full h-auto" />
             </div>
@@ -76,12 +76,12 @@ export default async function RecapPage() {
                 href="/recap/card"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-sm text-zinc-400 hover:text-zinc-200 underline underline-offset-4"
+                className="text-sm text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] underline underline-offset-4"
               >
                 Open card image ↗
               </a>
             </div>
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-[rgb(var(--text-muted))]">
               Covers {recap.periodStart || '—'} through {recap.periodEnd || '—'}. Tenant-scoped — only your own team&apos;s usage.
             </p>
           </div>
@@ -90,8 +90,8 @@ export default async function RecapPage() {
 
       <p className="text-xs text-zinc-600">
         Engineer-hours saved assumes {recap.hoursPerTask || 0.75}h of manual work per shipped task, plus off-hours runner
-        time worked unattended. See fleet-wide product usage on <a href="/system" className="underline underline-offset-2 hover:text-zinc-400">System → Usage</a>, and
-        cold-start token savings on <a href="/savings" className="underline underline-offset-2 hover:text-zinc-400">Savings</a>.
+        time worked unattended. See fleet-wide product usage on <a href="/system" className="underline underline-offset-2 hover:text-[rgb(var(--text-secondary))]">System → Usage</a>, and
+        cold-start token savings on <a href="/savings" className="underline underline-offset-2 hover:text-[rgb(var(--text-secondary))]">Savings</a>.
       </p>
     </div>
   );

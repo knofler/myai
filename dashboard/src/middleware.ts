@@ -14,6 +14,7 @@
 // local build with the flag accidentally on still never locks you out.
 import { NextResponse, type NextRequest } from 'next/server';
 import { SESSION_COOKIE_NAME } from '@/lib/session-cookie';
+import { OPERATOR_COOKIE, verifyOperatorToken } from '@/lib/operator-auth';
 
 // Always-public prefixes: the auth surface itself, health, and the marketing
 // page must be reachable without a session.
@@ -28,7 +29,12 @@ const PUBLIC_PREFIXES = [
   // Trust pack — a buyer must reach these before creating an account.
   '/privacy',
   '/terms',
+  '/acceptable-use',
   '/security',
+  // Compliance pack — DPA + subprocessor list; procurement/legal reads these
+  // pre-signature, so they must sit outside every wall like the trust pack.
+  '/dpa',
+  '/subprocessors',
   // GTM proof asset (GRAND_PRODUCT_ROADMAP §7.4) — anonymized aggregate stats,
   // never gated behind the login wall.
   '/proof',
@@ -36,6 +42,39 @@ const PUBLIC_PREFIXES = [
   // authors, direct API callers) need the API-key + curl-quickstart docs
   // before they can create an account.
   '/developers',
+  // ── Stays open under the operator gate too (see OPERATOR_PUBLIC below) ──
+  // Portfolio / marketing surface.
+  '/showcase',
+  // The operator sign-in form — must be reachable without a session.
+  '/operator-login',
+];
+
+/**
+ * Paths that remain reachable WITHOUT an operator session.
+ *
+ * Everything not listed here is control-plane surface and requires the operator
+ * login (lib/operator-auth.ts). Keep this list boring and explicit: each entry is
+ * a deliberate decision to expose something to the whole internet.
+ */
+/**
+ * Carve-outs that override OPERATOR_PUBLIC.
+ *
+ * `/api/auth` is public so the login endpoints are reachable — but that prefix
+ * also covers `/api/auth/signup`, i.e. self-service account creation. myAI is a
+ * single-operator control plane, not a product with public registration, so
+ * signup is explicitly closed. (A registration product belongs in its own app on
+ * its own domain, not behind this gate.)
+ */
+const OPERATOR_DENY = ['/api/auth/signup'];
+
+const OPERATOR_PUBLIC = [
+  ...PUBLIC_PREFIXES,
+  // Aggregate, anonymized analytics — public by design (GRAND_PRODUCT §7.4).
+  '/proof',
+  // Signed third-party callbacks. These authenticate themselves via provider
+  // signatures; gating them would silently break billing and Connect payouts.
+  '/api/billing/webhook',
+  '/api/marketplace/connect/webhook',
 ];
 
 // ── Read-only demo gate (GO_LIVE_PLAN P2 item 14, see src/lib/demo.ts) ──
@@ -58,7 +97,7 @@ function isLoopbackHost(host: string | null): boolean {
   );
 }
 
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   // Demo gate first — a read-only demo must stay read-only regardless of any
   // other switch. Loopback is NOT exempt here (unlike the login wall): demo
   // mode exists to protect the shared demo database, not the visitor.
@@ -73,10 +112,42 @@ export function middleware(req: NextRequest) {
     );
   }
 
+  const { pathname } = req.nextUrl;
+
+  // ── Operator gate (GHSA-ffgf-pmmg-cjj5 follow-through) ─────────────────────
+  // The control plane requires the single-operator session. This runs ALWAYS —
+  // not behind REQUIRE_LOGIN — and has no Host-header "loopback" exemption,
+  // because that header is attacker-controlled and inside Docker every request
+  // arrives via the bridge, so `Host: localhost` would have bypassed it from
+  // anywhere on the network.
+  //
+  // FAIL CLOSED: with no MYAI_ADMIN_* configured (the production posture — the
+  // credential lives only in a local gitignored .env) no token can verify, so
+  // every control-plane path is refused for everyone while the public surfaces
+  // above stay open.
+  const operatorDenied = OPERATOR_DENY.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  const operatorPublic =
+    !operatorDenied && OPERATOR_PUBLIC.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  if (!operatorPublic) {
+    const operator = await verifyOperatorToken(req.cookies.get(OPERATOR_COOKIE)?.value);
+    if (!operator) {
+      if (pathname.startsWith('/api/')) {
+        return NextResponse.json({ error: 'operator authentication required' }, { status: 401 });
+      }
+      // MUST be the operator form, not /login. /login is the multi-tenant
+      // sign-in (magic link / signup / reset) and posts to different endpoints
+      // issuing myai_token — operator credentials entered there can never work.
+      const url = req.nextUrl.clone();
+      url.pathname = '/operator-login';
+      url.searchParams.set('next', pathname);
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.next();
+  }
+
   // Master switch — off unless explicitly enabled for a hosted build.
   if (process.env.REQUIRE_LOGIN !== 'true') return NextResponse.next();
 
-  const { pathname } = req.nextUrl;
   if (PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return NextResponse.next();
   }

@@ -17,6 +17,7 @@ import { runMigrations } from '../shared/migration-runner.js';
 import { registerAdapter, getAdapter, stopChannels } from '../channels/registry.js';
 import { TelegramAdapter } from '../channels/telegram.js';
 import { DiscordAdapter } from '../channels/discord.js';
+import { SlackAdapter } from '../channels/slack.js';
 import { startHostControl, stopHostControl } from '../channels/host-control.js';
 import { initProvider } from '../llm/provider.js';
 import { startMcpServer } from '../mcp/handler.js';
@@ -30,14 +31,18 @@ import { seedDefaultSchedules } from '../scheduler/seed-schedules.js';
 import { startHealthAlerts, stopHealthAlerts } from '../monitoring/health-alerter.js';
 import { startSloAlerts, stopSloAlerts } from '../monitoring/slo-alerter.js';
 import { startQueueWaitAlerts, stopQueueWaitAlerts } from '../monitoring/queue-wait-alerter.js';
+import { startSyntheticCanary, stopSyntheticCanary } from '../monitoring/synthetic-canary.js';
 import { startPriorityAgingSweep, stopPriorityAgingSweep } from '../tasks/priority-aging.js';
 import { startSecurityAnomalyAlerts, stopSecurityAnomalyAlerts } from '../monitoring/security-anomaly-alerter.js';
 import { startPoolCapacityAlerts, stopPoolCapacityAlerts } from '../monitoring/pool-capacity-alerter.js';
+import { startAtlasClusterHealthAlerts, stopAtlasClusterHealthAlerts } from '../monitoring/atlas-cluster-health-alerter.js';
 import { startPoolCapacityDriftAlerts, stopPoolCapacityDriftAlerts } from '../monitoring/pool-capacity-drift-alerter.js';
 import { startMongoMirrorAlerts, stopMongoMirrorAlerts } from '../monitoring/mongo-mirror-alerter.js';
+import { startDedicatedPoolAlerts, stopDedicatedPoolAlerts } from '../monitoring/dedicated-pool-alerter.js';
 import { startDockerVmDiskAlerts, stopDockerVmDiskAlerts } from '../monitoring/docker-vm-disk-alerter.js';
 import { startBudgetReconciliation, stopBudgetReconciliation } from '../monitoring/budget-reconciliation.js';
 import { initSentry, flushSentry } from '../monitoring/sentry.js';
+import { logLicenseStatus } from './license.js';
 
 const startTime = Date.now();
 
@@ -49,7 +54,13 @@ export async function bootstrap(configPath?: string): Promise<void> {
   const log = getLogger();
   log.info('Starting myAI gateway...');
 
-  // Error tracking — opt-in via SENTRY_DSN, PII-scrubbed. No-op when unset.
+  // License activation (self-hosted/on-prem, GRAND_PRODUCT Phase 3) + the
+  // AIR_GAPPED promise. Verified fully offline — never blocks boot. Logged
+  // BEFORE initSentry() since it gates whether that call is even attempted.
+  logLicenseStatus();
+
+  // Error tracking — opt-in via SENTRY_DSN, PII-scrubbed. No-op when unset,
+  // and hard-disabled when AIR_GAPPED=true regardless of SENTRY_DSN.
   await initSentry();
 
   // Fail closed: a hard config-validation error (not a warning) means the
@@ -204,10 +215,13 @@ export async function bootstrap(configPath?: string): Promise<void> {
     stopScheduler();
     stopHealthAlerts();
     stopSloAlerts();
+    stopSyntheticCanary();
     stopQueueWaitAlerts();
     stopPoolCapacityAlerts();
+    stopAtlasClusterHealthAlerts();
     stopPoolCapacityDriftAlerts();
     stopMongoMirrorAlerts();
+    stopDedicatedPoolAlerts();
     stopDockerVmDiskAlerts();
     stopPriorityAgingSweep();
     stopSecurityAnomalyAlerts();
@@ -227,9 +241,13 @@ export async function bootstrap(configPath?: string): Promise<void> {
   // Start WebSocket server
   startWsServer();
 
-  // Register messaging channels (Telegram, Discord)
+  // Register messaging channels (Telegram, Discord, Slack)
   registerAdapter(new TelegramAdapter(config.channels.telegram));
   registerAdapter(new DiscordAdapter(config.channels.discord));
+  // Slack has no bot token/gateway — it's a fleet-wide default webhook
+  // (ad-hoc `notifications_send` + SLO alerts) plus per-tenant webhooks
+  // resolved separately by slack-notify.ts for task/plan/runner events.
+  registerAdapter(new SlackAdapter(Boolean(process.env.SLACK_DEFAULT_WEBHOOK)));
 
   // Telegram: use host control (file-based) to decide which machine polls.
   // Only start non-Telegram channels here; Telegram is managed by host-control.
@@ -273,6 +291,18 @@ export async function bootstrap(configPath?: string): Promise<void> {
     log.info('SLO alerts disabled by SLO_ALERTS_DISABLED=1');
   }
 
+  // Synthetic-canary probes — PROACTIVE end-to-end control-plane monitoring
+  // (signup → task dispatch → runner pickup → ship) on a cadence, with
+  // notification-engine + Telegram/Slack alerts on failure or latency
+  // degradation. Distinct from the reactive SLO alerter above (which needs
+  // real traffic to detect a regression); each run creates and fully purges a
+  // synthetic tenant. Disable with SYNTHETIC_CANARY_DISABLED=1.
+  if (process.env.SYNTHETIC_CANARY_DISABLED !== '1') {
+    startSyntheticCanary();
+  } else {
+    log.info('Synthetic canary disabled by SYNTHETIC_CANARY_DISABLED=1');
+  }
+
   // Queue-wait starvation SLO — pre-claim enqueue→claim latency per priority.
   // Alerts when a pending P0/P1 task waits beyond its SLO budget with no
   // runner claiming it. Distinct from age-based priority auto-escalation
@@ -294,6 +324,17 @@ export async function bootstrap(configPath?: string): Promise<void> {
     startPoolCapacityAlerts();
   } else {
     log.info('Pool-capacity alerts disabled by POOL_CAPACITY_ALERTS_DISABLED=1');
+  }
+
+  // Atlas cluster resilience alerts (connections/replication-lag/disk
+  // thresholds + paused<->resumed transitions) for the M0 free-tier cluster.
+  // No-ops until ATLAS_PUBLIC_KEY/ATLAS_PRIVATE_KEY/ATLAS_PROJECT_ID/
+  // ATLAS_CLUSTER_NAME are configured — see atlas-cluster-health-alerter.ts.
+  // Disable with ATLAS_CLUSTER_HEALTH_ALERTS_DISABLED=1.
+  if (process.env.ATLAS_CLUSTER_HEALTH_ALERTS_DISABLED !== '1') {
+    startAtlasClusterHealthAlerts();
+  } else {
+    log.info('Atlas cluster health alerts disabled by ATLAS_CLUSTER_HEALTH_ALERTS_DISABLED=1');
   }
 
   // Pool-capacity ground-truth drift self-check (task-0824a68e) alert bridge
@@ -320,6 +361,18 @@ export async function bootstrap(configPath?: string): Promise<void> {
     startMongoMirrorAlerts();
   } else {
     log.info('Mongo-mirror alerts disabled by MONGO_MIRROR_ALERTS_DISABLED=1');
+  }
+
+  // Dedicated-tier (ADR-030) connection-pool exhaustion ceiling — watches
+  // live `dedicated-db` TenantDbBinding count against the documented
+  // shared-Atlas-cluster connection budget and pushes a Telegram +
+  // dashboard-bell alert before the fleet approaches the ceiling (ADR-030
+  // "Severity flags for implementers", MEDIUM). Disable with
+  // DEDICATED_POOL_ALERTS_DISABLED=1.
+  if (process.env.DEDICATED_POOL_ALERTS_DISABLED !== '1') {
+    startDedicatedPoolAlerts();
+  } else {
+    log.info('Dedicated-pool alerts disabled by DEDICATED_POOL_ALERTS_DISABLED=1');
   }
 
   // Docker VM disk-pressure guard — watches state/docker-vm-disk-status.json

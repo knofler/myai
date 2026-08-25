@@ -111,6 +111,12 @@ services:
       # See gateway ports note — HOST_BIND=127.0.0.1 to lock to this machine.
       - "${HOST_BIND:-0.0.0.0}:3210:3210"
     environment:
+      # Single-operator login (lib/operator-auth.ts). Sourced from AI/.env so the
+      # local dashboard can admit YOU; with these unset the gate fails closed and
+      # nobody — including the operator — can reach the control plane.
+      - MYAI_ADMIN_USER=${MYAI_ADMIN_USER:-}
+      - MYAI_ADMIN_PASSWORD_HASH=${MYAI_ADMIN_PASSWORD_HASH:-}
+      - MYAI_ADMIN_SESSION_SECRET=${MYAI_ADMIN_SESSION_SECRET:-}
       # REQUIRED, same as the gateway — never silently default to local mongo.
       - MONGODB_URI=${MONGODB_URI:?MONGODB_URI is required — set it in AI/.env (Atlas, or an explicit local-mongo URI). Refusing to silently default to local mongo (LL 2026-07-04 gateway split-brain)}
       # /documentation + /showcase read markdown straight off these mounts.

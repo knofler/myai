@@ -53,7 +53,10 @@ if [ -w "$probe" ]; then
   exit 0
 fi
 
-OWNER="$(stat -f '%Su' "$probe" 2>/dev/null || stat -c '%U' "$probe" 2>/dev/null || echo unknown)"
+# GNU-first (AI_RULES §4): BSD-style `stat -f FORMAT` is `--file-system` on
+# Linux (a boolean flag, not "format"), so it succeeds with a mount-point line
+# instead of failing over to the GNU form — the BSD form must never run first.
+OWNER="$(stat -c '%U' "$probe" 2>/dev/null || stat -f '%Su' "$probe" 2>/dev/null || echo unknown)"
 say "npm_prefix_preflight: npm prefix '$PREFIX' is NOT writable by $(whoami) (owned by ${OWNER})."
 say "  'npm install -g' would fail here with EACCES."
 

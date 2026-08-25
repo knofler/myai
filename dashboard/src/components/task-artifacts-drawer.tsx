@@ -53,22 +53,22 @@ export function TaskArtifactsButton({ taskId, title }: { taskId: string; title: 
     <>
       <button
         onClick={openDrawer}
-        className="tap-press text-xs text-zinc-400 hover:text-emerald-400 underline decoration-zinc-700"
+        className="tap-press text-xs text-[rgb(var(--text-secondary))] hover:text-emerald-400 underline decoration-zinc-700"
       >
         Artifacts
       </button>
       <DetailPanel open={open} onClose={() => setOpen(false)} title={title}>
-        {loading && <p className="text-sm text-zinc-500">Loading artifacts…</p>}
+        {loading && <p className="text-sm text-[rgb(var(--text-muted))]">Loading artifacts…</p>}
         {!loading && artifacts?.length === 0 && (
-          <p className="text-sm text-zinc-500">No artifacts captured for this task.</p>
+          <p className="text-sm text-[rgb(var(--text-muted))]">No artifacts captured for this task.</p>
         )}
         {!loading && artifacts && artifacts.length > 0 && (
           <ul className="space-y-2">
             {artifacts.map(a => (
-              <li key={a.artifactId} className="flex items-center justify-between gap-3 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2">
+              <li key={a.artifactId} className="flex items-center justify-between gap-3 bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded-md px-3 py-2">
                 <div className="min-w-0">
-                  <p className="text-sm text-zinc-200 truncate">{a.filename}</p>
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-sm text-[rgb(var(--text-primary))] truncate">{a.filename}</p>
+                  <p className="text-xs text-[rgb(var(--text-muted))]">
                     {KIND_LABEL[a.kind]} · {fmtBytes(a.sizeBytes)}{a.truncated ? ' · truncated' : ''}
                   </p>
                 </div>

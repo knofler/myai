@@ -20,7 +20,7 @@
  */
 import type { TenantPlan } from '../shared/db.js';
 import { nextPlan } from '../core/entitlements.js';
-import { artifactKey, LocalFilesystemArtifactStore, type ArtifactStore } from './artifact-store.js';
+import { artifactKey, resolveArtifactStore, type ArtifactStore } from './artifact-store.js';
 import { listPublishedListingVersionsForTenant } from './listing-version-store.js';
 import { createChildLogger } from '../shared/logger.js';
 
@@ -98,7 +98,7 @@ export function verdictForArtifactUpload(
   return { allowed, plan, capBytes: cap, currentPublishedBytes, newArtifactBytes, upgradeTo, message };
 }
 
-const defaultArtifactStore = new LocalFilesystemArtifactStore();
+const defaultArtifactStore = resolveArtifactStore();
 
 /**
  * Current summed `published/` bytes for a creator tenant, deduplicated by
@@ -125,10 +125,10 @@ export async function currentPublishedBytesForTenant(
  * The gate the creators' upload path (`publish.ts`'s `publishSubmission`,
  * called from the `marketplace_publish` MCP tool) must call before accepting
  * bytes into `staging/` (ADR-029 §6: "enforced server-side, before accepting
- * an upload"). The same check must run again at the `staging → published`
- * promotion step once that's implemented (§6: "in case usage shifted between
- * submission and approval") — that follow-up should call this same function,
- * not a second copy of the comparison.
+ * an upload"). The same check runs again at the `staging → published`
+ * promotion step (`promote.ts`'s `promoteApprovedListingVersion`, §6: "in
+ * case usage shifted between submission and approval") — that caller reuses
+ * this same function, not a second copy of the comparison.
  */
 export async function checkArtifactUploadQuota(
   creatorTenantId: string,

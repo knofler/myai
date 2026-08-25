@@ -14,6 +14,7 @@ import ApiHealthView from '@/views/api-health';
 import RunnerHealthView from '@/views/runner-health';
 import McpToolsView from '@/views/mcp-tools';
 import GiftCodesView from '@/views/gift-codes';
+import FeatureFlagsView from '@/views/feature-flags';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,6 +28,7 @@ const TABS = [
   { id: 'runner', label: 'Runner Health' },
   { id: 'mcp-tools', label: 'MCP Tools' },
   { id: 'gift-codes', label: 'Gift Codes' },
+  { id: 'flags', label: 'Feature Flags' },
 ];
 
 const SUBTITLES: Record<string, string> = {
@@ -39,6 +41,7 @@ const SUBTITLES: Record<string, string> = {
   runner: 'CLI task-runner pulse — last fire, last RESULT per repo, queue depth, and the zero-work stall flag.',
   'mcp-tools': "Admin-only — per-org MCP tool visibility override (OPERATOR_ONLY_TOOLS allow/deny exceptions).",
   'gift-codes': 'Admin-only — mint/list/revoke platform-wide gift/redeemable subscription codes.',
+  flags: 'Admin-only — platform feature flags: global + per-tenant, percentage rollout, kill-switch.',
 };
 
 export default async function SystemPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
@@ -60,6 +63,7 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
         {tab === 'runner' && <RunnerHealthView />}
         {tab === 'mcp-tools' && <McpToolsView />}
         {tab === 'gift-codes' && <GiftCodesView />}
+        {tab === 'flags' && <FeatureFlagsView />}
       </div>
     </div>
   );

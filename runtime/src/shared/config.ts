@@ -53,6 +53,8 @@ const DEFAULTS: GatewayConfig = {
     ollamaModel: 'kimi-k2.6:cloud',
     promptCacheEnabled: true,
     batchEnabled: true,
+    maxFailoverHops: undefined,
+    failoverBackoffEnabled: true,
   },
   channels: {
     telegram: { enabled: false, token: '', allowedChatIds: [] },
@@ -188,6 +190,16 @@ export function loadConfig(configPath?: string): GatewayConfig {
   // Only consulted by `morning_sweep` today; other call sites are unaffected.
   if (process.env.BATCH_ENABLED === 'false' || process.env.BATCH_ENABLED === '0') {
     config.llm.batchEnabled = false;
+  }
+  // Provider failover chain remainder (plan §4a) — explicit retry-budget cap
+  // + inter-hop backoff toggle. Both default to "on" behavior already covered
+  // above (maxFailoverHops undefined = unlimited, failoverBackoffEnabled = true).
+  if (process.env.LLM_MAX_FAILOVER_HOPS) {
+    const n = Number(process.env.LLM_MAX_FAILOVER_HOPS);
+    if (Number.isFinite(n) && n > 0) config.llm.maxFailoverHops = Math.floor(n);
+  }
+  if (process.env.LLM_FAILOVER_BACKOFF_ENABLED === 'false' || process.env.LLM_FAILOVER_BACKOFF_ENABLED === '0') {
+    config.llm.failoverBackoffEnabled = false;
   }
   const hostMachine = process.env.HOST_HOSTNAME || '';
   if (process.env.TELEGRAM_BOT_TOKEN) { config.channels.telegram.token = process.env.TELEGRAM_BOT_TOKEN; config.channels.telegram.enabled = true; }

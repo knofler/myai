@@ -73,10 +73,12 @@ root read-only in `docker-compose.yml`).
 
 ### Runner — `scripts/cli_task_runner.sh` + `scripts/myai_runner.sh`
 
-The runner is not a service — it's a scheduled script (launchd on macOS via
+The runner is a scheduled script, not a daemon (launchd on macOS via
 `scripts/setup_cli_runner_schedule.sh`, systemd/cron on Linux via
 `scripts/setup_cli_runner_linux.sh`, Task Scheduler on Windows via
-`scripts/setup_cli_runner_windows.ps1`). Each tick it:
+`scripts/setup_cli_runner_windows.ps1` — or, for logged-off Windows workers,
+an nssm-supervised Windows Service fire loop via
+`scripts/setup_cli_runner_windows_service.ps1`). Each tick it:
 
 1. Claims the highest-priority pending task from the gateway's task queue
    (atomic claim + lease, `runner-lease-store.ts` / `runner-heartbeat-store.ts`

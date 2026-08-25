@@ -23,20 +23,21 @@ import type { MemoryBundleManifest, MemoryBundleFile, VectorCorpusEntry } from '
 import { indexMasterRepo, indexAllRepos } from '../memory/indexer.js';
 import { listAdapters, getChannelSessionCount } from '../channels/registry.js';
 import { isConfigured as isLlmConfigured } from '../llm/provider.js';
-import { getBudgetStatus, getBudgetBreakdown, getBudgetUsage } from '../llm/budget-stats.js';
+import { getBudgetStatus, getBudgetBreakdown, getBudgetUsage, getCostAttribution } from '../llm/budget-stats.js';
 import { getBudgetCapSuggestions } from '../llm/budget-advisor.js';
 import { getSpendAlertStatus } from '../llm/spend-alert.js';
 import { summarizeUsage, getUsageBreakdown } from '../shared/usage-store.js';
 import { createSchedule, updateSchedule, getSchedule, listSchedules, deleteSchedule } from '../scheduler/schedule-store.js';
 import type { ListSchedulesFilter } from '../scheduler/schedule-store.js';
-import { createTask, updateTask, listTasks, nextTask, countTasks, getTask } from '../tasks/task-store.js';
+import { createTask, updateTask, listTasksPage, nextTask, countTasks, getTask, TaskDependencyError } from '../tasks/task-store.js';
 import type { ListTasksFilter } from '../tasks/task-store.js';
 import { BulkBlockGuardError } from '../tasks/bulk-block-guard.js';
+import { bulkTaskOperations, BulkValidationError } from '../tasks/bulk-operations.js';
 import { taskLogRelay, wrapBackpressureSafe } from '../tasks/task-log-relay.js';
 import type { TaskLogChunk } from '../tasks/task-log-relay.js';
 import { listRepoCards, upsertRepoCard } from '../repos/app-card-store.js';
 import type { RepoCardLevel } from '../repos/app-card-store.js';
-import { listPlan } from '../repos/plan-store.js';
+import { listPlanPage } from '../repos/plan-store.js';
 import { writeHandoff, readHandoff, listLatestHandoffs } from '../repos/handoff-store.js';
 import { computeNextRun, isValidCronExpr } from '../scheduler/scheduler.js';
 import { executeTool } from '../mcp/tools.js';
@@ -49,22 +50,38 @@ import { getLatestHealthCheckResult, getHealthAlertStatus, runHealthCheck } from
 import { getUptimeStats } from '../monitoring/uptime.js';
 import { applyMiddleware } from './middleware.js';
 import { buildOpenApiSpec, docsHtml } from './openapi.js';
+import { buildAsyncApiSpec } from './asyncapi.js';
 import { getSpans, getTraceIds, traceViewerHtml } from '../tracing/tracer.js';
 import { getLogs, getCorrelationIds, type LogService, type LogLevel } from '../monitoring/log-store.js';
 import { handleGitHubWebhook, verifySignature } from '../webhooks/github-handler.js';
 import { resolveGithubWebhookSecret, isDuplicateDelivery } from '../webhooks/inbound-webhook-store.js';
 import { handleConnectIngest } from '../webhooks/connect-handler.js';
 import { signup, login, getCurrentUser, verifyJwt, JWT_EXPIRES_SECONDS } from './user-auth.js';
+import {
+  getLegalDoc,
+  listLegalDocs,
+  getLegalConsentStatus,
+  recordLegalConsent,
+  isConsentRequired as isLegalConsentRequired,
+} from './legal.js';
+import { startImpersonation, endImpersonation } from './impersonation.js';
 import type { JwtPayload } from './user-auth.js';
 import { listUserSessions, revokeSession, revokeAllSessions } from './user-sessions.js';
-import { createInvite, listInvites, revokeInvite, lookupInvite, listMembers, changeMemberRole } from './invites.js';
+import { createInvite, listInvites, revokeInvite, lookupInvite, listMembers, changeMemberRole, setMemberBudgetCap } from './invites.js';
 import { verdictFor, tenantRepos, EntitlementError } from './entitlements.js';
+import { loadEntitlementSnapshot } from './entitlement-service.js';
+import { listFlags, upsertFlag, killFlag, setTenantOverride, deleteFlag, evaluateAllFlags, type FlagState } from './feature-flags.js';
 import { createApiKey, listApiKeys, rotateApiKey as rotateScopedApiKey, revokeApiKey, API_KEY_SCOPES } from './tenant-api-keys.js';
-import { rotateApiKey as rotateTenantBootstrapKey } from './tenant-keys.js';
+import { rotateApiKey as rotateTenantBootstrapKey, provisionTenant } from './tenant-keys.js';
+import { rotateMasterKey } from './tenant-secrets.js';
+import { suspendTenant, reactivateTenant } from './tenant-lifecycle.js';
 import { requestPasswordReset, resetPassword, lookupPasswordReset } from './password-reset.js';
 import { getWhoami } from './whoami.js';
 import { requestMagicLink, consumeMagicLink, lookupMagicLink } from './magic-link.js';
 import { requestAccountUnlock, consumeAccountUnlock, lookupAccountUnlock } from './account-unlock.js';
+import { requestEmailVerification, verifyEmail, lookupEmailVerification } from './email-verification.js';
+import { recordEmailEvent } from '../notifications/email-delivery-log.js';
+import nodeCrypto from 'node:crypto';
 import {
   enrollTotp,
   confirmTotpEnrollment,
@@ -73,16 +90,20 @@ import {
   regenerateRecoveryCodes,
   getTotpStatus,
   setTenantRequire2fa,
+  getTenantRequire2fa,
 } from './totp-mfa.js';
 import { requestErasure, cancelErasure, getErasureStatus } from './account-erasure.js';
 import { mintGiftCode, previewGiftCode, redeemGiftCode, listGiftCodes, revokeGiftCode } from './gift-codes.js';
+import { submitFeedback, listFeedback } from './feedback.js';
+import { getReferralStats, resolveReferralCode } from './referrals.js';
 import {
   getTenantSsoConfig,
   verifyOidcIdToken,
   verifyAndExtractSaml,
   resolveSsoLogin,
 } from './sso.js';
-import { authRateLimit, LOGIN_POLICY, SIGNUP_POLICY, RESET_POLICY, MAGIC_LINK_POLICY, ACCOUNT_UNLOCK_POLICY } from './auth-rate-limit.js';
+import { authRateLimit, ipRateLimit, LOGIN_POLICY, LOGIN_IP_POLICY, SIGNUP_POLICY, RESET_POLICY, RESET_IP_POLICY, MAGIC_LINK_POLICY, ACCOUNT_UNLOCK_POLICY } from './auth-rate-limit.js';
+import { TOTP_VERIFY_IP_POLICY } from './totp.js';
 import { AuthError, type CtxRole } from './tenant-context.js';
 import {
   assertCapability,
@@ -121,12 +142,15 @@ import {
   replayDelivery as replayWebhookDelivery,
 } from '../webhooks/webhook-store.js';
 import { WEBHOOK_EVENTS } from '../webhooks/outbound-events.js';
+import { getLicenseStatus } from './license.js';
+import { TenantModel, type ITenant, type TenantPlan, type TenantStatus } from '../shared/db.js';
 import type { WebhookDeliveryStatus } from '../shared/db.js';
 
 const log = createChildLogger({ module: 'http-server' });
 
 // OpenAPI document is static — build once on first request, reuse thereafter.
 let cachedOpenApiSpec: Record<string, unknown> | undefined;
+let cachedAsyncApiSpec: Record<string, unknown> | undefined;
 
 export function createHttpServer() {
   const app = express();
@@ -181,6 +205,7 @@ export function createHttpServer() {
         tenantName: result.tenantName,
         plan: result.plan,
         role: result.role,
+        trialEndsAt: result.trialEndsAt,
       });
     } catch (err) {
       const e = err instanceof AuthError ? err : new AuthError('signup failed', 500, 'INTERNAL');
@@ -188,7 +213,7 @@ export function createHttpServer() {
     }
   });
 
-  app.post('/api/auth/login', authRateLimit('login', LOGIN_POLICY), async (req: Request, res: Response) => {
+  app.post('/api/auth/login', authRateLimit('login', LOGIN_POLICY, LOGIN_IP_POLICY), async (req: Request, res: Response) => {
     try {
       const result = await login(req.body, deviceFromReq(req));
       // TOTP-enabled account: no cookie yet — the dashboard must complete
@@ -207,6 +232,7 @@ export function createHttpServer() {
       res.json(result);
     } catch (err) {
       const e = err instanceof AuthError ? err : new AuthError('login failed', 500, 'INTERNAL');
+      if (e.retryAfter) res.setHeader('Retry-After', String(e.retryAfter));
       res.status(e.status).json({ error: e.message, code: e.code });
     }
   });
@@ -247,11 +273,11 @@ export function createHttpServer() {
     }
   });
 
-  // No IP-keyed authRateLimit here — the dashboard proxies every tenant's
-  // calls through one source IP (see auth-rate-limit.ts header), which would
-  // throttle all accounts together. checkTotpVerifyRate (totp.ts) inside
-  // verifyTotpLogin is keyed per-userId instead.
-  app.post('/api/auth/totp/verify', async (req: Request, res: Response) => {
+  // IP-keyed layer via middleware (loose — see auth-rate-limit.ts header on
+  // the shared-proxy-IP caveat); the tighter per-userId layer runs inside
+  // verifyTotpLogin (checkTotpVerifyRate, totp.ts) since the pending token
+  // isn't parsed yet at the middleware stage.
+  app.post('/api/auth/totp/verify', ipRateLimit('totp-verify', TOTP_VERIFY_IP_POLICY), async (req: Request, res: Response) => {
     try {
       const b = (req.body ?? {}) as Record<string, unknown>;
       const result = await verifyTotpLogin(String(b.pendingToken ?? ''), String(b.code ?? ''), deviceFromReq(req));
@@ -265,6 +291,7 @@ export function createHttpServer() {
       res.json(result);
     } catch (err) {
       const e = err instanceof AuthError ? err : new AuthError('TOTP verification failed', 500, 'INTERNAL');
+      if (e.retryAfter) res.setHeader('Retry-After', String(e.retryAfter));
       res.status(e.status).json({ error: e.message, code: e.code });
     }
   });
@@ -305,6 +332,18 @@ export function createHttpServer() {
       res.json(result); // show-once, same as confirm
     } catch (err) {
       const e = err instanceof AuthError ? err : new AuthError('recovery code regeneration failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
+  // Read-only: any authenticated member of the tenant can see whether the
+  // policy is on (it affects them), only owner/admin can change it (below).
+  app.get('/api/auth/tenant/2fa-policy', async (req: Request, res: Response) => {
+    try {
+      const payload = jwtFromReq(req);
+      res.json(await getTenantRequire2fa(payload.tid));
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('2FA policy lookup failed', 500, 'INTERNAL');
       res.status(e.status).json({ error: e.message, code: e.code });
     }
   });
@@ -429,12 +468,56 @@ export function createHttpServer() {
     }
   });
 
+  // ── Operator support-login-as-tenant (impersonation) ──────────────────────
+  // START is operator-gated (requireAdmin / x-admin-token — the same posture as
+  // every cross-tenant admin route; the function declaration below is hoisted).
+  // Returns a time-boxed session JWT scoped into the target tenant — read-only
+  // (viewer role + impersonationGuard write-block) unless the body EXPLICITLY
+  // elevates with readOnly:false. Full protocol: core/impersonation.ts.
+
+  app.post('/api/support/impersonate', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      log.warn({ route: '/api/support/impersonate', ip: req.ip }, 'operator impersonation requested');
+      try {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const result = await startImpersonation({
+          tenantId: String(b.tenantId ?? ''),
+          email: typeof b.email === 'string' ? b.email : undefined,
+          reason: String(b.reason ?? ''),
+          minutes: typeof b.minutes === 'number' ? b.minutes : undefined,
+          readOnly: b.readOnly !== false,
+          userAgent: req.header('user-agent'),
+          ip: req.ip || req.socket.remoteAddress,
+        });
+        res.status(201).json(result); // token is show-once — only this response carries it
+      } catch (err) {
+        const e = err instanceof AuthError ? err : new AuthError('impersonation failed', 500, 'INTERNAL');
+        res.status(e.status).json({ error: e.message, code: e.code });
+      }
+    });
+  });
+
+  // END is authenticated by the impersonation session JWT itself (in
+  // REST_EXEMPT like the other /api/auth/* routes) — revokes the session row
+  // so the revocation guard kills the token immediately, and clears the cookie.
+  app.post('/api/auth/impersonation/end', async (req: Request, res: Response) => {
+    try {
+      const payload = jwtFromReq(req);
+      const result = await endImpersonation(payload);
+      res.clearCookie('myai_token', { path: '/' });
+      res.json(result);
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('failed to end impersonation', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
   // ── Password reset (Team tier — forgot-password via email) ───────────────
   // Public + rate-limited like login. `forgot` always answers { ok: true } so
   // the surface never confirms whether an address has an account; the token
   // travels only in the reset email (console transport when SMTP is unset).
 
-  app.post('/api/auth/password/forgot', authRateLimit('reset', RESET_POLICY), async (req: Request, res: Response) => {
+  app.post('/api/auth/password/forgot', authRateLimit('reset', RESET_POLICY, RESET_IP_POLICY), async (req: Request, res: Response) => {
     try {
       res.json(await requestPasswordReset(String((req.body ?? {}).email ?? '')));
     } catch (err) {
@@ -443,7 +526,7 @@ export function createHttpServer() {
     }
   });
 
-  app.post('/api/auth/password/reset', authRateLimit('reset', RESET_POLICY), async (req: Request, res: Response) => {
+  app.post('/api/auth/password/reset', authRateLimit('reset', RESET_POLICY, RESET_IP_POLICY), async (req: Request, res: Response) => {
     try {
       const b = (req.body ?? {}) as Record<string, unknown>;
       res.json(await resetPassword(String(b.token ?? ''), String(b.password ?? '')));
@@ -542,6 +625,125 @@ export function createHttpServer() {
     } catch (err) {
       log.error({ err }, 'account unlock lookup failed');
       res.status(500).json({ error: 'lookup failed', code: 'INTERNAL' });
+    }
+  });
+
+  // ── Legal pack (core/legal.ts — end-user click-wrap, launch-blocking) ──
+  // Versioned-markdown Terms / Privacy / Acceptable Use, plus per-tenant
+  // consent status + re-consent recording. Docs are PUBLIC (a buyer reads them
+  // before creating an account; the dashboard trust pages render them);
+  // consent status/record are JWT-cookie authenticated inside the handler.
+
+  app.get('/api/legal/docs', (_req: Request, res: Response) => {
+    res.json({ docs: listLegalDocs(), consentRequired: isLegalConsentRequired() });
+  });
+
+  app.get('/api/legal/docs/:slug', (req: Request, res: Response) => {
+    try {
+      res.json(getLegalDoc(String(req.params.slug)));
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('legal doc lookup failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
+  app.get('/api/legal/consent', async (req: Request, res: Response) => {
+    try {
+      const payload = jwtFromReq(req);
+      res.json(await getLegalConsentStatus(payload.tid));
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('consent status failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
+  app.post('/api/legal/consent', async (req: Request, res: Response) => {
+    try {
+      const payload = jwtFromReq(req);
+      await recordLegalConsent({
+        tenantId: payload.tid,
+        userId: payload.sub,
+        email: payload.email,
+        source: 'reconsent',
+        ip: deviceFromReq(req).ip,
+      });
+      res.status(201).json(await getLegalConsentStatus(payload.tid));
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('consent record failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
+  // ── Email verification (M2 — confirm the address behind a fresh signup) ──
+  // signup() fires the verification email automatically for every new user
+  // (see user-auth.ts) — `resend` here is the dashboard's unverified-email
+  // banner action, JWT-authenticated so it resends to the CALLER's own
+  // address (no email-enumeration surface needed, unlike forgot-password).
+  // `verify` is public — the token IS the credential, same as reset/unlock.
+
+  app.post('/api/auth/email/resend', authRateLimit('email-verify', RESET_POLICY, RESET_IP_POLICY), async (req: Request, res: Response) => {
+    try {
+      const payload = jwtFromReq(req);
+      res.json(await requestEmailVerification(payload.email));
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('verification resend failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
+  app.post('/api/auth/email/verify', authRateLimit('email-verify', RESET_POLICY, RESET_IP_POLICY), async (req: Request, res: Response) => {
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      res.json(await verifyEmail(String(b.token ?? '')));
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('email verification failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
+  app.get('/api/auth/email/lookup', async (req: Request, res: Response) => {
+    try {
+      const token = typeof req.query.token === 'string' ? req.query.token : '';
+      if (!token) return res.status(400).json({ error: 'token required', code: 'BAD_REQUEST' });
+      res.json(await lookupEmailVerification(token));
+    } catch (err) {
+      log.error({ err }, 'email verification lookup failed');
+      res.status(500).json({ error: 'lookup failed', code: 'INTERNAL' });
+    }
+  });
+
+  // ── Email delivery events (provider webhook → delivery/bounce log) ────────
+  // Ingests normalized bounce/complaint/delivered events into the delivery
+  // log (notifications/email-delivery-log.ts); hard bounces and complaints
+  // auto-suppress the address. Env-gated: without EMAIL_EVENTS_SECRET the
+  // route is 404 (no unauthenticated suppression-injection surface). The
+  // caller is a provider webhook (or a thin per-provider adapter) posting
+  // { type: 'bounce' | 'complaint' | 'delivered', providerMessageId?, email?, hard? }.
+
+  app.post('/api/email/events', async (req: Request, res: Response) => {
+    const secret = process.env.EMAIL_EVENTS_SECRET?.trim();
+    if (!secret) return res.status(404).json({ error: 'not found' });
+    const given = String(req.headers['x-email-events-secret'] ?? '');
+    const a = Buffer.from(given);
+    const b = Buffer.from(secret);
+    if (a.length !== b.length || !nodeCrypto.timingSafeEqual(a, b)) {
+      return res.status(401).json({ error: 'invalid webhook secret', code: 'UNAUTHORIZED' });
+    }
+    try {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const type = String(body.type ?? '');
+      if (type !== 'bounce' && type !== 'complaint' && type !== 'delivered') {
+        return res.status(400).json({ error: "type must be 'bounce' | 'complaint' | 'delivered'", code: 'BAD_REQUEST' });
+      }
+      const providerMessageId = typeof body.providerMessageId === 'string' ? body.providerMessageId : undefined;
+      const email = typeof body.email === 'string' ? body.email : undefined;
+      if (!providerMessageId && !email) {
+        return res.status(400).json({ error: 'providerMessageId or email required', code: 'BAD_REQUEST' });
+      }
+      res.json(await recordEmailEvent({ type, providerMessageId, email, hard: body.hard !== false }));
+    } catch (err) {
+      log.error({ err }, 'email event ingest failed');
+      res.status(500).json({ error: 'event ingest failed', code: 'INTERNAL' });
     }
   });
 
@@ -725,7 +927,10 @@ export function createHttpServer() {
   app.get('/api/auth/members', async (req: Request, res: Response) => {
     try {
       const payload = jwtFromReq(req);
-      const members = await listMembers(payload.tid);
+      // Team-tier per-member budget scoping (task-82854b12) — surface each
+      // capped member's cap + current-period usage on the member list so an
+      // owner can see spend against the ceiling without a separate lookup.
+      const members = await listMembers(payload.tid, { includeBudget: true });
       res.json({ count: members.length, members });
     } catch (err) {
       const e = err instanceof AuthError ? err : new AuthError('failed to list members', 500, 'INTERNAL');
@@ -758,6 +963,36 @@ export function createHttpServer() {
       res.json({ member });
     } catch (err) {
       const e = err instanceof AuthError ? err : new AuthError('role change failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
+  // Set (or clear) a member's per-member budget cap — Team-tier day-7 gap
+  // close (task-82854b12), nesting the existing per-tenant cost-aware budget
+  // cap (llm/budget-guard.ts) down to an individual member. Hard `members`-
+  // capability gate (owner/admin), same convention as .../members/role. A
+  // field omitted from the body clears that dimension's ceiling — the caller
+  // sends the full desired cap, not a partial patch (see setMemberBudgetCap).
+  app.post('/api/auth/members/budget-cap', async (req: Request, res: Response) => {
+    try {
+      const payload = jwtFromReq(req);
+      requireMembersHard(payload);
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const targetUserId = String(b.userId ?? '');
+      if (!targetUserId) return res.status(400).json({ error: 'userId required', code: 'BAD_REQUEST' });
+      const toNum = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined);
+      const member = await setMemberBudgetCap({
+        tenantId: payload.tid,
+        actorUserId: payload.sub,
+        actorRole: payload.role,
+        targetUserId,
+        monthlyHardCapUsd: toNum(b.monthlyHardCapUsd),
+        dailyCapUsd: toNum(b.dailyCapUsd),
+        offHoursMinutesCapPerMonth: toNum(b.offHoursMinutesCapPerMonth),
+      });
+      res.json({ member });
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('budget cap update failed', 500, 'INTERNAL');
       res.status(e.status).json({ error: e.message, code: e.code });
     }
   });
@@ -839,6 +1074,7 @@ export function createHttpServer() {
           grantPlan: b.grantPlan as never,
           grantMonths: typeof b.grantMonths === 'number' ? b.grantMonths : undefined,
           grantCredits: typeof b.grantCredits === 'number' ? b.grantCredits : undefined,
+          grantDays: typeof b.grantDays === 'number' ? b.grantDays : undefined,
           maxRedemptions: typeof b.maxRedemptions === 'number' ? b.maxRedemptions : undefined,
           expiresInDays: typeof b.expiresInDays === 'number' ? b.expiresInDays : undefined,
           note: typeof b.note === 'string' ? b.note : undefined,
@@ -907,6 +1143,71 @@ export function createHttpServer() {
       const e = err instanceof AuthError ? err : new AuthError('redeem failed', 500, 'INTERNAL');
       res.status(e.status).json({ error: e.message, code: e.code });
     }
+  });
+
+  // ── Referral program (GROWTH — core/referrals.ts) ───────────────────────
+  // JWT-authenticated: any member may fetch their own tenant's referral code
+  // + stats (read-only, no capability gate — it's the tenant's own link, same
+  // posture as /api/auth/me). The code lookup preview is public-by-code (any
+  // authenticated user, before they commit to signing up under it) — mirrors
+  // GET /api/gift-codes/preview.
+
+  app.get('/api/referrals/me', async (req: Request, res: Response) => {
+    try {
+      const payload = jwtFromReq(req);
+      res.json(await getReferralStats(payload.tid));
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('referral stats lookup failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
+  app.get('/api/referrals/preview', async (req: Request, res: Response) => {
+    try {
+      const code = typeof req.query.code === 'string' ? req.query.code : '';
+      if (!code) return res.status(400).json({ error: 'code required', code: 'BAD_REQUEST' });
+      const resolved = await resolveReferralCode(code);
+      res.json({ valid: !!resolved });
+    } catch (err) {
+      log.error({ err }, 'referral preview failed');
+      res.status(500).json({ error: 'internal_error', code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  // ── In-app feedback capture (design-partner program, core/feedback.ts) ────
+  // Any signed-in member can submit feedback for their own tenant — no
+  // capability gate beyond "authenticated", same posture as /api/auth/me.
+  // List is operator-only (x-admin-token), same pattern as gift-codes.
+
+  app.post('/api/feedback', async (req: Request, res: Response) => {
+    try {
+      const payload = jwtFromReq(req);
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const result = await submitFeedback({
+        tenantId: payload.tid,
+        userId: payload.sub,
+        email: payload.email,
+        category: typeof b.category === 'string' ? b.category : undefined,
+        message: String(b.message ?? ''),
+        page: typeof b.page === 'string' ? b.page.slice(0, 200) : undefined,
+      });
+      res.status(201).json(result);
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('feedback submission failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
+  app.get('/api/feedback', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const items = await listFeedback();
+        res.json({ count: items.length, items });
+      } catch (err) {
+        log.error({ err }, 'feedback list failed');
+        res.status(500).json({ error: 'internal_error', code: 'INTERNAL_ERROR' });
+      }
+    });
   });
 
   // ── Scoped per-tenant API keys (ADR-010 §3.6 — create/list/rotate/revoke) ──
@@ -1017,6 +1318,39 @@ export function createHttpServer() {
       res.json({ tenantId, rawKey }); // new raw key is show-once
     } catch (err) {
       const e = err instanceof AuthError ? err : new AuthError('tenant key rotate failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
+  // ── Master KMS key rotation (ADR-010 §3.7, envelope encryption, LOCAL-TRUST
+  // only) ─────────────────────────────────────────────────────────────────
+  // Re-wraps every tenant's DEK with the keyring's currently-active
+  // MASTER_KMS_KEY. Deliberately touches only the small wrapped-DEK row per
+  // tenant, never the secret ciphertext itself (connector env vars, OAuth
+  // tokens) — that's what makes rotation cheap regardless of how many
+  // secrets a tenant has stored. Operational sequence: deploy a new
+  // MASTER_KMS_KEY with the old one moved into MASTER_KMS_PREVIOUS_KEYS, call
+  // this route (or `myai rotate-keys master-key`), confirm the response's
+  // `skippedAlreadyCurrent` reaches the tenant-key-row count, THEN drop the
+  // old key from env. Local-trust gated like tenant-key/rotate above — this
+  // is an operator/cron action, not a tenant-facing one, and rotating
+  // affects every tenant at once so it must never be reachable cross-tenant.
+  app.post('/api/auth/master-key/rotate', async (req: Request, res: Response) => {
+    try {
+      if (!req.tenant?.local) {
+        throw new AuthError('local trust required', 403, 'FORBIDDEN');
+      }
+      const result = await rotateMasterKey();
+      recordAuditEvent({
+        tenantId: 'system',
+        actor: { role: 'operator', via: 'local' },
+        action: 'masterkey.rotate',
+        target: 'tenant-secret-keys',
+        detail: { ...result },
+      });
+      res.json(result);
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('master key rotate failed', 500, 'INTERNAL');
       res.status(e.status).json({ error: e.message, code: e.code });
     }
   });
@@ -1196,6 +1530,106 @@ export function createHttpServer() {
     }
   });
 
+  // ── Tenant CRUD (operator console + `myai tenant` CLI, admin-gated) ────────
+  // Single-tenant counterpart to bulk-import below — create/list/suspend/
+  // reactivate one tenant at a time, the primitives an operator scripts
+  // tenant lifecycle management with (`myai tenant create|list|suspend|
+  // reactivate|rotate-key`). Same `requireAdmin` (x-admin-token) posture as
+  // bulk-import/mcp-tools; rotate-key stays on the existing local-trust-gated
+  // `POST /api/auth/tenant-key/rotate` route above (unchanged).
+  app.post('/api/tenants', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const tenantId = String(b.tenantId ?? '').trim();
+        const name = String(b.name ?? '').trim();
+        if (!tenantId || !name) {
+          res.status(400).json({ error: 'tenantId and name are required', code: 'BAD_REQUEST' });
+          return;
+        }
+        const { tenant, rawKey } = await provisionTenant({
+          tenantId,
+          name,
+          plan: typeof b.plan === 'string' ? (b.plan as TenantPlan) : undefined,
+          ownerEmail: typeof b.ownerEmail === 'string' ? b.ownerEmail : undefined,
+          env: b.env === 'test' ? 'test' : 'live',
+        });
+        log.info({ route: '/api/tenants', tenantId }, 'admin created tenant');
+        recordAuditEvent({
+          tenantId,
+          actor: { role: 'operator', via: 'local' },
+          action: 'tenant.create',
+          target: tenantId,
+          detail: { plan: tenant.plan },
+        });
+        res.status(201).json({
+          tenantId: tenant.tenantId,
+          name: tenant.name,
+          plan: tenant.plan,
+          status: tenant.status,
+          region: tenant.region,
+          rawKey, // show-once
+        });
+      } catch (err) {
+        const e = err instanceof AuthError ? err : new AuthError(err instanceof Error ? err.message : 'tenant create failed', 500, 'INTERNAL');
+        res.status(e.status).json({ error: e.message, code: e.code });
+      }
+    });
+  });
+
+  app.get('/api/tenants', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const q = req.query;
+        const filter: Record<string, unknown> = {};
+        if (typeof q.status === 'string') filter.status = q.status as TenantStatus;
+        if (typeof q.plan === 'string') filter.plan = q.plan as TenantPlan;
+        const limit = typeof q.limit === 'string' ? Math.min(Math.max(Number(q.limit) || 50, 1), 500) : 50;
+        const tenants = await TenantModel.find(filter)
+          .select('tenantId name plan status region ownerEmail createdAt updatedAt')
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .lean<ITenant[]>();
+        res.json({ count: tenants.length, tenants });
+      } catch (err) {
+        const e = err instanceof AuthError ? err : new AuthError('tenant list failed', 500, 'INTERNAL');
+        res.status(e.status).json({ error: e.message, code: e.code });
+      }
+    });
+  });
+
+  app.post('/api/tenants/:id/suspend', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const status = await suspendTenant({
+          tenantId: String(req.params.id),
+          reason: typeof b.reason === 'string' ? b.reason : undefined,
+          actorRole: 'operator',
+        });
+        res.json({ tenantId: String(req.params.id), status });
+      } catch (err) {
+        const e = err instanceof AuthError ? err : new AuthError('tenant suspend failed', 500, 'INTERNAL');
+        res.status(e.status).json({ error: e.message, code: e.code });
+      }
+    });
+  });
+
+  app.post('/api/tenants/:id/reactivate', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const status = await reactivateTenant({
+          tenantId: String(req.params.id),
+          actorRole: 'operator',
+        });
+        res.json({ tenantId: String(req.params.id), status });
+      } catch (err) {
+        const e = err instanceof AuthError ? err : new AuthError('tenant reactivate failed', 500, 'INTERNAL');
+        res.status(e.status).json({ error: e.message, code: e.code });
+      }
+    });
+  });
+
   // ── Bulk tenant provisioning (reseller/agency onboarding) ───────────────────
   // Operator-only (requireAdmin / x-admin-token — same cross-tenant posture as
   // the budgets/usage routes below): mass-creates tenants + owner accounts from
@@ -1318,6 +1752,22 @@ export function createHttpServer() {
     });
   });
 
+  // Self-hosted/on-prem license + air-gapped status (task-37ca040c). Public,
+  // like /health — never returns the raw LICENSE_KEY or the signing key.
+  app.get('/api/license/status', (_req: Request, res: Response) => {
+    const status = getLicenseStatus();
+    res.json({
+      mode: status.mode,
+      airGapped: status.airGapped,
+      reason: status.reason,
+      org: status.payload?.org ?? null,
+      plan: status.payload?.plan ?? null,
+      seats: status.payload?.seats ?? null,
+      expiresAt: status.payload?.expiresAt ?? null,
+      features: status.payload?.features ?? [],
+    });
+  });
+
   app.get('/api/health/alerts', async (req: Request, res: Response) => {
     try {
       const forceRun = req.query.run === 'true';
@@ -1345,6 +1795,13 @@ export function createHttpServer() {
 
   app.get('/api/docs', (_req: Request, res: Response) => {
     res.type('html').send(docsHtml('/api/openapi.json'));
+  });
+
+  // AsyncAPI 3.0 reference for the WS event surface (task/plan/runner
+  // lifecycle pushes + session/agent commands) — see core/asyncapi.ts.
+  app.get('/api/asyncapi.json', (_req: Request, res: Response) => {
+    cachedAsyncApiSpec ??= buildAsyncApiSpec();
+    res.json(cachedAsyncApiSpec);
   });
 
   // ── Distributed tracing (gateway→runner→agent spans) ───
@@ -1387,6 +1844,111 @@ export function createHttpServer() {
   app.get('/api/logs/correlation-ids', (req: Request, res: Response) => {
     const tenantId = ctxFromReq(req).tenantId;
     res.json({ correlationIds: getCorrelationIds(tenantId) });
+  });
+
+  // ── Entitlements (central plan-entitlement service) ───
+  // The single snapshot the dashboard AND the runner (via the `entitlements_status`
+  // MCP tool) both consult for Solo/Team/Scale feature gating — replaces each
+  // side re-deriving its own copy of the plan table / dimension caps. See
+  // core/entitlement-service.ts for the composition of billing.ts + entitlements.ts.
+  app.get('/api/entitlements', async (req: Request, res: Response) => {
+    const ctx = ctxFromReq(req);
+    const snapshot = await loadEntitlementSnapshot(ctx.tenantId, { plan: ctx.plan, local: ctx.local });
+    res.json(snapshot);
+  });
+
+  // ── Feature flags (core/feature-flags.ts — platform feature-flag service) ──
+  // Global + per-tenant flags with percentage rollout and kill-switch
+  // semantics. Admin mutations (list/upsert/kill/override/delete) are
+  // operator-only via requireAdmin (x-admin-token) — flags are platform-wide
+  // state, same cross-tenant posture as gift-code minting. The eval read is
+  // tenant-scoped (authenticate() already ran): each tenant sees only its own
+  // evaluated on/off map, never the flag definitions or other tenants'
+  // overrides.
+
+  app.get('/api/flags/eval', async (req: Request, res: Response) => {
+    try {
+      const ctx = ctxFromReq(req);
+      res.json({ tenantId: ctx.tenantId, flags: await evaluateAllFlags(ctx.tenantId) });
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('flag evaluation failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
+  app.get('/api/flags', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const flags = await listFlags();
+        res.json({ count: flags.length, flags });
+      } catch (err) {
+        log.error({ err }, 'flags list failed');
+        res.status(500).json({ error: 'internal_error', code: 'INTERNAL_ERROR' });
+      }
+    });
+  });
+
+  app.put('/api/flags/:key', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const flag = await upsertFlag({
+          key: String(req.params.key),
+          description: typeof b.description === 'string' ? b.description : undefined,
+          state: typeof b.state === 'string' ? (b.state as FlagState) : undefined,
+          rolloutPercent: typeof b.rolloutPercent === 'number' ? b.rolloutPercent : undefined,
+          updatedBy: typeof b.updatedBy === 'string' ? b.updatedBy : 'operator',
+        });
+        res.json(flag);
+      } catch (err) {
+        const e = err instanceof AuthError ? err : new AuthError('flag upsert failed', 500, 'INTERNAL');
+        res.status(e.status).json({ error: e.message, code: e.code });
+      }
+    });
+  });
+
+  app.post('/api/flags/:key/kill', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        log.warn({ route: '/api/flags/:key/kill', key: req.params.key, ip: req.ip }, 'feature-flag kill-switch pulled');
+        res.json(await killFlag(String(req.params.key), typeof b.updatedBy === 'string' ? b.updatedBy : 'operator'));
+      } catch (err) {
+        const e = err instanceof AuthError ? err : new AuthError('flag kill failed', 500, 'INTERNAL');
+        res.status(e.status).json({ error: e.message, code: e.code });
+      }
+    });
+  });
+
+  app.put('/api/flags/:key/override', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const enabled = b.enabled === null ? null : Boolean(b.enabled);
+        res.json(await setTenantOverride(
+          String(req.params.key),
+          String(b.tenantId ?? ''),
+          enabled,
+          typeof b.updatedBy === 'string' ? b.updatedBy : 'operator',
+        ));
+      } catch (err) {
+        const e = err instanceof AuthError ? err : new AuthError('flag override failed', 500, 'INTERNAL');
+        res.status(e.status).json({ error: e.message, code: e.code });
+      }
+    });
+  });
+
+  app.delete('/api/flags/:key', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      try {
+        const existed = await deleteFlag(String(req.params.key));
+        if (!existed) return res.status(404).json({ error: `unknown flag '${String(req.params.key)}'`, code: 'NOT_FOUND' });
+        res.json({ deleted: true, key: String(req.params.key) });
+      } catch (err) {
+        log.error({ err }, 'flag delete failed');
+        res.status(500).json({ error: 'internal_error', code: 'INTERNAL_ERROR' });
+      }
+    });
   });
 
   // ── Status ───────────────────────────────────────────
@@ -1756,6 +2318,8 @@ export function createHttpServer() {
   app.post('/api/brain/commit', brainRoute('brain_commit', (req) => (req.body ?? {}) as Record<string, unknown>));
   app.post('/api/brain/stash', brainRoute('brain_stash', (req) => (req.body ?? {}) as Record<string, unknown>));
   app.post('/api/brain/pop', brainRoute('brain_pop', (req) => (req.body ?? {}) as Record<string, unknown>));
+  app.post('/api/brain/pin', brainRoute('brain_pin', (req) => (req.body ?? {}) as Record<string, unknown>));
+  app.post('/api/brain/unpin', brainRoute('brain_unpin', (req) => (req.body ?? {}) as Record<string, unknown>));
   // Federated search — one query across every repo namespace's atoms AND the
   // RAG session corpus. The dashboard search box's data source.
   app.get('/api/brain/search', brainRoute('brain_search', (req) => ({
@@ -1765,11 +2329,51 @@ export function createHttpServer() {
     since: typeof req.query.since === 'string' ? req.query.since : undefined,
   })));
 
+  // Marketplace search/install REST mirror (ADR-019 checklist #2) — thin
+  // wrappers over the marketplace_search/marketplace_install MCP tools, same
+  // "delegate to executeTool so ADR-010 tenant scoping + RBAC live in exactly
+  // one place" posture as the brain routes above.
+  app.get('/api/marketplace/search', async (req: Request, res: Response) => {
+    try {
+      const results = await executeTool('marketplace_search', {
+        q: typeof req.query.q === 'string' ? req.query.q : undefined,
+        kind: typeof req.query.kind === 'string' ? req.query.kind : undefined,
+        category: typeof req.query.category === 'string' ? req.query.category : undefined,
+        limit: typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : undefined,
+      }, ctxFromReq(req));
+      res.json({ results });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+  app.post('/api/marketplace/install', async (req: Request, res: Response) => {
+    try {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      if (!b.slug || typeof b.slug !== 'string') {
+        return res.status(400).json({ error: 'slug required' });
+      }
+      const outcome = await executeTool('marketplace_install', {
+        slug: b.slug,
+        version: typeof b.version === 'string' ? b.version : undefined,
+      }, ctxFromReq(req)) as { ok: boolean; reason?: string };
+      res.status(outcome.ok ? 201 : 409).json(outcome);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // 10-day improvement plan (day-by-day focus schedule per repo).
   app.get('/api/plan', async (req: Request, res: Response) => {
     const repo = typeof req.query.repo === 'string' ? req.query.repo : undefined;
-    const days = await listPlan(ctxFromReq(req).tenantId, repo);
-    res.json({ count: days.length, days });
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+    let limit: number | undefined;
+    if (typeof req.query.limit === 'string') {
+      const n = Number(req.query.limit);
+      if (!Number.isFinite(n)) return res.status(400).json({ error: 'invalid limit' });
+      limit = n;
+    }
+    const { days, nextCursor } = await listPlanPage(ctxFromReq(req).tenantId, { repo, limit, cursor });
+    res.json({ count: days.length, days, ...(nextCursor ? { nextCursor } : {}) });
   });
 
   // First-class handoff store (betaC) — queryable replacement for the
@@ -2083,7 +2687,12 @@ export function createHttpServer() {
 
   app.get('/api/sessions/:id', (req: Request, res: Response) => {
     const session = getSession(String(req.params.id));
-    if (!session) return res.status(404).json({ error: 'Session not found' });
+    // ADR-010 §1.5: a leaked/guessed sessionId must never cross tenants —
+    // same not-found shape as a genuinely missing session (no existence oracle).
+    // Caught by the two-tenant isolation E2E (tests/e2e/tenant-isolation-e2e.test.ts).
+    if (!session || session.tenantId !== ctxFromReq(req).tenantId) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
     res.json({
       id: session.id,
       agentName: session.agentName,
@@ -2098,6 +2707,12 @@ export function createHttpServer() {
 
   app.delete('/api/sessions/:id', async (req: Request, res: Response) => {
     try {
+      // Same cross-tenant guard as GET /api/sessions/:id — a foreign tenant
+      // must not be able to close (or even confirm the existence of) a session.
+      const session = getSession(String(req.params.id));
+      if (session && session.tenantId !== ctxFromReq(req).tenantId) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
       await closeSession(String(req.params.id));
       res.json({ status: 'closed' });
     } catch (err) {
@@ -2138,7 +2753,11 @@ export function createHttpServer() {
       if (!content) return res.status(400).json({ error: 'content required' });
 
       const session = getSession(String(req.params.id));
-      if (!session) return res.status(404).json({ error: 'Session not found' });
+      // Cross-tenant guard (ADR-010 §1.5) — a foreign tenant must not inject
+      // messages into another tenant's session via a leaked sessionId.
+      if (!session || session.tenantId !== ctxFromReq(req).tenantId) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
 
       const result = await routeMessage(session.id, session.agentName, content, metadata || {});
       res.json({
@@ -2260,6 +2879,38 @@ export function createHttpServer() {
         res.json(usage);
       } catch (err) {
         log.error({ err }, 'budgets/usage failed');
+        res.status(500).json({ error: 'internal_error', code: 'INTERNAL_ERROR' });
+      }
+    });
+  });
+
+  // Cost-attribution breakdown (this change) — itemised $ spend by
+  // repo/model/task-type/premium-vs-standard lane, the substrate for accurate
+  // overage invoicing and the dashboard's per-tenant cost-justification view.
+  app.get('/api/budgets/attribution', (req: Request, res: Response) => {
+    requireAdmin(req, res, async () => {
+      log.info({ route: '/api/budgets/attribution', ip: req.ip }, 'budget admin endpoint accessed');
+      try {
+        const fromRaw = typeof req.query.from === 'string' ? req.query.from : undefined;
+        const toRaw = typeof req.query.to === 'string' ? req.query.to : undefined;
+
+        let from: Date | undefined;
+        let to: Date | undefined;
+        if (fromRaw) {
+          const d = new Date(fromRaw);
+          if (Number.isNaN(d.getTime())) return res.status(400).json({ error: 'invalid from timestamp', code: 'BAD_REQUEST' });
+          from = d;
+        }
+        if (toRaw) {
+          const d = new Date(toRaw);
+          if (Number.isNaN(d.getTime())) return res.status(400).json({ error: 'invalid to timestamp', code: 'BAD_REQUEST' });
+          to = d;
+        }
+
+        const attribution = await getCostAttribution(ctxFromReq(req).tenantId, { from, to });
+        res.json(attribution);
+      } catch (err) {
+        log.error({ err }, 'budgets/attribution failed');
         res.status(500).json({ error: 'internal_error', code: 'INTERNAL_ERROR' });
       }
     });
@@ -2510,8 +3161,9 @@ export function createHttpServer() {
         if (!Number.isFinite(n)) return res.status(400).json({ error: 'invalid limit' });
         filter.limit = n;
       }
-      const tasks = await listTasks(ctxFromReq(req).tenantId, filter);
-      res.json({ count: tasks.length, tasks });
+      if (typeof req.query.cursor === 'string') filter.cursor = req.query.cursor;
+      const { tasks, nextCursor } = await listTasksPage(ctxFromReq(req).tenantId, filter);
+      res.json({ count: tasks.length, tasks, ...(nextCursor ? { nextCursor } : {}) });
     } catch (err) {
       log.error({ err }, 'Failed to list tasks');
       res.status(500).json({ error: (err as Error).message });
@@ -2535,8 +3187,11 @@ export function createHttpServer() {
   app.post('/api/tasks', async (req: Request, res: Response) => {
     try {
       if (enforceRbac(req, res, 'work')) return; // RBAC: task creation is `work` (ADR-013 §3)
-      const { repo, title, description, priority, assignedAgent, recommendedModel, source, sourceId, notes } = req.body ?? {};
+      const { repo, title, description, priority, assignedAgent, recommendedModel, source, sourceId, notes, dependsOn } = req.body ?? {};
       if (!repo || !title) return res.status(400).json({ error: 'repo and title required' });
+      if (dependsOn !== undefined && !Array.isArray(dependsOn)) {
+        return res.status(400).json({ error: 'dependsOn must be an array of taskIds' });
+      }
       const ctx = ctxFromReq(req);
       // Plan-tier repo cap (hard cap) — only relevant when this repo is NEW for
       // the tenant; a repo already in flight keeps queueing tasks freely.
@@ -2545,11 +3200,26 @@ export function createHttpServer() {
         const verdict = verdictFor('repos', ctx.plan ?? 'free', known.length + (known.includes(repo) ? 0 : 1));
         if (!verdict.allowed) throw new EntitlementError(verdict);
       }
-      const task = await createTask(ctx.tenantId, { repo, title, description, priority, assignedAgent, recommendedModel, source, sourceId, notes });
+      // Team-tier per-member budget scoping (task-82854b12) — best-effort
+      // attribution to the signed-in member, same optional-JWT-over-API-key
+      // pattern as rbacRole()/resolveRestRole above. A caller with no JWT
+      // (pure API-key runner/CLI traffic) leaves the task unattributed, which
+      // is never subject to a per-member cap.
+      let requestedByUserId: string | undefined;
+      try {
+        requestedByUserId = jwtFromReq(req).sub;
+      } catch {
+        /* no/invalid JWT — unattributed task */
+      }
+      const task = await createTask(ctx.tenantId, { repo, title, description, priority, assignedAgent, recommendedModel, source, sourceId, notes, requestedByUserId, dependsOn });
       res.status(201).json(task);
     } catch (err) {
       if (err instanceof EntitlementError) {
         res.status(err.status).json({ error: err.message, code: err.code, ...err.verdict });
+        return;
+      }
+      if (err instanceof TaskDependencyError) {
+        res.status(422).json({ error: err.message, code: 'TASK_DEPENDENCY' });
         return;
       }
       log.error({ err }, 'Failed to create task');
@@ -2560,7 +3230,10 @@ export function createHttpServer() {
   app.patch('/api/tasks/:id', async (req: Request, res: Response) => {
     try {
       if (enforceRbac(req, res, 'work')) return; // RBAC: task update is `work` (ADR-013 §3)
-      const { repo, status, priority, assignedAgent, recommendedModel, prUrl, notes, telegramMessageId, supersededBy, operatorAuthorized } = req.body ?? {};
+      const { repo, status, priority, assignedAgent, recommendedModel, prUrl, notes, telegramMessageId, supersededBy, operatorAuthorized, dependsOn } = req.body ?? {};
+      if (dependsOn !== undefined && !Array.isArray(dependsOn)) {
+        return res.status(400).json({ error: 'dependsOn must be an array of taskIds' });
+      }
       const task = await updateTask(ctxFromReq(req).tenantId, {
         taskId: String(req.params.id),
         repo,
@@ -2573,6 +3246,7 @@ export function createHttpServer() {
         telegramMessageId,
         supersededBy,
         operatorAuthorized,
+        dependsOn,
       });
       if (!task) return res.status(404).json({ error: `Task "${String(req.params.id)}" not found` });
       res.json(task);
@@ -2581,7 +3255,67 @@ export function createHttpServer() {
         res.status(409).json({ error: err.message, code: 'BULK_BLOCK_GUARD' });
         return;
       }
+      if (err instanceof TaskDependencyError) {
+        res.status(422).json({ error: err.message, code: 'TASK_DEPENDENCY' });
+        return;
+      }
       log.error({ err }, 'Failed to update task');
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Bulk task mutations (mirrors the tasks_bulk MCP tool — same store module,
+  // tasks/bulk-operations.js): N create/update/cancel/reprioritize ops in one
+  // call for the multi-repo board's multi-select actions. Partial application
+  // with per-op verdicts; per-op failures (guard/deps/not-found) land in the
+  // 200 response's results, NOT as an HTTP error — only a malformed batch or
+  // a batch-level policy breach (repo cap) rejects the whole request.
+  app.post('/api/tasks/bulk', async (req: Request, res: Response) => {
+    try {
+      if (enforceRbac(req, res, 'work')) return; // RBAC: same `work` capability as single create/update (ADR-013 §3)
+      const { operations, stopOnError } = req.body ?? {};
+      if (!Array.isArray(operations) || operations.length === 0) {
+        return res.status(400).json({ error: 'operations must be a non-empty array' });
+      }
+      const ctx = ctxFromReq(req);
+      // Plan-tier repo hard-cap — mirror POST /api/tasks, evaluated once against
+      // the batch's distinct NEW repos so bulk can't sidestep the cap op-by-op.
+      if (!ctx.local) {
+        const newRepos = new Set<string>();
+        for (const op of operations as Array<Record<string, unknown>>) {
+          if (op && op.action === 'create' && typeof op.repo === 'string' && op.repo.trim()) newRepos.add(op.repo.trim());
+        }
+        if (newRepos.size) {
+          const known = await tenantRepos(ctx.tenantId);
+          const addedCount = [...newRepos].filter((r) => !known.includes(r)).length;
+          const verdict = verdictFor('repos', ctx.plan ?? 'free', known.length + addedCount);
+          if (!verdict.allowed) throw new EntitlementError(verdict);
+        }
+      }
+      // Member attribution for creates — same optional-JWT-over-API-key pattern
+      // as POST /api/tasks; unattributed API-key traffic stays uncapped.
+      let requestedByUserId: string | undefined;
+      try {
+        requestedByUserId = jwtFromReq(req).sub;
+      } catch {
+        /* no/invalid JWT — unattributed creates */
+      }
+      const result = await bulkTaskOperations(ctx.tenantId, {
+        operations,
+        stopOnError: stopOnError === true,
+        defaultRequestedByUserId: requestedByUserId,
+      });
+      res.json(result);
+    } catch (err) {
+      if (err instanceof EntitlementError) {
+        res.status(err.status).json({ error: err.message, code: err.code, ...err.verdict });
+        return;
+      }
+      if (err instanceof BulkValidationError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      log.error({ err }, 'Failed to apply bulk task operations');
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -3016,7 +3750,16 @@ export function createHttpServer() {
     const { tenantId } = ctxFromReq(req);
     const prefs = await getPreferences(tenantId); // never throws — defaults on DB down
     const subscriptions = await countSubscriptions(tenantId);
-    res.json({ ...prefs, pushConfigured: isPushConfigured(), emailConfigured: isEmailConfigured(), subscriptions });
+    // slackWebhookUrl is write-only — never echoed back once set, only whether
+    // one is configured (same "secret returned once" convention as WebhookEndpoint).
+    const { slackWebhookUrl: _slackWebhookUrl, ...safePrefs } = prefs;
+    res.json({
+      ...safePrefs,
+      pushConfigured: isPushConfigured(),
+      emailConfigured: isEmailConfigured(),
+      slackConfigured: Boolean(prefs.slackWebhookUrl),
+      subscriptions,
+    });
   });
 
   app.put('/api/notifications/preferences', async (req: Request, res: Response) => {
@@ -3029,7 +3772,13 @@ export function createHttpServer() {
     }
     try {
       const prefs = await updatePreferences(tenantId, patch);
-      res.json({ ...prefs, pushConfigured: isPushConfigured(), emailConfigured: isEmailConfigured() });
+      const { slackWebhookUrl: _slackWebhookUrl, ...safePrefs } = prefs;
+      res.json({
+        ...safePrefs,
+        pushConfigured: isPushConfigured(),
+        emailConfigured: isEmailConfigured(),
+        slackConfigured: Boolean(prefs.slackWebhookUrl),
+      });
     } catch (err) {
       log.error({ err }, 'Failed to update notification preferences');
       res.status(503).json({ error: (err as Error).message, code: 'SERVICE_UNAVAILABLE' });

@@ -1,0 +1,13 @@
+{
+  "name": "myai-blueprint",
+  "version": "0.7.2",
+  "description": "Full-stack app scaffolding for myAI — frontend, API, database, and devops specialists plus scaffold skills for taking an idea to a running Next.js/Docker blueprint.",
+  "author": {
+    "name": "knofler",
+    "url": "https://github.com/knofler/myai"
+  },
+  "homepage": "https://github.com/knofler/myai#readme",
+  "repository": "https://github.com/knofler/myai",
+  "license": "MIT",
+  "keywords": ["scaffold", "blueprint", "nextjs", "docker", "fullstack"]
+}

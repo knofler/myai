@@ -22,6 +22,7 @@
 //
 // Degrades like billing.ts: `isConnectConfigured()` false → routes return 503.
 import { STRIPE_SECRET_KEY, stripePost, stripeGet, APP_BASE_URL } from './billing';
+import { decidePayout, DEFAULT_MIN_PAYOUT_USD, type CreatorBalance, type PayoutDecision } from './marketplace-billing';
 
 export function isConnectConfigured(): boolean {
   return Boolean(STRIPE_SECRET_KEY);
@@ -64,6 +65,29 @@ export function canTransitionConnectAccount(
 
 export function canReceivePayout(status: ConnectAccountStatus): boolean {
   return status === 'enabled';
+}
+
+export interface ConnectPayoutDecision extends PayoutDecision {
+  connectStatus: ConnectAccountStatus;
+}
+
+/** Byte-equivalent mirror of `decidePayoutWithConnect` (connect-payout.ts) —
+ *  the full payout-run gate: cleared balance must meet the minimum AND the
+ *  Connect account must be able to receive funds. */
+export function decidePayoutWithConnect(
+  balance: CreatorBalance,
+  connectStatus: ConnectAccountStatus,
+  minPayoutUsd: number = DEFAULT_MIN_PAYOUT_USD,
+): ConnectPayoutDecision {
+  if (!canReceivePayout(connectStatus)) {
+    return {
+      eligible: false,
+      amountUsd: 0,
+      reason: `creator Connect account not payout-ready (status: ${connectStatus})`,
+      connectStatus,
+    };
+  }
+  return { ...decidePayout(balance, minPayoutUsd), connectStatus };
 }
 
 export interface StripeAccountFlags {

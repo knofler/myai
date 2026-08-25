@@ -36,10 +36,10 @@ function keyState(k: ApiKeyView): { label: string; cls: string } {
 }
 
 function Th({ children }: { children: React.ReactNode }) {
-  return <th className="text-left font-medium text-zinc-300 px-3 py-2 border-b border-zinc-800 whitespace-nowrap">{children}</th>;
+  return <th className="text-left font-medium text-[rgb(var(--text-primary))] px-3 py-2 border-b border-[rgb(var(--border-subtle))] whitespace-nowrap">{children}</th>;
 }
 function Td({ children }: { children: React.ReactNode }) {
-  return <td className="px-3 py-2 border-b border-zinc-900 text-zinc-400 align-top">{children}</td>;
+  return <td className="px-3 py-2 border-b border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] align-top">{children}</td>;
 }
 
 export default function ApiKeysManager() {
@@ -173,37 +173,37 @@ export default function ApiKeysManager() {
             >Copy</button>
             <button
               onClick={() => setRawKey(null)}
-              className="rounded border border-zinc-700 px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-800"
+              className="rounded border border-zinc-700 px-3 py-2 text-xs text-[rgb(var(--text-secondary))] hover:bg-[rgb(var(--bg-hover))]"
             >Done</button>
           </div>
         </div>
       )}
 
       {/* Create */}
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
-        <h2 className="text-sm font-medium text-zinc-200">Create a key</h2>
+      <div className="rounded-lg border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-page))]/50 p-4">
+        <h2 className="text-sm font-medium text-[rgb(var(--text-primary))]">Create a key</h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Key name (e.g. CI runner, Zapier)"
             maxLength={80}
-            className="rounded border border-zinc-700 bg-black/40 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600"
+            className="rounded border border-zinc-700 bg-black/40 px-3 py-2 text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600"
           />
           <select
             value={env}
             onChange={(e) => setEnv(e.target.value as 'live' | 'test')}
-            className="rounded border border-zinc-700 bg-black/40 px-3 py-2 text-sm text-zinc-200"
+            className="rounded border border-zinc-700 bg-black/40 px-3 py-2 text-sm text-[rgb(var(--text-primary))]"
           >
             <option value="live">live</option>
             <option value="test">test (sandbox)</option>
           </select>
         </div>
         <div className="mt-3">
-          <p className="text-xs text-zinc-500">Scopes — <code>*</code> grants full access; pick granular scopes for least privilege.</p>
+          <p className="text-xs text-[rgb(var(--text-muted))]">Scopes — <code>*</code> grants full access; pick granular scopes for least privilege.</p>
           <div className="mt-2 flex flex-wrap gap-2">
             {scopeVocab.map((s) => (
-              <label key={s} className={`cursor-pointer rounded border px-2 py-1 text-xs ${scopes.includes(s) ? 'border-sky-600 bg-sky-950/40 text-sky-300' : 'border-zinc-700 text-zinc-400'}`}>
+              <label key={s} className={`cursor-pointer rounded border px-2 py-1 text-xs ${scopes.includes(s) ? 'border-sky-600 bg-sky-950/40 text-sky-300' : 'border-zinc-700 text-[rgb(var(--text-secondary))]'}`}>
                 <input type="checkbox" className="mr-1 align-middle" checked={scopes.includes(s)} onChange={() => toggleScope(s)} />
                 {s}
               </label>
@@ -218,7 +218,7 @@ export default function ApiKeysManager() {
       </div>
 
       {/* List */}
-      <div className="overflow-x-auto rounded-lg border border-zinc-800">
+      <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
         <table className="w-full text-sm">
           <thead>
             <tr>
@@ -236,10 +236,10 @@ export default function ApiKeysManager() {
                 return (
                   <tr key={k.keyId}>
                     <Td>
-                      <span className="text-zinc-200">{k.name}</span>
-                      <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] uppercase text-zinc-400">{k.env}</span>
+                      <span className="text-[rgb(var(--text-primary))]">{k.name}</span>
+                      <span className="ml-2 rounded bg-[rgb(var(--bg-hover))] px-1.5 py-0.5 text-[10px] uppercase text-[rgb(var(--text-secondary))]">{k.env}</span>
                     </Td>
-                    <Td><code className="font-mono text-xs text-zinc-300">{k.prefix}…</code></Td>
+                    <Td><code className="font-mono text-xs text-[rgb(var(--text-primary))]">{k.prefix}…</code></Td>
                     <Td><span className="font-mono text-xs">{k.scopes.join(', ')}</span></Td>
                     <Td>
                       <span className={`rounded px-2 py-0.5 text-xs ${st.cls}`}>{st.label}</span>

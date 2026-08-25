@@ -15,6 +15,85 @@
 # (Named .sh for repo convention; interpreter is python3 via the shebang.)
 import sys, os, json
 
+# ── Context-window usage bar (W5.1) ──────────────────────────────────────────
+# Headroom (the third-party proxy) computes this by intercepting model traffic
+# — rejected (plan/BRAIN_V2_CAPTURE_AND_OFFLOAD.md §3: new trust boundary while
+# GHSA-ffgf-pmmg-cjj5 is open). We get the same number for free by reading the
+# session transcript JSONL that Claude Code already writes locally — no proxy,
+# no MITM. This is a LOCAL ESTIMATE (sum of the last assistant turn's real
+# usage: input + cache_creation + cache_read + output tokens against the
+# model's context window), not a value Claude Code hands the statusline.
+#
+# Claude 5-family models (Sonnet 5 / Opus 5 / Fable 5) run the 1M-token
+# context beta; everything else defaults to the standard 200k window.
+# Override with MYAI_CONTEXT_WINDOW_TOKENS if a model's window differs.
+_CTX_TAIL_BYTES = 400_000  # last-turn usage lives near EOF; avoids reading huge transcripts
+
+def _last_assistant_usage(transcript_path):
+    try:
+        size = os.path.getsize(transcript_path)
+    except OSError:
+        return None
+    try:
+        with open(transcript_path, "rb") as f:
+            f.seek(max(0, size - _CTX_TAIL_BYTES))
+            data = f.read()
+    except OSError:
+        return None
+    for raw in reversed(data.split(b"\n")):
+        if b'"type":"assistant"' not in raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            continue
+        if obj.get("type") != "assistant":
+            continue
+        usage = ((obj.get("message") or {}).get("usage")) or {}
+        if usage:
+            return usage
+    return None
+
+def _model_context_window(model):
+    override = os.environ.get("MYAI_CONTEXT_WINDOW_TOKENS", "")
+    if override.isdigit():
+        return int(override)
+    combined = ((model or {}).get("id", "") + " " + (model or {}).get("display_name", "")).lower()
+    for tag in ("sonnet-5", "opus-5", "fable-5", "sonnet 5", "opus 5", "fable 5"):
+        if tag in combined:
+            return 1_000_000
+    return 200_000
+
+def _context_usage(data):
+    """Return (used_tokens, max_tokens, pct) from the local transcript, or None."""
+    tp = data.get("transcript_path") or ""
+    if not tp or not os.path.isfile(tp):
+        return None
+    usage = _last_assistant_usage(tp)
+    if not usage:
+        return None
+    used = (
+        (usage.get("input_tokens") or 0)
+        + (usage.get("cache_creation_input_tokens") or 0)
+        + (usage.get("cache_read_input_tokens") or 0)
+        + (usage.get("output_tokens") or 0)
+    )
+    max_tokens = _model_context_window(data.get("model"))
+    if max_tokens <= 0:
+        return None
+    pct = max(0.0, min(100.0, used / max_tokens * 100))
+    return used, max_tokens, pct
+
+def _pct_color(p):
+    if   p >= 95: return "\033[1;38;5;196m"   # red    — critical
+    elif p >= 80: return "\033[1;38;5;208m"   # orange — high
+    elif p >= 50: return "\033[1;38;5;220m"   # yellow — mid
+    else:         return "\033[1;38;5;51m"    # cyan   — low
+
+def _bar(p, width=10):
+    filled = max(0, min(width, int(round(p / 100 * width))))
+    return "█" * filled + "░" * (width - filled)
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -59,7 +138,15 @@ def main():
         pass
 
     model = (data.get("model") or {}).get("display_name", "")
-    pct = (data.get("context_window") or {}).get("used_percentage")
+
+    # Prefer our own local JSONL computation (W5.1); fall back to whatever
+    # Claude Code itself hands the statusline, if anything, when the
+    # transcript isn't readable (e.g. brand-new session, no turns yet).
+    ctx = _context_usage(data)
+    if ctx is not None:
+        _used, _max, pct = ctx
+    else:
+        pct = (data.get("context_window") or {}).get("used_percentage")
 
     # Repo / dir name — so you never scroll to find which repo a session is in.
     # Prefer the git repo name; fall back through workspace/cwd to the script's
@@ -82,14 +169,12 @@ def main():
     if model:                     # model — the bit you actually scan for: BOLD/bright
         out += (" " + DIM + "·" + RESET + " ") if org else " "
         out += MODEL + model + RESET
-    if pct is not None:           # context % — BOLD, colour-coded as a usage gauge
+    if pct is not None:           # context % — BOLD, colour-coded usage bar + gauge
         try:
-            p = int(float(pct))
-            if   p >= 95: pc = "\033[1;38;5;196m"   # red    — critical
-            elif p >= 80: pc = "\033[1;38;5;208m"   # orange — high
-            elif p >= 50: pc = "\033[1;38;5;220m"   # yellow — mid
-            else:         pc = "\033[1;38;5;51m"    # cyan   — low
-            out += " " + DIM + "·" + RESET + " " + pc + str(p) + "%" + RESET
+            p = int(round(float(pct)))
+            pc = _pct_color(p)
+            out += " " + DIM + "·" + RESET + " " + pc + "[" + _bar(p) + "]" + RESET
+            out += " " + pc + str(p) + "%" + RESET
         except Exception:
             pass
     if repo:

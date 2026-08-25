@@ -19,10 +19,10 @@ export function DeclaredToolsDiffView({
   if (!isResubmission) {
     return (
       <div>
-        <div className="text-xs text-zinc-500 mb-1.5">Declared tools (first submission — nothing to diff against)</div>
+        <div className="text-xs text-[rgb(var(--text-muted))] mb-1.5">Declared tools (first submission — nothing to diff against)</div>
         <div className="flex flex-wrap gap-1.5">
           {declaredTools.map((t) => (
-            <Badge key={t} className="bg-zinc-700/40 text-zinc-300 border-zinc-600/50">{t}</Badge>
+            <Badge key={t} className="bg-zinc-700/40 text-[rgb(var(--text-primary))] border-zinc-600/50">{t}</Badge>
           ))}
         </div>
       </div>
@@ -33,10 +33,10 @@ export function DeclaredToolsDiffView({
 
   return (
     <div>
-      <div className="text-xs text-zinc-500 mb-1.5">Declared tools vs. prior approved version</div>
+      <div className="text-xs text-[rgb(var(--text-muted))] mb-1.5">Declared tools vs. prior approved version</div>
       <div className="flex flex-wrap gap-1.5">
         {unchanged.map((t) => (
-          <Badge key={t} className="bg-zinc-700/40 text-zinc-300 border-zinc-600/50">{t}</Badge>
+          <Badge key={t} className="bg-zinc-700/40 text-[rgb(var(--text-primary))] border-zinc-600/50">{t}</Badge>
         ))}
         {diff.added.map((t) => (
           <span key={t} data-testid="declared-tool-added" title={`newly declared — not in the prior approved version`}>
@@ -45,7 +45,7 @@ export function DeclaredToolsDiffView({
         ))}
         {diff.removed.map((t) => (
           <span key={t} data-testid="declared-tool-removed" title="removed — safe narrowing, no widening review needed">
-            <Badge className="bg-zinc-800/60 text-zinc-600 border-zinc-700/50 line-through">− {t}</Badge>
+            <Badge className="bg-[rgb(var(--bg-hover))]/60 text-zinc-600 border-zinc-700/50 line-through">− {t}</Badge>
           </span>
         ))}
       </div>

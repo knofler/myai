@@ -47,7 +47,7 @@ export default async function RoutingSettingsView() {
           Could not reach the database — showing defaults. Saving may fail until the DB is reachable.
         </div>
       )}
-      <p className="mb-5 text-sm text-zinc-500">
+      <p className="mb-5 text-sm text-[rgb(var(--text-muted))]">
         Set this tenant&apos;s default model, per-priority model overrides, and a monthly budget cap with
         soft/hard limits. Soft/hard limits are the thresholds the token guard enforces.
       </p>

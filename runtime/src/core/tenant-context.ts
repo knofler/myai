@@ -23,6 +23,43 @@ const DEFAULT_TENANT_ID = process.env.DEFAULT_TENANT_ID || 'default';
  */
 export type CtxRole = 'viewer' | 'member' | 'admin' | 'owner' | 'system' | 'operator';
 
+/**
+ * Per-invocation resource ceiling for a sandboxed marketplace-package call
+ * (ADR-027 §3) — mirrors `marketplace/publish.ts`'s
+ * `PublishManifest.capabilities.resourceLimits` shape (the same numbers a
+ * reviewed manifest declares); duplicated here rather than imported to keep
+ * this low-level module free of a `marketplace/*` import (would cycle back
+ * through `core/rbac.ts`, which this file is imported by).
+ */
+export interface SandboxResourceLimits {
+  maxWallClockMs: number;
+  maxToolCalls: number;
+  maxOutputBytes: number;
+}
+
+/**
+ * Server-derived marker identifying `ctx` as belonging to a running
+ * sandboxed marketplace-package invocation (ADR-027 §3) — set ONLY by the
+ * invocation loader (`marketplace/sandbox-invoke.ts`), never from a caller
+ * or tool arg, same posture as `role` below. `executeTool` checks this
+ * FIRST, via `assertDeclaredCapability` (core/rbac.ts), before the ordinary
+ * role/visibility gates.
+ */
+export interface SandboxContextMarker {
+  listingId: string;
+  version: string;
+  installId: string;
+  /** The manifest's declared tool set for this invocation (ADR-027 §2). A
+   *  declared capability never WIDENS what the caller's real role already
+   *  permits — §3's gate is intersective, not substitutive. */
+  declaredTools: readonly string[];
+  resourceLimits: SandboxResourceLimits;
+  /** Mutable accumulator, the SAME object reference threaded through every
+   *  chained `executeTool` call this invocation makes, so `maxToolCalls` is
+   *  enforced across the whole invocation rather than reset per call. */
+  toolCallState: { count: number };
+}
+
 export interface ToolContext {
   /** The tenant every scoped store call is filtered by. */
   tenantId: string;
@@ -65,6 +102,13 @@ export interface ToolContext {
    */
   mcpToolAllowlist?: string[];
   mcpToolDenylist?: string[];
+  /**
+   * Present only while dispatching inside a sandboxed marketplace-package
+   * invocation (ADR-027 §3) — server-derived by the invocation loader,
+   * NEVER settable via caller args (`stripTenantFromArgs`-style trust
+   * boundary applies here too).
+   */
+  sandbox?: SandboxContextMarker;
 }
 
 /**
@@ -87,11 +131,17 @@ export const SYSTEM_CONTEXT: ToolContext = Object.freeze({
 export class AuthError extends Error {
   readonly status: number;
   readonly code: string;
-  constructor(message: string, status = 401, code = 'UNAUTHORIZED') {
+  /** Seconds the caller should wait before retrying — set on 429 (rate-limit)
+   *  and 423 (lockout) errors thrown deep in service code (e.g. TOTP verify,
+   *  login lockout) so the route handler can echo a `Retry-After` header the
+   *  same way the `authRateLimit` middleware does at the edge. */
+  readonly retryAfter?: number;
+  constructor(message: string, status = 401, code = 'UNAUTHORIZED', retryAfter?: number) {
     super(message);
     this.name = 'AuthError';
     this.status = status;
     this.code = code;
+    this.retryAfter = retryAfter;
   }
 }
 

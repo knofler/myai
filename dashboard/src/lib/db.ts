@@ -142,6 +142,11 @@ const budgetUsageSchema = new mongoose.Schema({
   cacheReadInputTokens: Number,
   // Phase 5f — true when this call was dispatched via Message Batches API (50% discount).
   batchMode: Boolean,
+  // Cost-attribution breakdown (repo/model/task-type/premium-vs-standard
+  // lane) — read-only mirror of runtime/src/shared/db.ts's IBudgetUsage.
+  repo: String,
+  taskType: String,
+  premium: Boolean,
   metadata: mongoose.Schema.Types.Mixed,
   createdAt: Date,
 }, { collection: 'budgetusages', timestamps: true });
@@ -319,6 +324,31 @@ const artifactSchema = new mongoose.Schema({
   updatedAt: Date,
 }, { collection: 'artifacts' });
 
+// Saved task-board views (task-e8aaf32e) — dashboard-OWNED collection (not a
+// gateway mirror): a named bundle of /work filters persisted per user,
+// tenant-scoped, resolvable by anyone in the tenant via /work?view=<viewId>
+// (share-within-tenant is the contract; create/delete are owner-only).
+// Written only by /api/views; filter values are validated by
+// lib/saved-views.ts sanitizeFilters before they ever reach this schema.
+const savedViewSchema = new mongoose.Schema({
+  tenantId: String,
+  userId: String,     // owning user; 'local-operator' on unauthenticated local installs
+  viewId: String,     // shareable id, sv-<12 hex>
+  name: String,
+  filters: {
+    tab: String,
+    repo: String,
+    priority: String, // P0–P3
+    status: String,   // task status lens
+    agent: String,    // assignedAgent
+    lane: String,     // claude | agentic-fallback
+  },
+  createdAt: Date,
+  updatedAt: Date,
+}, { collection: 'savedviews' });
+savedViewSchema.index({ tenantId: 1, viewId: 1 }, { unique: true });
+savedViewSchema.index({ tenantId: 1, userId: 1, name: 1 });
+
 // Field names mirror the gateway's ISchedule (runtime/src/shared/db.ts) —
 // cronExpr/lastStatus, NOT cron/lastRunStatus.
 const scheduleSchema = new mongoose.Schema({
@@ -342,6 +372,37 @@ const scheduleSchema = new mongoose.Schema({
   createdAt: Date,
   updatedAt: Date,
 }, { collection: 'schedules' });
+
+// Recurring runner tasks (task-b8ddab7d) — mirror of the gateway's
+// IRecurringTask (runtime/src/shared/db.ts): a cron-cadenced task TEMPLATE the
+// gateway sweep re-enqueues into the Task queue as one-shots. The dashboard
+// reads the list and writes exactly ONE field — the `enabled` toggle
+// (api/recurring/[recurringId]) — everything else is gateway-owned.
+const recurringTaskSchema = new mongoose.Schema({
+  tenantId: String,   // ADR-010 — tenant discriminator
+  recurringId: String,
+  name: String,
+  cronExpr: String,
+  repo: String,
+  title: String,
+  description: String,
+  priority: { type: String, enum: ['P0', 'P1', 'P2', 'P3'] },
+  assignedAgent: String,
+  recommendedModel: String,
+  notes: String,
+  overlapPolicy: { type: String, enum: ['skip', 'stack'] },
+  enabled: Boolean,
+  nextFireAt: Date,
+  lastFiredAt: Date,
+  lastFireStatus: { type: String, enum: ['never', 'enqueued', 'skipped', 'error'] },
+  lastTaskId: String,
+  lastError: String,
+  enqueueCount: Number,
+  skipCount: Number,
+  errorCount: Number,
+  createdAt: Date,
+  updatedAt: Date,
+}, { collection: 'recurring_tasks' });
 
 const repoCardSchema = new mongoose.Schema({
   tenantId: String,   // ADR-010 — tenant discriminator (absent on pre-backfill rows)
@@ -409,6 +470,11 @@ const tenantSchema = new mongoose.Schema({
   apiKeyPrefix: { type: String, required: true, unique: true, index: true },
   plan: { type: String, enum: ['free', 'solo', 'team', 'scale'], default: 'free', index: true },
   status: { type: String, enum: ['active', 'suspended', 'deleted'], default: 'active', index: true },
+  // ADR-024 data residency — read-only mirror of the gateway's `region` field
+  // (set at provisioning by tenant-keys.ts, enforced by core/region-guard.ts).
+  // The dashboard only surfaces it (residency badge); it never writes it —
+  // changing a tenant's region is a support-assisted gateway-side operation.
+  region: { type: String, enum: ['us', 'eu', 'au'], default: 'us', index: true },
   ownerEmail: String,
   // M5 / §7.2 Day 7 — Stripe billing link + subscription state. The billing
   // webhook (api/billing/webhook) is the only writer; the gate reads them.
@@ -444,6 +510,12 @@ const tenantSchema = new mongoose.Schema({
     enum: ['not_connected', 'onboarding', 'restricted', 'enabled', 'disconnected'],
     default: 'not_connected',
   },
+  // Operator-side data-retention purge-on-cancel (gateway's
+  // core/tenant-lifecycle.ts) — mirror of the gateway's `cancellationPurgeAt`.
+  // This webhook route is the only writer: set on `customer.subscription.deleted`
+  // (grace window before the gateway's cancellation-purge sweep hard-deletes
+  // the tenant's data), cleared on a resubscribe within the window.
+  cancellationPurgeAt: Date,
   metadata: mongoose.Schema.Types.Mixed,
 }, { collection: 'tenants', timestamps: true });
 
@@ -595,7 +667,46 @@ const budgetCapOverrideSchema = new mongoose.Schema({
   }],
 }, { collection: 'budgetcapoverrides' });
 
+// ADR-019 §1 / implementation checklist #1 — append-only revenue-share ledger,
+// the persisted replacement for the in-memory `marketplace-ledger-store.ts`
+// Map. Mirrors `runtime/src/marketplace/types.ts`'s `PayoutLedgerEntry`; scope
+// is `creatorTenantId` (ADR-010) — the CREATOR tenant being paid, distinct
+// from the installer/buyer tenant on the linked `Install`. `entryId` is the
+// Stripe object id (PaymentIntent/session/invoice) that proves the charge
+// happened — the unique index is the append-only/idempotency enforcement:
+// `marketplace-ledger-store.ts appendLedgerEntry` relies on the resulting
+// E11000 to detect "already appended" rather than checking-then-inserting
+// (which would race under concurrent webhook redelivery).
+const payoutLedgerEntrySchema = new mongoose.Schema({
+  creatorTenantId: { type: String, required: true, index: true },
+  entryId: { type: String, required: true, unique: true },
+  listingId: { type: String, required: true, index: true },
+  installId: String,
+  type: {
+    type: String,
+    required: true,
+    enum: ['sale', 'subscription_cycle', 'usage', 'refund_reversal', 'adjustment', 'payout'],
+  },
+  status: {
+    type: String,
+    required: true,
+    enum: ['pending', 'available', 'paid', 'reversed'],
+  },
+  grossUsd: { type: Number, required: true },
+  platformFeeUsd: { type: Number, required: true },
+  creatorNetUsd: { type: Number, required: true },
+  currency: { type: String, required: true },
+  occurredAt: { type: Date, required: true },
+  payoutBatchId: String,
+  createdAt: { type: Date, required: true, default: Date.now },
+}, { collection: 'payoutledgerentries' });
+
+// The payout-run hot path (ADR-019 §1, checklist item #4): a creator's
+// cleared-balance rollup, filtered by status, ordered by event time.
+payoutLedgerEntrySchema.index({ creatorTenantId: 1, status: 1, occurredAt: 1 });
+
 export const StripeEvent = mongoose.models.StripeEvent || mongoose.model('StripeEvent', stripeEventSchema);
+export const PayoutLedgerEntry = mongoose.models.PayoutLedgerEntry || mongoose.model('PayoutLedgerEntry', payoutLedgerEntrySchema);
 export const RoutingPolicy = mongoose.models.RoutingPolicy || mongoose.model('RoutingPolicy', routingPolicySchema);
 export const BudgetCapOverride = mongoose.models.BudgetCapOverride || mongoose.model('BudgetCapOverride', budgetCapOverrideSchema);
 export const ContinuityMetric = mongoose.models.ContinuityMetric || mongoose.model('ContinuityMetric', continuityMetricSchema);
@@ -622,4 +733,6 @@ export const RunnerLease = mongoose.models.RunnerLease || mongoose.model('Runner
 export const RunnerLeaseHistory = mongoose.models.RunnerLeaseHistory || mongoose.model('RunnerLeaseHistory', runnerLeaseHistorySchema);
 export const FleetMaintenance = mongoose.models.FleetMaintenance || mongoose.model('FleetMaintenance', fleetMaintenanceSchema);
 export const Schedule = mongoose.models.Schedule || mongoose.model('Schedule', scheduleSchema);
+export const RecurringTask = mongoose.models.RecurringTask || mongoose.model('RecurringTask', recurringTaskSchema);
 export const Artifact = mongoose.models.Artifact || mongoose.model('Artifact', artifactSchema);
+export const SavedView = mongoose.models.SavedView || mongoose.model('SavedView', savedViewSchema);

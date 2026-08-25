@@ -7,12 +7,17 @@
 import { connectDB, Tenant } from '@/lib/db';
 import { sha256Hex, timingSafeEqualHex, KEY_PREFIX_LEN, KEY_RE } from '@/lib/tenant-keys';
 import type { TenantPlan, SubscriptionStatus, BillingInterval, DiscountSummary } from '@/lib/billing';
+import type { TenantRegion } from '@/lib/residency';
 
 export interface AuthedTenant {
   tenantId: string;
   name: string;
   plan: TenantPlan;
   status: string;
+  // ADR-024 data residency — the region this tenant's records + off-hours
+  // runner work are pinned to. Optional: pre-migration mirror rows may lack
+  // it; readers fall back to 'us' via asTenantRegion().
+  region?: TenantRegion;
   ownerEmail?: string;
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;

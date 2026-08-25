@@ -297,6 +297,9 @@ export async function runDispatchCycle(config: DispatchConfig = {}): Promise<Dis
         message: prompt,
         repo: task.repo,
         includeMemoryContext: true,
+        // Runner-claimed dispatch — the billable premium/off-hours lane
+        // (cost-attribution breakdown groups on this, see budget-guard.ts).
+        premium: true,
       }) as {
         content?: string;
         error?: string;

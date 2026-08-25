@@ -10,6 +10,14 @@ import { withResilience, CircuitOpenError, RateLimitExhaustedError, ProviderMain
 import { probeOllamaCached, pickOllamaModel, offlineNotice } from './offline.js';
 import { route } from './router.js';
 import { budgetAwareChain, estimateRequestTokens } from './failover.js';
+import {
+  applyRetryBudget,
+  computeFailoverBackoffMs,
+  recordHopAttempt,
+  recordHopDropped,
+  recordHopSucceeded,
+  sleep as sleepFailoverBackoff,
+} from './failover-backoff.js';
 import type { RoutingContext } from './router.js';
 import type { GatewayMessage } from '../shared/types.js';
 import type { AnthropicToolOptions } from './anthropic.js';
@@ -536,6 +544,10 @@ function applyFailoverBudget(
       originalChain: chain,
       budgetAwareChain: filtered.chain,
     }, 'Budget-aware failover: dropped paid fallback provider(s) that would exceed remaining budget');
+    const atIso = new Date().toISOString();
+    for (const d of filtered.dropped) {
+      recordHopDropped({ mode: d.mode, index: d.index, reason: 'cost-budget', atIso, estimatedCostUsd: d.estimatedCostUsd });
+    }
   }
 
   return filtered.chain;
@@ -577,6 +589,12 @@ export async function complete(req: LlmRequest): Promise<LlmResponse | null> {
     }, 'LLM request');
   }
 
+  // Retry budget: an explicit operator-tunable cap on how many hops a single
+  // call may attempt (LLM_MAX_FAILOVER_HOPS), independent of cost. Always
+  // keeps the primary; hops beyond the cap are dropped + recorded for the
+  // provider_health dashboard rather than silently never attempted.
+  chain = applyRetryBudget(chain, config.llm.maxFailoverHops);
+
   // Budget-aware failover: drop paid fallback hops the tenant can't afford,
   // keeping the primary + free providers. No-op unless req.failoverBudget set.
   chain = applyFailoverBudget(chain, req, config, modelOverride);
@@ -584,6 +602,7 @@ export async function complete(req: LlmRequest): Promise<LlmResponse | null> {
   let lastError: unknown;
   for (let i = 0; i < chain.length; i++) {
     const mode = chain[i];
+    recordHopAttempt(mode, i);
     try {
       // modelOverride is the router's chosen model for the PRIMARY provider
       // (chain[0]). Fallback providers must use their own default model — a
@@ -591,6 +610,7 @@ export async function complete(req: LlmRequest): Promise<LlmResponse | null> {
       // and would fail the whole chain. So only apply it to the first hop.
       const result = await dispatchByMode(mode, req, i === 0 ? modelOverride : undefined);
       if (i > 0) {
+        recordHopSucceeded(mode, i);
         log.warn({
           usedFallbackMode: mode,
           primary: chain[0],
@@ -611,11 +631,21 @@ export async function complete(req: LlmRequest): Promise<LlmResponse | null> {
         log.error({ err, mode }, 'LLM call failed (non-recoverable)');
         throw err;
       }
+      const nextMode = chain[i + 1];
       log.warn({
         mode,
-        nextInChain: chain[i + 1] ?? '(end)',
+        nextInChain: nextMode ?? '(end)',
         errMessage: (err as Error).message,
       }, 'LLM call failed (recoverable network error), trying next provider in chain');
+      // Per-provider inter-hop backoff (plan §4a remainder): pause briefly
+      // before hammering the next provider — distinct from, and much shorter
+      // than, the same-provider retry backoff in resilience.ts. Opt-in via
+      // config so ad hoc/test configs that don't set it stay instant.
+      if (nextMode && config.llm.failoverBackoffEnabled) {
+        const backoffMs = computeFailoverBackoffMs(mode, i);
+        log.info({ mode, nextMode, backoffMs: Math.round(backoffMs) }, 'Failover backoff before next hop');
+        await sleepFailoverBackoff(backoffMs);
+      }
     }
   }
   // BRAIN B6 — offline auto-connect. Reaching here means EVERY provider in the
@@ -793,6 +823,10 @@ export function wrapBatchResult(result: {
 
 // Re-export resilience observability for the gateway / MCP health endpoint.
 export { getProviderHealth, getAllProviderHealth, resetProvider } from './resilience.js';
+// Re-export failover-chain observability (retry budget + dropped hops) for
+// the `provider_health` MCP tool / dashboard API Health page.
+export { getRecentDroppedHops } from './failover-backoff.js';
+export type { DroppedHopEvent } from './failover-backoff.js';
 // Re-export operator maintenance-mode controls for the gateway / MCP tools.
 export {
   enterMaintenance,

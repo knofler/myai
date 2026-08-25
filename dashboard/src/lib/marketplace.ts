@@ -208,10 +208,13 @@ export function catalogCategories(listings: MarketplaceListing[]): string[] {
 }
 
 /**
- * The dashboard's install gate = the ADR-019 `canInstall` state-machine gate
- * PLUS the free-tier-only scope of this release: charging at the install
- * boundary (one_time/subscription/usage → billing.ts + ledger append) is a
- * deferred follow-up, so a paid listing is browsable but not installable.
+ * The `POST /api/marketplace/installs` route's gate — direct, synchronous
+ * installs for `free` listings only (no charge boundary at all: commerce
+ * short-circuits). A paid listing (`one_time`/`subscription`/`usage`) does
+ * NOT go through this path: `POST /api/marketplace/checkout` starts a Stripe
+ * Checkout Session instead, and the Install row is only created once payment
+ * completes, via `completeMarketplaceCharge` (ADR-019 §4 / checklist #3 —
+ * `marketplace-billing.ts` + `marketplace-store.ts`).
  */
 export function canInstallFreeTier(
   listing: Pick<MarketplaceListing, 'status' | 'pricingModel'>,
@@ -222,7 +225,7 @@ export function canInstallFreeTier(
   if (listing.pricingModel !== 'free') {
     return {
       ok: false,
-      reason: 'paid installs are not live yet — Stripe charge/payout wiring is an ADR-019 follow-up (free listings only)',
+      reason: 'paid listings install via POST /api/marketplace/checkout (Stripe), not this direct-install route',
     };
   }
   return { ok: true };
@@ -253,6 +256,55 @@ export function formatPricing(listing: Pick<MarketplaceListing, 'pricingModel' |
     case 'usage':
       return 'Usage-based';
   }
+}
+
+// ═══ Ratings/reviews (dashboard-only — ADR-019 checklist #6, second half) ═══
+//
+// Out of scope for ADR-019 itself is *moderation* of reviews (flagging, an
+// admin removal queue, spam filtering) — this is the plain data model +
+// display half: one review per installerTenantId per listing (ADR-010 §1.5
+// scoping, same posture as `Install`), a 1-5 integer star rating plus a
+// comment, aggregated into the listing's `ratingAvg`/`ratingCount`.
+
+export interface Review {
+  installerTenantId: string;
+  reviewId: string;
+  listingId: string;
+  rating: number; // integer 1-5
+  comment: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function isValidRating(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 5;
+}
+
+export const REVIEW_COMMENT_MAX_LENGTH = 2000;
+
+export interface RatingSummary {
+  ratingAvg: number;
+  ratingCount: number;
+}
+
+/** Listing's `ratingAvg`/`ratingCount` are a pure derivation of its reviews — never hand-edited once reviews exist. */
+export function summarizeRatings(reviews: readonly Pick<Review, 'rating'>[]): RatingSummary {
+  if (reviews.length === 0) return { ratingAvg: 0, ratingCount: 0 };
+  const sum = reviews.reduce((acc, r) => acc + r.rating, 0);
+  return { ratingAvg: Math.round((sum / reviews.length) * 10) / 10, ratingCount: reviews.length };
+}
+
+/**
+ * Only a tenant with a live (non-uninstalled) install may leave a review —
+ * mirrors the ADR-019 install gate's spirit (you must have actually used the
+ * listing) without adding a new state machine. `install` is that tenant's
+ * install of this listing, if any (undefined = never installed).
+ */
+export function canReviewListing(install: Pick<Install, 'status'> | undefined): TransitionResult {
+  if (!install) return { ok: false, reason: 'install this listing before leaving a review' };
+  if (install.status === 'uninstalled') return { ok: false, reason: 'reinstall this listing before leaving a review' };
+  return { ok: true };
 }
 
 // ═══ Review-queue helpers (ADR-028 §4 — mirrors runtime/src/marketplace/review-queue.ts) ═══

@@ -1,0 +1,13 @@
+{
+  "name": "myai-fleet",
+  "version": "0.7.2",
+  "description": "Multi-agent swarm coordination, GitHub lifecycle automation, and project/schedule tracking for myAI's fleet of managed repos.",
+  "author": {
+    "name": "knofler",
+    "url": "https://github.com/knofler/myai"
+  },
+  "homepage": "https://github.com/knofler/myai#readme",
+  "repository": "https://github.com/knofler/myai",
+  "license": "MIT",
+  "keywords": ["swarm", "fleet", "github", "orchestration", "scheduling"]
+}

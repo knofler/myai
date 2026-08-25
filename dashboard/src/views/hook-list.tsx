@@ -73,10 +73,10 @@ export function HookList({ hooks: initial }: { hooks: HookItem[] }) {
         <p className="mb-3 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2">{error}</p>
       )}
 
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+      <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
         <table className="card-table w-full text-sm">
           <thead>
-            <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500 uppercase tracking-wider">
+            <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Events</th>
               <th className="px-4 py-3 text-center">Priority</th>
@@ -85,30 +85,30 @@ export function HookList({ hooks: initial }: { hooks: HookItem[] }) {
               <th className="px-4 py-3 text-center">Enabled</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-800/50">
+          <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
             {hooks.map(h => (
               <tr
                 key={h._id}
                 title={lastToggleTooltip(h.lastToggle)}
-                className={`hover:bg-zinc-800/30 active:bg-zinc-800/60 transition-colors ${h.enabled ? '' : 'opacity-60'}`}
+                className={`hover:bg-[rgb(var(--bg-hover))]/30 active:bg-[rgb(var(--bg-hover))]/60 transition-colors ${h.enabled ? '' : 'opacity-60'}`}
               >
-                <td className="m-title px-4 py-2.5 font-mono text-xs text-zinc-300">{h.name}</td>
+                <td className="m-title px-4 py-2.5 font-mono text-xs text-[rgb(var(--text-primary))]">{h.name}</td>
                 <td data-label="Events" className="px-4 py-2.5">
                   <div className="flex flex-wrap gap-1 justify-end md:justify-start">
                     {h.events.map(e => (
-                      <span key={e} className="text-[10px] font-mono px-1.5 py-0.5 bg-zinc-800 rounded text-emerald-400">{e}</span>
+                      <span key={e} className="text-[10px] font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-emerald-400">{e}</span>
                     ))}
                   </div>
                 </td>
-                <td data-label="Priority" className="px-4 py-2.5 text-center text-xs text-zinc-400">{h.priority}</td>
+                <td data-label="Priority" className="px-4 py-2.5 text-center text-xs text-[rgb(var(--text-secondary))]">{h.priority}</td>
                 <td data-label="Source" className="px-4 py-2.5 text-center">
                   <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
                     h.source === 'builtin' ? 'bg-blue-500/10 text-blue-400' :
                     h.source === 'bash' ? 'bg-orange-500/10 text-orange-400' :
-                    'bg-zinc-800 text-zinc-400'
+                    'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-secondary))]'
                   }`}>{h.source}</span>
                 </td>
-                <td data-label="Timeout" className="m-hide px-4 py-2.5 text-center text-xs text-zinc-500">{h.timeout}ms</td>
+                <td data-label="Timeout" className="m-hide px-4 py-2.5 text-center text-xs text-[rgb(var(--text-muted))]">{h.timeout}ms</td>
                 <td data-label="Enabled" className="px-4 py-2.5 text-center">
                   <button
                     type="button"

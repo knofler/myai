@@ -34,7 +34,7 @@ const CATEGORY_LABEL: Record<string, string> = {
 };
 
 const inputCls =
-  'w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-sm text-zinc-100 placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
+  'w-full px-3 py-2 rounded-lg bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors';
 
 export default function ConnectorManager() {
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
@@ -80,7 +80,7 @@ export default function ConnectorManager() {
     return <div className="px-3 py-2 rounded-lg bg-rose-950/50 border border-rose-800/50 text-sm text-rose-300">{error}</div>;
   }
   if (!connectors) {
-    return <div className="text-sm text-zinc-500">Loading connectors…</div>;
+    return <div className="text-sm text-[rgb(var(--text-muted))]">Loading connectors…</div>;
   }
 
   const enabled = connectors.filter((c) => c.enabled).length;
@@ -104,14 +104,14 @@ export default function ConnectorManager() {
       {/* Summary + actions */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex gap-4 text-sm">
-          <span className="text-zinc-400">{connectors.length} connectors</span>
+          <span className="text-[rgb(var(--text-secondary))]">{connectors.length} connectors</span>
           <span className="text-emerald-400">{enabled} enabled</span>
           {needsKey.length > 0 && <span className="text-amber-400">{needsKey.length} need a key</span>}
         </div>
         <div className="flex gap-2">
           <button
             onClick={() => post({ action: 'seed' })}
-            className="gel-surface px-3 py-2 rounded-lg border border-zinc-800 text-sm text-zinc-200 hover:border-zinc-700 transition"
+            className="gel-surface px-3 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-[rgb(var(--text-primary))] hover:border-zinc-700 transition"
           >
             Re-seed bundle
           </button>
@@ -129,15 +129,15 @@ export default function ConnectorManager() {
       {/* Grouped connectors */}
       {sortedCats.map((cat) => (
         <div key={cat}>
-          <h2 className="text-xs font-semibold text-zinc-500 mb-2 uppercase tracking-wider">{CATEGORY_LABEL[cat] || cat}</h2>
+          <h2 className="text-xs font-semibold text-[rgb(var(--text-muted))] mb-2 uppercase tracking-wider">{CATEGORY_LABEL[cat] || cat}</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {groups[cat].map((c) => (
-              <div key={c.key} className="bg-zinc-900/70 border border-zinc-800 rounded-xl p-4 flex flex-col gap-2">
+              <div key={c.key} className="bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl p-4 flex flex-col gap-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <p className="font-semibold text-sm text-zinc-100 truncate">{c.label}</p>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">{c.transport}</span>
+                      <p className="font-semibold text-sm text-[rgb(var(--text-primary))] truncate">{c.label}</p>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-secondary))] font-mono">{c.transport}</span>
                       {c.source === 'custom' && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">custom</span>}
                     </div>
                     <p className="text-[11px] text-zinc-600 font-mono mt-0.5">{c.key}</p>
@@ -154,7 +154,7 @@ export default function ConnectorManager() {
                   </button>
                 </div>
 
-                <p className="text-xs text-zinc-400 line-clamp-2">{c.description}</p>
+                <p className="text-xs text-[rgb(var(--text-secondary))] line-clamp-2">{c.description}</p>
 
                 <p className="text-[11px] text-zinc-600 font-mono truncate">
                   {c.transport === 'http' ? c.url : `${c.command ?? ''} ${(c.args ?? []).join(' ')}`}
@@ -199,20 +199,20 @@ function AddForm({ onAdd }: { onAdd: (payload: Record<string, unknown>) => void 
         e.preventDefault();
         void onAdd({ key: key.trim(), label: label.trim() || undefined, transport, url, command, args, description });
       }}
-      className="bg-zinc-900/70 border border-zinc-800 rounded-xl p-4 space-y-3"
+      className="bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl p-4 space-y-3"
     >
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
-          <span className="block text-xs text-zinc-500 mb-1">Key (slug)</span>
+          <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Key (slug)</span>
           <input value={key} onChange={(e) => setKey(e.target.value)} placeholder="my-server" className={`${inputCls} font-mono`} required />
         </label>
         <label className="block">
-          <span className="block text-xs text-zinc-500 mb-1">Label</span>
+          <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Label</span>
           <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My Server" className={inputCls} />
         </label>
       </div>
       <label className="block">
-        <span className="block text-xs text-zinc-500 mb-1">Transport</span>
+        <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Transport</span>
         <select value={transport} onChange={(e) => setTransport(e.target.value as 'http' | 'stdio')} className={inputCls}>
           <option value="http">http (url)</option>
           <option value="stdio">stdio (command)</option>
@@ -220,23 +220,23 @@ function AddForm({ onAdd }: { onAdd: (payload: Record<string, unknown>) => void 
       </label>
       {transport === 'http' ? (
         <label className="block">
-          <span className="block text-xs text-zinc-500 mb-1">URL</span>
+          <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">URL</span>
           <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com/mcp" className={`${inputCls} font-mono`} />
         </label>
       ) : (
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
-            <span className="block text-xs text-zinc-500 mb-1">Command</span>
+            <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Command</span>
             <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" className={`${inputCls} font-mono`} />
           </label>
           <label className="block">
-            <span className="block text-xs text-zinc-500 mb-1">Args (space-separated)</span>
+            <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Args (space-separated)</span>
             <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="-y @scope/mcp-server" className={`${inputCls} font-mono`} />
           </label>
         </div>
       )}
       <label className="block">
-        <span className="block text-xs text-zinc-500 mb-1">Description</span>
+        <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Description</span>
         <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What this connector does" className={inputCls} />
       </label>
       <button type="submit" disabled={!key.trim()} className="gel-brand px-3 py-2 rounded-lg text-sm font-medium text-teal-100 hover:brightness-110 disabled:opacity-40 transition">

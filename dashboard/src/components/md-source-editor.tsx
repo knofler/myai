@@ -92,12 +92,12 @@ export function MdSourceEditor({ kind, name, onSaved }: { kind: Kind; name: stri
 
   return (
     <div>
-      <p className="text-xs text-zinc-500 uppercase mb-1">Source file</p>
+      <p className="text-xs text-[rgb(var(--text-muted))] uppercase mb-1">Source file</p>
       {!open ? (
         <button
           onClick={openEditor}
           disabled={loading}
-          className="tap-press text-xs px-3 py-1.5 rounded-md bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+          className="tap-press text-xs px-3 py-1.5 rounded-md bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-primary))] hover:bg-zinc-700 disabled:opacity-50"
         >
           {loading ? 'Loading…' : 'Edit source'}
         </button>
@@ -106,26 +106,26 @@ export function MdSourceEditor({ kind, name, onSaved }: { kind: Kind; name: stri
           {error && <p className="text-xs text-red-400">{error}</p>}
 
           {loading ? (
-            <p className="text-xs text-zinc-500">Loading…</p>
+            <p className="text-xs text-[rgb(var(--text-muted))]">Loading…</p>
           ) : (
             <>
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 spellCheck={false}
-                className="w-full h-64 text-xs font-mono bg-zinc-950 border border-zinc-800 rounded-md p-3 text-zinc-300 focus:outline-none focus:border-teal-500/50"
+                className="w-full h-64 text-xs font-mono bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded-md p-3 text-[rgb(var(--text-primary))] focus:outline-none focus:border-teal-500/50"
               />
 
               <div className="flex items-center gap-2 flex-wrap">
                 <button
                   onClick={() => setShowDiff((v) => !v)}
                   disabled={!dirty}
-                  className="tap-press text-xs px-3 py-1.5 rounded-md bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:opacity-40"
+                  className="tap-press text-xs px-3 py-1.5 rounded-md bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-primary))] hover:bg-zinc-700 disabled:opacity-40"
                 >
                   {showDiff ? 'Hide diff' : 'Preview diff'}
                 </button>
                 {dirty && (
-                  <span className="text-[10px] text-zinc-500">
+                  <span className="text-[10px] text-[rgb(var(--text-muted))]">
                     <span className="text-emerald-400">+{stats.additions}</span>{' '}
                     <span className="text-red-400">-{stats.deletions}</span>
                   </span>
@@ -133,7 +133,7 @@ export function MdSourceEditor({ kind, name, onSaved }: { kind: Kind; name: stri
               </div>
 
               {showDiff && (
-                <pre className="text-xs font-mono bg-zinc-950 border border-zinc-800 rounded-md p-3 overflow-x-auto max-h-64 whitespace-pre-wrap">
+                <pre className="text-xs font-mono bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded-md p-3 overflow-x-auto max-h-64 whitespace-pre-wrap">
                   {lines.map((l, i) => (
                     <div
                       key={i}
@@ -142,7 +142,7 @@ export function MdSourceEditor({ kind, name, onSaved }: { kind: Kind; name: stri
                           ? 'bg-emerald-500/10 text-emerald-300'
                           : l.type === 'remove'
                             ? 'bg-red-500/10 text-red-300'
-                            : 'text-zinc-500'
+                            : 'text-[rgb(var(--text-muted))]'
                       }
                     >
                       {l.type === 'add' ? '+ ' : l.type === 'remove' ? '- ' : '  '}
@@ -157,7 +157,7 @@ export function MdSourceEditor({ kind, name, onSaved }: { kind: Kind; name: stri
                 value={commitMessage}
                 onChange={(e) => setCommitMessage(e.target.value)}
                 placeholder={`chore(${kind}): edit ${name} via dashboard editor`}
-                className="w-full text-xs bg-zinc-950 border border-zinc-800 rounded-md px-3 py-1.5 text-zinc-300 focus:outline-none focus:border-teal-500/50"
+                className="w-full text-xs bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded-md px-3 py-1.5 text-[rgb(var(--text-primary))] focus:outline-none focus:border-teal-500/50"
               />
 
               {saveInfo && (
@@ -178,7 +178,7 @@ export function MdSourceEditor({ kind, name, onSaved }: { kind: Kind; name: stri
                 </button>
                 <button
                   onClick={closeEditor}
-                  className="tap-press text-xs px-3 py-1.5 rounded-md bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                  className="tap-press text-xs px-3 py-1.5 rounded-md bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-secondary))] hover:bg-zinc-700"
                 >
                   Close
                 </button>

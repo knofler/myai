@@ -14,6 +14,7 @@ import {
   DISPATCH_ACTION_ENTRY,
   buildTenantEntries,
   buildRepoEntries,
+  buildPlanEntries,
   filterEntries,
   clampIndex,
   type PaletteEntry,
@@ -35,6 +36,7 @@ export function CommandPalette() {
       DISPATCH_ACTION_ENTRY,
       ...buildTenantEntries(tenants, current?.tenantId),
       ...buildRepoEntries(repos),
+      ...buildPlanEntries(repos),
     ],
     [tenants, current?.tenantId, repos],
   );
@@ -114,7 +116,7 @@ export function CommandPalette() {
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        className="w-full max-w-lg bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl overflow-hidden"
+        className="w-full max-w-lg bg-[rgb(var(--bg-surface))] border border-zinc-700 rounded-xl shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {mode === 'dispatch' ? (
@@ -135,7 +137,7 @@ export function CommandPalette() {
               aria-expanded="true"
               aria-controls="cmd-palette-list"
               aria-activedescendant={results[index] ? `cmd-opt-${index}` : undefined}
-              className="w-full bg-transparent px-4 py-3.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none border-b border-zinc-800"
+              className="w-full bg-transparent px-4 py-3.5 text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none border-b border-[rgb(var(--border-subtle))]"
             />
             <ul id="cmd-palette-list" role="listbox" className="max-h-[40vh] overflow-y-auto py-1.5">
               {results.length === 0 && <li className="px-4 py-6 text-center text-sm text-zinc-600">No matches.</li>}
@@ -146,7 +148,7 @@ export function CommandPalette() {
                     onMouseEnter={() => setIndex(i)}
                     onClick={() => select(e)}
                     className={`w-full text-left px-4 py-2.5 flex items-baseline justify-between gap-3 ${
-                      i === index ? 'bg-teal-500/15 text-teal-200' : 'text-zinc-300'
+                      i === index ? 'bg-teal-500/15 text-teal-200' : 'text-[rgb(var(--text-primary))]'
                     }`}
                   >
                     <span className="text-sm">{e.label}</span>
@@ -155,7 +157,7 @@ export function CommandPalette() {
                 </li>
               ))}
             </ul>
-            <div className="px-4 py-2 border-t border-zinc-800 text-[10px] text-zinc-600 flex gap-3">
+            <div className="px-4 py-2 border-t border-[rgb(var(--border-subtle))] text-[10px] text-zinc-600 flex gap-3">
               <span>↑↓ navigate</span><span>↵ open</span><span>esc close</span>
             </div>
           </>
@@ -207,20 +209,20 @@ function DispatchForm({ repos, onCancel, onDone }: { repos: string[]; onCancel: 
   return (
     <form onSubmit={submit} className="p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-zinc-200">Dispatch a task</h2>
-        <button type="button" onClick={onCancel} className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+        <h2 className="text-sm font-medium text-[rgb(var(--text-primary))]">Dispatch a task</h2>
+        <button type="button" onClick={onCancel} className="text-xs text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition-colors">
           ← back
         </button>
       </div>
       {repos.length === 0 ? (
-        <p className="text-xs text-zinc-500">No repos registered yet — connect one from the App Directory first.</p>
+        <p className="text-xs text-[rgb(var(--text-muted))]">No repos registered yet — connect one from the App Directory first.</p>
       ) : (
-        <label className="block text-xs text-zinc-500">
+        <label className="block text-xs text-[rgb(var(--text-muted))]">
           Repo
           <select
             value={repo}
             onChange={(e) => setRepo(e.target.value)}
-            className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm text-zinc-200 focus:border-teal-600 outline-none"
+            className="mt-1 w-full bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded px-2 py-1.5 text-sm text-[rgb(var(--text-primary))] focus:border-teal-600 outline-none"
           >
             {repos.map((r) => (
               <option key={r} value={r}>{r}</option>
@@ -228,19 +230,19 @@ function DispatchForm({ repos, onCancel, onDone }: { repos: string[]; onCancel: 
           </select>
         </label>
       )}
-      <label className="block text-xs text-zinc-500">
+      <label className="block text-xs text-[rgb(var(--text-muted))]">
         Task
         <input
           ref={titleRef}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="What should the agent do?"
-          className="mt-1 w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-teal-600 outline-none"
+          className="mt-1 w-full bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded px-2 py-1.5 text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:border-teal-600 outline-none"
         />
       </label>
       {error && <p className="text-xs text-rose-400">{error}</p>}
       <div className="flex gap-2 justify-end pt-1">
-        <button type="button" onClick={onCancel} className="px-3 py-1.5 rounded text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+        <button type="button" onClick={onCancel} className="px-3 py-1.5 rounded text-xs text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition-colors">
           Cancel
         </button>
         <button

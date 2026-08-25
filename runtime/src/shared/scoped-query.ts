@@ -16,9 +16,37 @@
  * These wrap the raw Mongoose Model methods and return the real Mongoose query
  * builders unchanged, so callers keep chaining `.sort().limit().lean<T>().exec()`
  * exactly as before.
+ *
+ * `connection` param (ADR-030 §2 dispatch plumbing): every helper below takes
+ * an optional trailing `connection`. Omitted (every call site today — shared
+ * tier, unconditionally, until the dedicated-isolation tier is sold), each
+ * helper resolves to the exact same global singleton `model` it always has —
+ * zero behavior change. When a future dual-write/dedicated-tier call site
+ * passes a `mongoose.Connection` (e.g. from `getConnectionForTenant`,
+ * `runtime/src/shared/tenant-db-registry.ts`), `resolveScopedModel` rebinds
+ * the query to that connection's copy of the same schema instead — this is
+ * the chokepoint ADR-030 §2 named as "the one place ADR-010's scoped store
+ * pattern needs a second parameter threaded." Nothing calls it with a real
+ * connection yet (that's ADR-031's `dualWriteWithRetry` dispatch, which has
+ * "nothing to consume until it exists" per ADR-031's own Consequences) — this
+ * is the plumbing that call needs, not the call itself.
  */
-import type { Model, FilterQuery, UpdateQuery, PipelineStage } from 'mongoose';
+import type { Model, FilterQuery, UpdateQuery, PipelineStage, Connection } from 'mongoose';
 import { AuthError } from '../core/tenant-context.js';
+
+/**
+ * Resolve the model a scoped-query call should actually run against: the
+ * passed-in singleton by default (`connection` omitted/undefined — today's
+ * only path), or that same schema bound to a dedicated-tier `connection`
+ * (`conn.model(name, schema)` — reuses an already-registered model on that
+ * connection if present, same as mongoose's own model cache, so repeated
+ * calls don't re-register the schema).
+ */
+export function resolveScopedModel<T extends Scoped>(model: Model<T>, connection?: Connection): Model<T> {
+  if (!connection) return model;
+  const modelName = model.modelName;
+  return (connection.models[modelName] as Model<T> | undefined) ?? connection.model<T>(modelName, model.schema);
+}
 
 /** A plain Mongo filter object. */
 export type Filter = Record<string, unknown>;
@@ -47,18 +75,18 @@ export function withTenant(tenantId: string | undefined, filter: Filter = {}): F
 type Scoped = { tenantId: string };
 
 /** `Model.find` scoped to a tenant. Returns the query builder unchanged. */
-export function scopedFind<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter = {}) {
-  return model.find(withTenant(tenantId, filter) as FilterQuery<T>);
+export function scopedFind<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter = {}, connection?: Connection) {
+  return resolveScopedModel(model, connection).find(withTenant(tenantId, filter) as FilterQuery<T>);
 }
 
 /** `Model.findOne` scoped to a tenant. */
-export function scopedFindOne<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter = {}) {
-  return model.findOne(withTenant(tenantId, filter) as FilterQuery<T>);
+export function scopedFindOne<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter = {}, connection?: Connection) {
+  return resolveScopedModel(model, connection).findOne(withTenant(tenantId, filter) as FilterQuery<T>);
 }
 
 /** `Model.countDocuments` scoped to a tenant. */
-export function scopedCountDocuments<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter = {}) {
-  return model.countDocuments(withTenant(tenantId, filter) as FilterQuery<T>);
+export function scopedCountDocuments<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter = {}, connection?: Connection) {
+  return resolveScopedModel(model, connection).countDocuments(withTenant(tenantId, filter) as FilterQuery<T>);
 }
 
 /**
@@ -66,27 +94,27 @@ export function scopedCountDocuments<T extends Scoped>(model: Model<T>, tenantId
  * `tenantId`, so tenant isolation applies BEFORE every downstream stage
  * ($group, $sort, vector ranking, …). Critical for §1.5 #3.
  */
-export function scopedAggregate<T extends Scoped>(model: Model<T>, tenantId: string | undefined, pipeline: PipelineStage[]) {
+export function scopedAggregate<T extends Scoped>(model: Model<T>, tenantId: string | undefined, pipeline: PipelineStage[], connection?: Connection) {
   const scope = tenantScope(tenantId);
-  return model.aggregate([{ $match: scope }, ...pipeline]);
+  return resolveScopedModel(model, connection).aggregate([{ $match: scope }, ...pipeline]);
 }
 
 /** `Model.updateOne` scoped to a tenant. */
-export function scopedUpdateOne<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter, update: UpdateQuery<T>, options?: Record<string, unknown>) {
-  return model.updateOne(withTenant(tenantId, filter) as FilterQuery<T>, update, options ?? {});
+export function scopedUpdateOne<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter, update: UpdateQuery<T>, options?: Record<string, unknown>, connection?: Connection) {
+  return resolveScopedModel(model, connection).updateOne(withTenant(tenantId, filter) as FilterQuery<T>, update, options ?? {});
 }
 
 /** `Model.findOneAndUpdate` scoped to a tenant (used by the upsert stores). */
-export function scopedFindOneAndUpdate<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter, update: UpdateQuery<T>, options?: Record<string, unknown>) {
-  return model.findOneAndUpdate(withTenant(tenantId, filter) as FilterQuery<T>, update, options ?? {});
+export function scopedFindOneAndUpdate<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter, update: UpdateQuery<T>, options?: Record<string, unknown>, connection?: Connection) {
+  return resolveScopedModel(model, connection).findOneAndUpdate(withTenant(tenantId, filter) as FilterQuery<T>, update, options ?? {});
 }
 
 /** `Model.deleteOne` scoped to a tenant. */
-export function scopedDeleteOne<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter = {}) {
-  return model.deleteOne(withTenant(tenantId, filter) as FilterQuery<T>);
+export function scopedDeleteOne<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter = {}, connection?: Connection) {
+  return resolveScopedModel(model, connection).deleteOne(withTenant(tenantId, filter) as FilterQuery<T>);
 }
 
 /** `Model.deleteMany` scoped to a tenant. */
-export function scopedDeleteMany<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter = {}) {
-  return model.deleteMany(withTenant(tenantId, filter) as FilterQuery<T>);
+export function scopedDeleteMany<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter = {}, connection?: Connection) {
+  return resolveScopedModel(model, connection).deleteMany(withTenant(tenantId, filter) as FilterQuery<T>);
 }

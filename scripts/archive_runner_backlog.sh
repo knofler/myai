@@ -75,7 +75,12 @@ TASKS_JSON=$(curl -sf -m 15 -X POST http://localhost:3100/mcp \
   -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"limit":2000}},"id":1}' 2>/dev/null)
 if [ -z "$TASKS_JSON" ]; then
-  log "gateway unreachable — cannot confirm fleet-wide consumption, skipping (safe no-op)"
+  if [ "$(gw_classify_failure "http://localhost:3100/mcp" 15)" = "auth-fail" ]; then
+    gw_warn_auth_fail "archive_runner_backlog tasks_list"
+    log "GATEWAY AUTH FAILURE (401/403) — cannot confirm fleet-wide consumption; NOT a genuinely empty task list, skipping (safe no-op) until GATEWAY_LOCAL_TOKEN is fixed"
+  else
+    log "gateway unreachable — cannot confirm fleet-wide consumption, skipping (safe no-op)"
+  fi
   exit 0
 fi
 

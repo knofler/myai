@@ -37,9 +37,9 @@ export default async function McpToolsView() {
           Could not reach the database — tenant list unavailable.
         </div>
       )}
-      <p className="mb-5 text-sm text-zinc-500">
+      <p className="mb-5 text-sm text-[rgb(var(--text-muted))]">
         Grant a trusted tenant an exception to an operator-only MCP tool, or additionally restrict a
-        tenant&apos;s own tool surface. Operator-only — requires <code className="bg-zinc-800 px-1 rounded">ADMIN_API_TOKEN</code> configured
+        tenant&apos;s own tool surface. Operator-only — requires <code className="bg-[rgb(var(--bg-hover))] px-1 rounded">ADMIN_API_TOKEN</code> configured
         on both the dashboard and the gateway.
       </p>
       <TenantMcpToolsPanel tenants={tenants} />

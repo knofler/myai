@@ -26,7 +26,7 @@ export function TabBar({ base, tabs, active, prefetch, params }: { base: string;
     return s ? `${base}?${s}` : base;
   };
   return (
-    <div className="flex flex-wrap items-center gap-1 border-b border-zinc-800 -mb-px">
+    <div className="flex flex-wrap items-center gap-1 border-b border-[rgb(var(--border-subtle))] -mb-px">
       {tabs.map((t) => {
         const isActive = t.id === active;
         return (
@@ -36,13 +36,13 @@ export function TabBar({ base, tabs, active, prefetch, params }: { base: string;
             prefetch={prefetch}
             className={`px-4 py-2.5 text-sm border-b-2 transition-[color,border-color,transform] duration-150 active:scale-[0.96] ${
               isActive
-                ? 'border-teal-400 text-zinc-100 font-medium'
-                : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                ? 'border-teal-400 text-[rgb(var(--text-primary))] font-medium'
+                : 'border-transparent text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))]'
             }`}
           >
             {t.label}
             {t.count !== undefined && (
-              <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${isActive ? 'gel-badge bg-teal-500/15 text-teal-300' : 'bg-zinc-800 text-zinc-500'}`}>
+              <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${isActive ? 'gel-badge bg-teal-500/15 text-teal-300' : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]'}`}>
                 {t.count}
               </span>
             )}

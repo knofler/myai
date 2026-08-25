@@ -82,11 +82,11 @@ export function PushOnboardCard() {
     <div className="mb-5">
       <Card title="Get notified when the app is closed" accent="emerald">
         <div className="p-4 space-y-3">
-          <p className="text-sm text-zinc-300 leading-snug">
+          <p className="text-sm text-[rgb(var(--text-primary))] leading-snug">
             Turn on web push and this device gets stage events, deploys, and alerts even when no dashboard tab is
             open — the same live feed you see here, delivered to your OS.
           </p>
-          <p className="text-xs text-zinc-500 leading-snug">
+          <p className="text-xs text-[rgb(var(--text-muted))] leading-snug">
             {window_
               ? `Your quiet hours (${window_}) are respected — nothing is pushed during that window.`
               : 'Quiet hours are respected — set a do-not-disturb window below and push stays silent inside it.'}
@@ -109,7 +109,7 @@ export function PushOnboardCard() {
             <button
               type="button"
               onClick={dismiss}
-              className="px-3 py-1.5 rounded-lg border border-zinc-800 text-xs text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition-colors"
+              className="px-3 py-1.5 rounded-lg border border-[rgb(var(--border-subtle))] text-xs text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hover:border-zinc-700 transition-colors"
             >
               Not now
             </button>

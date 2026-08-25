@@ -97,7 +97,7 @@ export function SwarmConsole() {
       {/* ── Task + recommendation ─────────────────────────── */}
       <Card title="Dispatch a multi-agent task" accent="purple">
         <div className="p-4 space-y-3">
-          <label htmlFor="swarm-task" className="block text-xs text-zinc-500 uppercase tracking-wider">
+          <label htmlFor="swarm-task" className="block text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
             What should the swarm build?
           </label>
           <textarea
@@ -106,10 +106,10 @@ export function SwarmConsole() {
             onChange={(e) => setTask(e.target.value)}
             rows={2}
             placeholder="e.g. Add user authentication with JWT — schema, middleware, login page, tests"
-            className="w-full rounded-lg bg-zinc-950/60 border border-zinc-800 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-teal-500/50"
+            className="w-full rounded-lg bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] px-3 py-2 text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-teal-500/50"
           />
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-zinc-500">Recommended topology:</span>
+            <span className="text-[rgb(var(--text-muted))]">Recommended topology:</span>
             <button
               type="button"
               onClick={() => choose(recommended.id)}
@@ -124,7 +124,7 @@ export function SwarmConsole() {
 
       {/* ── Topology picker ───────────────────────────────── */}
       <div>
-        <h2 className="text-sm font-semibold text-zinc-200 mb-3">Topology</h2>
+        <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))] mb-3">Topology</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {TOPOLOGIES.map((t) => {
             const active = t.id === selected;
@@ -135,14 +135,14 @@ export function SwarmConsole() {
                 type="button"
                 onClick={() => choose(t.id)}
                 aria-pressed={active}
-                className={`text-left gel-surface bg-zinc-900/70 border rounded-xl p-4 transition ${
+                className={`text-left gel-surface bg-[rgb(var(--bg-surface))]/70 border rounded-xl p-4 transition ${
                   active
                     ? `${ACCENT_RING[t.accent]} ring-1`
-                    : 'border-zinc-800 hover:border-zinc-700'
+                    : 'border-[rgb(var(--border-subtle))] hover:border-zinc-700'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-zinc-100">
+                  <span className="text-sm font-semibold text-[rgb(var(--text-primary))]">
                     <span className="font-mono opacity-70 mr-1.5">{t.icon}</span>
                     {t.name}
                   </span>
@@ -152,12 +152,12 @@ export function SwarmConsole() {
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-zinc-400 mt-1.5">{t.tagline}</p>
+                <p className="text-xs text-[rgb(var(--text-secondary))] mt-1.5">{t.tagline}</p>
                 <pre className="mt-3 text-[10px] leading-tight text-zinc-600 font-mono whitespace-pre overflow-hidden">
                   {t.diagram}
                 </pre>
-                <p className="text-[10px] text-zinc-500 mt-2">
-                  <span className="text-zinc-400">Select when:</span> {t.selectWhen}
+                <p className="text-[10px] text-[rgb(var(--text-muted))] mt-2">
+                  <span className="text-[rgb(var(--text-secondary))]">Select when:</span> {t.selectWhen}
                 </p>
               </button>
             );
@@ -191,7 +191,7 @@ export function SwarmConsole() {
               type="button"
               onClick={stepOnce}
               disabled={progress.complete}
-              className="rounded-lg border border-zinc-700 text-zinc-300 px-3 py-1.5 text-xs hover:border-zinc-500 disabled:opacity-40 transition"
+              className="rounded-lg border border-zinc-700 text-[rgb(var(--text-primary))] px-3 py-1.5 text-xs hover:border-zinc-500 disabled:opacity-40 transition"
             >
               Step
             </button>
@@ -199,21 +199,21 @@ export function SwarmConsole() {
               type="button"
               onClick={() => setPlaying(false)}
               disabled={!playing}
-              className="rounded-lg border border-zinc-700 text-zinc-300 px-3 py-1.5 text-xs hover:border-zinc-500 disabled:opacity-40 transition"
+              className="rounded-lg border border-zinc-700 text-[rgb(var(--text-primary))] px-3 py-1.5 text-xs hover:border-zinc-500 disabled:opacity-40 transition"
             >
               Pause
             </button>
             <button
               type="button"
               onClick={reset}
-              className="rounded-lg border border-zinc-700 text-zinc-300 px-3 py-1.5 text-xs hover:border-zinc-500 transition"
+              className="rounded-lg border border-zinc-700 text-[rgb(var(--text-primary))] px-3 py-1.5 text-xs hover:border-zinc-500 transition"
             >
               Reset
             </button>
           </div>
 
           {/* progress bar */}
-          <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
+          <div className="h-1.5 w-full rounded-full bg-[rgb(var(--bg-hover))] overflow-hidden">
             <div
               className="h-full bg-teal-400 transition-[width] duration-500 ease-out"
               style={{ width: `${progress.pct}%` }}
@@ -227,9 +227,9 @@ export function SwarmConsole() {
           {/* lanes */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
             {lanes.map(({ lane, steps }) => (
-              <div key={lane.id} className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+              <div key={lane.id} className="rounded-lg border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-page))]/40 p-3">
                 <div className="flex items-baseline justify-between mb-2">
-                  <span className="text-xs font-semibold text-zinc-300">
+                  <span className="text-xs font-semibold text-[rgb(var(--text-primary))]">
                     Lane {lane.id} · {lane.name}
                   </span>
                   <span className="text-[10px] text-zinc-600">
@@ -245,7 +245,7 @@ export function SwarmConsole() {
                       <span className="min-w-0">
                         <span
                           className={`block text-xs ${
-                            s.status === 'done' ? 'text-zinc-500 line-through' : 'text-zinc-200'
+                            s.status === 'done' ? 'text-[rgb(var(--text-muted))] line-through' : 'text-[rgb(var(--text-primary))]'
                           }`}
                         >
                           {s.title}
@@ -261,7 +261,7 @@ export function SwarmConsole() {
             ))}
           </div>
           <p className="text-[10px] text-zinc-600">
-            Demo decomposition (JWT auth) dispatched under <span className="text-zinc-400">{topology.name}</span> rules —
+            Demo decomposition (JWT auth) dispatched under <span className="text-[rgb(var(--text-secondary))]">{topology.name}</span> rules —
             {topology.id === 'ring'
               ? ' strictly sequential, one stage at a time.'
               : topology.id === 'star'

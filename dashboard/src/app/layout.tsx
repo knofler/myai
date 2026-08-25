@@ -2,8 +2,10 @@ import type { Metadata, Viewport } from 'next';
 import { NextIntlClientProvider } from 'next-intl';
 import { getLocale, getMessages } from 'next-intl/server';
 import { AppShell } from '@/components/app-shell';
+import { CookieConsent } from '@/components/cookie-consent';
 import { DemoBanner } from '@/components/demo-banner';
 import { IdleTimeoutGuard } from '@/components/idle-timeout-guard';
+import { ImpersonationBanner } from '@/components/impersonation-banner';
 import { ServiceWorkerRegister } from '@/components/sw-register';
 import { TenantProvider } from '@/lib/tenant-context';
 import { TenantCookieSync } from '@/components/tenant-cookie-sync';
@@ -31,7 +33,14 @@ const THEME_BOOT_SCRIPT = `
 })();
 `;
 
+// Absolute base for relative URLs in per-page metadata (e.g. the /welcome OG
+// image). NEXT_PUBLIC_SITE_URL overrides for a custom hosted domain; myai.dev
+// is the canonical domain already used by the SVG proof/share cards (see
+// lib/proof-card.ts / lib/welcome-card.ts).
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://myai.dev';
+
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: 'myAI — Mission Control',
   description: 'AI Management Framework — Mission Control Dashboard',
   applicationName: 'myAI',
@@ -77,6 +86,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               <IdleTimeoutGuard />
               <AppShell>{children}</AppShell>
               <DemoBanner />
+              <ImpersonationBanner />
+              <CookieConsent />
             </ThemeProvider>
           </TenantProvider>
         </NextIntlClientProvider>

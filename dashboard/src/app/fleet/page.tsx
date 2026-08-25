@@ -95,7 +95,7 @@ const RECOMMENDATION: Record<string, string> = {
   fix: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
   'wrap-up': 'bg-blue-500/15 text-blue-400 border-blue-500/30',
   attention: 'bg-red-500/15 text-red-400 border-red-500/30',
-  idle: 'bg-zinc-600/20 text-zinc-400 border-zinc-600/30',
+  idle: 'bg-zinc-600/20 text-[rgb(var(--text-secondary))] border-zinc-600/30',
 };
 
 function RecommendationChip({ value }: { value?: string }) {
@@ -140,7 +140,7 @@ function ActionStatus({ status }: { status?: string }) {
     );
   }
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
+    <span className="inline-flex items-center gap-1.5 text-xs text-[rgb(var(--text-muted))]">
       <span className="w-2.5 h-2.5 rounded-full bg-zinc-600" />
       pending
     </span>
@@ -154,7 +154,7 @@ function MetaBadge({ label, value, accent }: { label: string; value?: number; ac
   const tone =
     value > 0 && accent === 'red' ? 'text-red-400' :
     value > 0 && accent === 'amber' ? 'text-amber-400' :
-    value > 0 ? 'text-zinc-300' : 'text-zinc-600';
+    value > 0 ? 'text-[rgb(var(--text-primary))]' : 'text-zinc-600';
   return (
     <span className="inline-flex items-center gap-1 text-[10px] font-mono">
       <span className="text-zinc-600 uppercase tracking-wider">{label}</span>
@@ -174,11 +174,11 @@ function MetaBadge({ label, value, accent }: { label: string; value?: number; ac
 
 function TeamActivityRow({ run }: { run: FleetRunSummary }) {
   return (
-    <div className="flex items-center justify-between gap-3 py-2 px-3 border-b border-zinc-800/60 last:border-b-0">
+    <div className="flex items-center justify-between gap-3 py-2 px-3 border-b border-[rgb(var(--border-subtle))]/60 last:border-b-0">
       <div className="min-w-0 flex items-center gap-3">
         <RunStatusPill status={run.status} />
         <div className="min-w-0">
-          <p className="text-sm font-mono text-zinc-200 truncate">{run.machine || 'unknown machine'}</p>
+          <p className="text-sm font-mono text-[rgb(var(--text-primary))] truncate">{run.machine || 'unknown machine'}</p>
           <p className="text-[10px] text-zinc-600">{run.agent || 'agent unknown'} · {timeAgo(run.startedAt)}</p>
         </div>
       </div>
@@ -196,8 +196,8 @@ function TeamActivityUpsell({ plan }: { plan: TenantPlan }) {
     <Card>
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <p className="text-sm text-zinc-200">See every teammate&apos;s sweep, on every machine, live.</p>
-          <p className="text-xs text-zinc-500 mt-1">
+          <p className="text-sm text-[rgb(var(--text-primary))]">See every teammate&apos;s sweep, on every machine, live.</p>
+          <p className="text-xs text-[rgb(var(--text-muted))] mt-1">
             Team Activity is a {planLabel('team')} feature — you&apos;re currently on {planLabel(plan)}.
           </p>
         </div>
@@ -320,14 +320,14 @@ export default async function FleetPage() {
       {run && (
         <div className="space-y-6">
           {/* Run header */}
-          <div className="gel-surface bg-zinc-900/70 border border-zinc-800 rounded-xl p-4 flex flex-wrap items-center gap-x-6 gap-y-2">
+          <div className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl p-4 flex flex-wrap items-center gap-x-6 gap-y-2">
             <div>
               <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Run</p>
-              <p className="text-sm font-mono text-zinc-100">{run.runId}</p>
+              <p className="text-sm font-mono text-[rgb(var(--text-primary))]">{run.runId}</p>
             </div>
             <div>
               <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Started</p>
-              <p className="text-sm text-zinc-200">
+              <p className="text-sm text-[rgb(var(--text-primary))]">
                 {timeAgo(run.startedAt)}
                 <span className="text-zinc-600 ml-2 text-xs">{fmtSydney(run.startedAt, 'full')}</span>
               </p>
@@ -335,7 +335,7 @@ export default async function FleetPage() {
             {run.finishedAt && (
               <div>
                 <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Finished</p>
-                <p className="text-sm text-zinc-200">
+                <p className="text-sm text-[rgb(var(--text-primary))]">
                   {timeAgo(run.finishedAt)}
                   <span className="text-zinc-600 ml-2 text-xs">{fmtSydney(run.finishedAt, 'full')}</span>
                 </p>
@@ -343,16 +343,16 @@ export default async function FleetPage() {
             )}
             <div>
               <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Machine</p>
-              <p className="text-sm font-mono text-zinc-300">{run.machine || '—'}</p>
+              <p className="text-sm font-mono text-[rgb(var(--text-primary))]">{run.machine || '—'}</p>
             </div>
             <div>
               <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Agent</p>
-              <p className="text-sm text-zinc-300">{run.agent || '—'}</p>
+              <p className="text-sm text-[rgb(var(--text-primary))]">{run.agent || '—'}</p>
             </div>
             {run.type && (
               <div>
                 <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Type</p>
-                <p className="text-sm font-mono text-zinc-400">{run.type}</p>
+                <p className="text-sm font-mono text-[rgb(var(--text-secondary))]">{run.type}</p>
               </div>
             )}
           </div>
@@ -367,7 +367,7 @@ export default async function FleetPage() {
 
           {/* Team Activity */}
           <div>
-            <h2 className="text-xs font-semibold text-zinc-500 mb-3 uppercase tracking-wider">Team Activity</h2>
+            <h2 className="text-xs font-semibold text-[rgb(var(--text-muted))] mb-3 uppercase tracking-wider">Team Activity</h2>
             <TeamActivity tenantId={tenantId} />
           </div>
 
@@ -379,22 +379,22 @@ export default async function FleetPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {repos.map((r) => (
-                <div key={r.repo} className="gel-surface bg-zinc-900/70 border border-zinc-800 rounded-xl p-4 flex flex-col gap-3 hover:border-zinc-700 transition-colors">
+                <div key={r.repo} className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl p-4 flex flex-col gap-3 hover:border-zinc-700 transition-colors">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="font-semibold text-sm text-zinc-100 font-mono truncate">{r.repo}</p>
+                      <p className="font-semibold text-sm text-[rgb(var(--text-primary))] font-mono truncate">{r.repo}</p>
                       {r.group && <p className="text-[10px] text-zinc-600 uppercase tracking-wider mt-0.5">{r.group}</p>}
                     </div>
                     <RecommendationChip value={r.recommendation} />
                   </div>
 
-                  <p className="text-xs text-zinc-400 line-clamp-3 min-h-[1rem]">{r.overnight || 'No overnight summary.'}</p>
+                  <p className="text-xs text-[rgb(var(--text-secondary))] line-clamp-3 min-h-[1rem]">{r.overnight || 'No overnight summary.'}</p>
 
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-zinc-800/70 pt-2">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[rgb(var(--border-subtle))]/70 pt-2">
                     {r.branch && (
                       <span className="inline-flex items-center gap-1 text-[10px] font-mono">
                         <span className="text-zinc-600 uppercase tracking-wider">branch</span>
-                        <span className="text-zinc-300">{r.branch}</span>
+                        <span className="text-[rgb(var(--text-primary))]">{r.branch}</span>
                       </span>
                     )}
                     <MetaBadge label="ahead" value={r.ahead} accent="amber" />
@@ -404,10 +404,10 @@ export default async function FleetPage() {
                     <MetaBadge label="blocked" value={r.blockedTasks} accent="red" />
                   </div>
 
-                  <div className="flex items-center justify-between border-t border-zinc-800/70 pt-2">
+                  <div className="flex items-center justify-between border-t border-[rgb(var(--border-subtle))]/70 pt-2">
                     <ActionStatus status={r.actionStatus} />
                     <div className="flex items-center gap-2">
-                      {r.action && <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider">{r.action}</span>}
+                      {r.action && <span className="text-[10px] font-mono text-[rgb(var(--text-muted))] uppercase tracking-wider">{r.action}</span>}
                       {r.prUrl && (
                         <a href={r.prUrl} target="_blank" rel="noreferrer" className="text-[11px] text-emerald-400/90 hover:text-emerald-300 underline decoration-zinc-700">
                           PR
@@ -417,14 +417,14 @@ export default async function FleetPage() {
                   </div>
 
                   {(r.detail || r.decision) && (
-                    <div className="border-t border-zinc-800/70 pt-2 space-y-1">
+                    <div className="border-t border-[rgb(var(--border-subtle))]/70 pt-2 space-y-1">
                       {r.decision && (
-                        <p className="text-[10px] text-zinc-500">
+                        <p className="text-[10px] text-[rgb(var(--text-muted))]">
                           <span className="text-zinc-600 uppercase tracking-wider">decision</span>{' '}
-                          <span className="text-zinc-300">{r.decision}</span>
+                          <span className="text-[rgb(var(--text-primary))]">{r.decision}</span>
                         </p>
                       )}
-                      {r.detail && <p className="text-xs text-zinc-400 line-clamp-3">{r.detail}</p>}
+                      {r.detail && <p className="text-xs text-[rgb(var(--text-secondary))] line-clamp-3">{r.detail}</p>}
                     </div>
                   )}
                 </div>
