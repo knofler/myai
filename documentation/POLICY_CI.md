@@ -11,6 +11,14 @@
 **The local-CI path (all repos):**
 1. Push to `test` as normal.
 2. If the required Actions check doesn't start/finish, run `./scripts/local-ci.sh` (master) or `./AI/scripts/local-ci.sh` (managed). It discovers the required checks from branch protection, runs their Docker equivalents locally, and posts `success` commit statuses **only for checks that genuinely pass**. Use `--trust-build` only when you've manually verified the build.
+**Kernel repos (no `AI/` folder) — resolve the script from the installed module.** A repo scaffolded by `myai init` (the greenfield default since v0.6) carries only a ~30-line kernel `CLAUDE.md`; it has NO `AI/scripts/`, so BOTH paths above are absent and an agent that tries them concludes it is "blocked by CI" with no fallback. The capability is present — `local-ci.sh` ships in the module and is fully repo-agnostic (`--repo <path>`). Only the address differs:
+
+```bash
+"$(myai root)/scripts/local-ci.sh" --repo "$(git rev-parse --show-toplevel)"
+```
+
+Use that form in any repo where `./scripts/local-ci.sh` and `./AI/scripts/local-ci.sh` are both missing. **Never treat a missing script as licence to skip the check or to admin-merge** — guardrail 3 below still binds: bypass is only ever for the billing/outage condition, never for a tooling path you could not find.
+
 3. **Announce the fallback** every time you take it ("GitHub Actions billing-blocked → local-ci fallback").
 4. Always run the real gates first (tsc, tests, build in Docker) — local-ci posts statuses, it does not replace verification. Never post a green status for a check that didn't actually pass.
 

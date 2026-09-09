@@ -13,12 +13,21 @@ TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // "unknown"' 2>/dev/null)
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
+# Per-machine-scoped path (task-d4c32377, 2026-08-31) — see
+# scripts/lib/local_state.sh for the root-cause writeup. Detect the tree by
+# DIRECTORY (not the old exact-filename check) since the real file on disk is
+# now hostname-suffixed, not the bare name.
+local_state_path() { printf '%s' "$1"; }  # fallback if lib below is missing
+LOCAL_STATE_LIB="$ROOT/scripts/lib/local_state.sh"
+[[ -f "$LOCAL_STATE_LIB" ]] || LOCAL_STATE_LIB="$ROOT/AI/scripts/lib/local_state.sh"
+[[ -f "$LOCAL_STATE_LIB" ]] && . "$LOCAL_STATE_LIB"
+
 # Find metrics file
 METRICS_FILE=""
-if [[ -f "$ROOT/state/.session-metrics" ]]; then
-  METRICS_FILE="$ROOT/state/.session-metrics"
-elif [[ -f "$ROOT/AI/state/.session-metrics" ]]; then
-  METRICS_FILE="$ROOT/AI/state/.session-metrics"
+if [[ -d "$ROOT/state" ]]; then
+  METRICS_FILE="$(local_state_path "$ROOT/state/.session-metrics")"
+elif [[ -d "$ROOT/AI/state" ]]; then
+  METRICS_FILE="$(local_state_path "$ROOT/AI/state/.session-metrics")"
 fi
 
 # No metrics file = usage guard not initialized, skip

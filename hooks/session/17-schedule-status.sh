@@ -17,15 +17,28 @@ if [ -n "$NO_COLOR" ]; then B='' R='' G='' C='' Y='' M='' D=''
 else B=$'\033[1m'; R=$'\033[0m'; G=$'\033[1;38;5;208m'; C=$'\033[1;36m'; Y=$'\033[1;33m'; M=$'\033[1;35m'; D=$'\033[2m'; fi
 
 # ── repo name (task-store convention) ───────────────────────
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
-NAME=$(basename "$ROOT")
-PARENT=$(basename "$(dirname "$ROOT")")
-case "$PARENT/$NAME" in
-    # Disambiguate same-named monorepo sub-repos here, e.g.:
-    #   monorepo/api) NAME="monorepo-api" ;;
-    _MY_PROJECT/AI) NAME="ai_management" ;;   # master repo folder is AI; tasks live under ai_management
-    *) ;;
-esac
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    # Real precondition failure, not "nothing to report" — a missing/broken
+    # .git here means EVERY session-start banner that resolves ROOT this way
+    # goes dark at once (2026-08-27 incident: a Mac booted with every repo's
+    # .git missing and five guards reported nothing, indistinguishable from a
+    # healthy quiet session). Say so on stderr instead of exiting silently.
+    echo "17-schedule-status: cannot resolve repo (not a git repository) — SCHEDULE banner skipped" >&2
+    exit 0
+}
+# Canonical repo-id resolution (scripts/lib/repo_id.sh, task-89077bf0) — the
+# SAME resolver schedule_task.sh uses, so this banner and `schedule --list`
+# can never again disagree about what a given checkout's repo id is (e.g. the
+# master repo's folder is literally "AI" but its canonical id is
+# "ai_management").
+for _ridlib in "$ROOT/scripts/lib/repo_id.sh" "$ROOT/AI/scripts/lib/repo_id.sh"; do
+    [ -f "$_ridlib" ] && . "$_ridlib" && break
+done
+if command -v canonical_repo_id >/dev/null 2>&1; then
+    NAME=$(canonical_repo_id "$ROOT")
+else
+    NAME=$(basename "$ROOT")
+fi
 syd() { TZ=Australia/Sydney date -r "$1" "+%d %b %H:%M AEST" 2>/dev/null; }
 
 # Host→gateway calls MUST carry x-gateway-local-token (enforce=true 401s the Docker
@@ -36,19 +49,43 @@ for _gwlib in "$ROOT/scripts/lib/gateway.sh" "$ROOT/AI/scripts/lib/gateway.sh"; 
 done
 GATEWAY_LOCAL_TOKEN="${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}"
 
-# Body lines come back pre-colored from python (passes color codes in).
-body=$(curl -sf -m 4 -X POST "$URL" -H 'content-type: application/json' \
-    -H "x-gateway-local-token: $GATEWAY_LOCAL_TOKEN" \
-    -d "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"id\":1,\"params\":{\"name\":\"tasks_list\",\"arguments\":{\"repo\":\"$NAME\",\"limit\":200}}}" 2>/dev/null \
-    | B="$B" R="$R" G="$G" C="$C" Y="$Y" M="$M" D="$D" /usr/bin/python3 -c '
+# Query every historical alias of NAME (not just its current canonical
+# spelling) so tasks queued before this repo's ids were unified — e.g. under
+# the literal "AI" string — still show up here instead of looking orphaned
+# (task-89077bf0). Non-master repos alias only to themselves (one query, as
+# before). One response line per alias, newline-joined; python merges by
+# taskId so a task queued under either spelling is counted once.
+if command -v repo_aliases_for >/dev/null 2>&1; then
+    NAME_ALIASES="$(repo_aliases_for "$NAME")"
+else
+    NAME_ALIASES="$NAME"
+fi
+body=$( { for _alias in $NAME_ALIASES; do
+    curl -sf -m 4 -X POST "$URL" -H 'content-type: application/json' \
+        -H "x-gateway-local-token: $GATEWAY_LOCAL_TOKEN" \
+        -d "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"id\":1,\"params\":{\"name\":\"tasks_list\",\"arguments\":{\"repo\":\"$_alias\",\"limit\":200}}}" 2>/dev/null
+    echo
+done; } | B="$B" R="$R" G="$G" C="$C" Y="$Y" M="$M" D="$D" /usr/bin/python3 -c '
 import sys, json, os
 from datetime import datetime, timezone, timedelta
 B=os.environ["B"]; R=os.environ["R"]; G=os.environ["G"]; C=os.environ["C"]; Y=os.environ["Y"]; M=os.environ["M"]; D=os.environ["D"]
-try:
-    data = json.loads(json.load(sys.stdin)["result"]["content"][0]["text"])
-except Exception:
+got_any = False
+tasks_by_id = {}
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        data = json.loads(json.loads(line)["result"]["content"][0]["text"])
+    except Exception:
+        continue
+    got_any = True
+    for t in data.get("tasks", []):
+        tid = t.get("taskId")
+        tasks_by_id[tid if tid is not None else id(t)] = t
+if not got_any:
     sys.exit(0)
-ts = data.get("tasks", [])
+ts = list(tasks_by_id.values())
 done = [t for t in ts if t["status"] in ("review","done","blocked") and t.get("updatedAt")]
 done.sort(key=lambda t: t["updatedAt"], reverse=True)
 pend = [t for t in ts if t["status"] == "pending"]
@@ -94,19 +131,22 @@ print("\n".join(out))
 # already reports {total, consumed, remaining} and warns when the well runs
 # low, but that only surfaces when someone remembers to run doctor by hand.
 # Mirror the same counting queue_topup.sh + doctor use here (TOTAL = non-blank/
-# non-comment lines in the backlog file, CONSUMED = the cursor file's digits)
-# so a low well shows up on every session start, not just on-demand.
+# non-comment lines in the backlog file, CONSUMED = the gateway-backed cursor,
+# task-e9163eb9 — NOT a local file, which read CONSUMED=0 on any fresh
+# checkout/worktree regardless of the real consumption state) so a low well
+# shows up on every session start, not just on-demand.
 BACKLOG="${MYAI_RUNNER_BACKLOG:-$ROOT/config/runner_backlog.jsonl}"
-CURSOR="${MYAI_RUNNER_BACKLOG_CURSOR:-$ROOT/config/.runner_backlog.cursor}"
 well_line=""
 if [ -f "$BACKLOG" ]; then
     total=$(grep -cvE '^[[:space:]]*(#|$)' "$BACKLOG" 2>/dev/null || echo 0)
-    consumed=$(cat "$CURSOR" 2>/dev/null | tr -cd '0-9'); [ -z "$consumed" ] && consumed=0
+    consumed=$(gw_backlog_cursor_get 2>/dev/null)
+    if [ -n "$consumed" ]; then
     remaining=$(( total - consumed ))
     [ "$remaining" -lt 0 ] && remaining=0
     backlog_min="${RUNNER_BACKLOG_MIN:-6}"
     if [ "$remaining" -lt "$backlog_min" ] 2>/dev/null; then
         well_line="  ${Y}⚠ WELL LOW${R}  ${D}${remaining} remaining / ${total} total backlog items (< ${backlog_min}) — queue_topup.sh will enqueue a PLANNER task${R}"
+    fi
     fi
 fi
 

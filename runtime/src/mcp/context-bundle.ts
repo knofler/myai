@@ -44,6 +44,14 @@ export interface BundleParts {
   /** Brain main HEAD when the summary came from the compiled brain brief —
    * the agent's anchor for the next `brain_delta` catch-up. */
   brainSha?: string;
+  /**
+   * Set when pull-on-boot found local brain main diverged/stale vs origin —
+   * this SHA (and the brief above) may be missing sessions from other
+   * machines. Kept OUT of the trimmable `extra` set below so budget pressure
+   * can never silently drop it (task-1195b1a7: a divergent clone must not
+   * silently serve stale context).
+   */
+  brainSyncWarning?: string;
   /** BRAIN B-2 store TOC line (`name→fetch-tool · …`) — STATIC by construction
    * (store names + primary fetch tools never vary with brain contents), so it
    * renders in the B-8 stable prefix. */
@@ -149,7 +157,11 @@ function nsFreshnessLine(compact: BootManifest): string | undefined {
   const head = a
     ? `${a.name} brief${a.hasBrief ? '✓' : '✗'} working${a.hasWorking ? '✓' : '✗'} · ${a.sessions} sessions · ${a.handoffs} handoffs`
     : 'active project has no namespace yet';
-  return `${head} · ${compact.namespaces} ns · ${compact.memoryAtoms} memory atoms`;
+  // BRAIN-2: this repo's own last-merge anchor, read-free — a returning
+  // `agent mode -min` boot can hand this straight to `brain_delta({ since,
+  // repo })` (or just omit `since`; the gateway resolves the same value).
+  const anchor = a?.lastAnchor ? ` · anchor ${a.lastAnchor.slice(0, 8)}` : '';
+  return `${head}${anchor} · ${compact.namespaces} ns · ${compact.memoryAtoms} memory atoms`;
 }
 
 /** Read + compact the B-2 manifest through the seam. Best-effort, never throws. */
@@ -198,12 +210,12 @@ function resolveBrainBrief(
   tenantId: string,
   repo: string,
   max: number,
-): { brief: string; sha?: string } | undefined {
+): { brief: string; sha?: string; syncWarning?: string } | undefined {
   // The brain read (env resolution + pull-on-boot + compiled-brief read) lives
   // behind the read-path seam; here we only apply the char budget.
   const read = getContextReadService().readBrainBrief(tenantId, repo);
   if (!read) return undefined;
-  return { brief: tighten(read.brief, max), sha: read.sha };
+  return { brief: tighten(read.brief, max), sha: read.sha, syncWarning: read.syncWarning };
 }
 
 /** Next actionable plan focus for the active project (first enabled day). */
@@ -262,6 +274,9 @@ export function renderBundle(parts: BundleParts, budget: number = budgetChars())
   if (parts.brainSha) {
     volatileLines.push(`**Brain:** ${parts.brainSha.slice(0, 8)} — remember this SHA; catch up later with \`brain_delta\``);
   }
+  if (parts.brainSyncWarning) {
+    volatileLines.push(`**⚠️ BRAIN OUT OF SYNC:** ${parts.brainSyncWarning}`);
+  }
 
   const draft = (extra: string[]) => [...stable, ...volatileLines, ...extra].join('\n');
 
@@ -297,10 +312,16 @@ export async function buildContextBundle(
     // Split the remaining budget between handoff (most valuable) and plan.
     // The compiled brain brief (distilled at the last brain_merge) beats the
     // handoff store when present — it's the purpose-built ~150-token boot line.
+    // Handoff-store read and plan read are independent stores — run them
+    // concurrently (was sequential `await`, `await`) instead of paying both
+    // round trips back-to-back on this context_boot hot path (perf-metrics.ts).
     const brain = resolveBrainBrief(tenantId, activeProject, Math.floor(budget * 0.5));
-    const handoffSummary = brain?.brief
-      ?? (await resolveHandoffSummary(tenantId, activeProject, Math.floor(budget * 0.5)));
-    const planFocus = await resolvePlanFocus(tenantId, activeProject, Math.floor(budget * 0.25));
+    const [handoffSummary, planFocus] = await Promise.all([
+      brain?.brief
+        ? Promise.resolve(brain.brief)
+        : resolveHandoffSummary(tenantId, activeProject, Math.floor(budget * 0.5)),
+      resolvePlanFocus(tenantId, activeProject, Math.floor(budget * 0.25)),
+    ]);
     const manifest = resolveBootManifest(tenantId, activeProject);
 
     const parts: BundleParts = {
@@ -309,6 +330,7 @@ export async function buildContextBundle(
       handoffSummary,
       planFocus,
       brainSha: brain?.sha,
+      brainSyncWarning: brain?.syncWarning,
       storesToc: manifest && storesTocLine(manifest),
       nsFreshness: manifest && nsFreshnessLine(manifest),
       generatedAt: (opts.now?.() ?? new Date()).toISOString(),
@@ -423,10 +445,16 @@ export async function buildBootBundle(
   try {
     const activeProject = opts.repo?.trim() || (await resolveActiveProject(tenantId));
     // Compiled brain brief first (BRAIN B3), handoff store as the fallback.
+    // Handoff-store read and plan read are independent stores — run them
+    // concurrently rather than paying both round trips sequentially on this
+    // hot path (perf-metrics.ts names context_boot as a metered hot path).
     const brain = resolveBrainBrief(tenantId, activeProject, Math.floor(budget * 0.5));
-    const handoffSummary = brain?.brief
-      ?? (await resolveHandoffSummary(tenantId, activeProject, Math.floor(budget * 0.5)));
-    const planFocus = await resolvePlanFocus(tenantId, activeProject, Math.floor(budget * 0.25));
+    const [handoffSummary, planFocus] = await Promise.all([
+      brain?.brief
+        ? Promise.resolve(brain.brief)
+        : resolveHandoffSummary(tenantId, activeProject, Math.floor(budget * 0.5)),
+      resolvePlanFocus(tenantId, activeProject, Math.floor(budget * 0.25)),
+    ]);
     manifest = resolveBootManifest(tenantId, activeProject);
     parts = {
       identity,
@@ -434,6 +462,7 @@ export async function buildBootBundle(
       handoffSummary,
       planFocus,
       brainSha: brain?.sha,
+      brainSyncWarning: brain?.syncWarning,
       storesToc: manifest && storesTocLine(manifest),
       nsFreshness: manifest && nsFreshnessLine(manifest),
       generatedAt: (opts.now?.() ?? new Date()).toISOString(),

@@ -909,6 +909,35 @@ function buildPaths(): Obj {
       },
     },
 
+    '/api/repos/paths': {
+      get: {
+        tags: ['Repos'],
+        summary: 'Fleet-path resolver (ADR-021 Phase 3): tenant DB roster preferred, managed_repos.txt only the bootstrap seed. Paths are raw/host-side (`~` unexpanded on seed rows).',
+        operationId: 'resolveRepoPaths',
+        responses: {
+          '200': jsonResponse('Resolved fleet paths', {
+            type: 'object',
+            required: ['count', 'repos'],
+            properties: {
+              count: { type: 'integer' },
+              repos: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  required: ['name', 'path', 'source'],
+                  properties: {
+                    name: { type: 'string' },
+                    path: { type: 'string', description: 'Raw registered path — host-side; seed rows may start with ~' },
+                    source: { type: 'string', enum: ['seed', 'db'] },
+                  },
+                },
+              },
+            },
+          }),
+        },
+      },
+    },
+
     // ── Channels ──
     '/api/channels': {
       get: {

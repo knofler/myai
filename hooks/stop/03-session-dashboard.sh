@@ -53,8 +53,16 @@ fi
 
 # 9. Session usage
 USAGE_PCT="--"
+# Per-machine-scoped path (task-d4c32377, 2026-08-31) — see
+# scripts/lib/local_state.sh. Directory-based tree detection since the real
+# file is hostname-suffixed, not the bare name.
+local_state_path() { printf '%s' "$1"; }  # fallback if lib below is missing
+LOCAL_STATE_LIB="$ROOT/scripts/lib/local_state.sh"
+[ -f "$LOCAL_STATE_LIB" ] || LOCAL_STATE_LIB="$ROOT/AI/scripts/lib/local_state.sh"
+[ -f "$LOCAL_STATE_LIB" ] && . "$LOCAL_STATE_LIB"
 METRICS_FILE="$ROOT/state/.session-metrics"
-[ ! -f "$METRICS_FILE" ] && METRICS_FILE="$ROOT/AI/state/.session-metrics"
+[ -d "$ROOT/state" ] || METRICS_FILE="$ROOT/AI/state/.session-metrics"
+METRICS_FILE="$(local_state_path "$METRICS_FILE")"
 if [ -f "$METRICS_FILE" ]; then
   s_started=$(grep '^started_epoch=' "$METRICS_FILE" 2>/dev/null | cut -d= -f2)
   s_duration=$(grep '^duration_minutes=' "$METRICS_FILE" 2>/dev/null | cut -d= -f2)

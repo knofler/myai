@@ -11,6 +11,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useTenant } from '@/lib/tenant-context';
 import { ConsentCheckbox } from '@/components/consent-checkbox';
+import { RegionSelect } from '@/components/region-select';
+import type { TenantRegion } from '@/lib/residency';
 
 export function LandingSignup() {
   const router = useRouter();
@@ -33,6 +35,8 @@ export function LandingSignup() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // ADR-024 Phase 2b — data-residency region, defaults to 'us' (the schema default).
+  const [region, setRegion] = useState<TenantRegion>('us');
   // Click-wrap consent — required before the form submits. Forwarded as
   // acceptTerms so the gateway records the accepted document versions +
   // timestamp per tenant (core/legal.ts).
@@ -49,7 +53,15 @@ export function LandingSignup() {
     setBusy(true);
     setError(null);
     try {
-      const { apiKey, trialEndsAt: endsAt } = await signup({ name: name.trim(), email: email.trim(), password, referralCode, trialCode, acceptTerms: agreed });
+      const { apiKey, trialEndsAt: endsAt } = await signup({
+        name: name.trim(),
+        email: email.trim(),
+        password,
+        referralCode,
+        trialCode,
+        acceptTerms: agreed,
+        region,
+      });
       setNewKey(apiKey ?? null); // always present here (no inviteToken)
       setTrialEndsAt(endsAt ?? null);
     } catch (err) {
@@ -158,6 +170,7 @@ export function LandingSignup() {
           required
         />
       </label>
+      <RegionSelect value={region} onChange={setRegion} />
       <ConsentCheckbox checked={agreed} onChange={setAgreed} />
       <button
         type="submit"

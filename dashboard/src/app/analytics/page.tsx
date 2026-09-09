@@ -16,6 +16,7 @@ import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
 import AutoRefresh from '@/components/auto-refresh';
 import Link from 'next/link';
+import { dbUnreachableHint } from '@/lib/db-hint';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,7 +49,10 @@ const SELF_SERVE_STEPS: ReadonlyArray<{ key: string; label: string }> = [
   { key: 'first_value', label: 'First task shipped' },
   { key: 'retained', label: 'Retained (2nd task shipped)' },
 ];
-interface BootCompareBucket { _id: null; boots: number; tokens: number; baselineTokens: number; baselineBoots: number }
+interface BootCompareBucket {
+  _id: null; boots: number; tokens: number; baselineTokens: number; baselineBoots: number;
+  durationMs: number; durationBoots: number; // time-to-context: measured brain-path assembly time
+}
 // Real token burn, month-to-date, from budgetusages. Cache-read is broken out
 // explicitly because it dominates raw volume — the compiled context re-read on
 // every turn (a real session: ~36M cache-reads vs 308k output over 234 turns).
@@ -69,6 +73,25 @@ interface PerfStats {
 // Documented legacy session-start cost (plan/jam/brain-layer.md token-economics
 // table: ~50–70k in). Used only until a measured baseline lands in the meter.
 const LEGACY_BOOT_EST_TOKENS = 60_000;
+
+// Time-to-context (mirror of runtime/src/monitoring/continuity-metrics.ts
+// LEGACY_READ_TOKENS_PER_SEC / estimateLegacyReadMs). The legacy side has no
+// wall-clock measurement of its own — it is derived from the SAME measured
+// legacy token baseline as the cold-start token comparator, at a conservative
+// skim-reading rate, so it stays honest and repo-specific rather than a made-up
+// flat constant.
+const LEGACY_READ_TOKENS_PER_SEC = 8; // ~480 tokens/min skim-reading state+handoff prose/code
+function estimateLegacyReadMs(tokens: number): number {
+  if (!Number.isFinite(tokens) || tokens <= 0) return 0;
+  return Math.round((tokens / LEGACY_READ_TOKENS_PER_SEC) * 1000);
+}
+function fmtMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0ms';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  return `${(ms / 3_600_000).toFixed(1)}h`;
+}
 
 // Rolling-window output-token budget — the account-level ceiling the token
 // guard meters against (config/session-limits.json → token_budget.rolling_window,
@@ -102,7 +125,7 @@ export default async function AnalyticsPage() {
       <div className="max-w-7xl mx-auto">
         <PageHeader title="Analytics" subtitle="Throughput, plan progress, runner activity, and cost trend." />
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
-          Database not reachable — analytics need the gateway Mongo at :27200.
+          {dbUnreachableHint('analytics')}
         </div>
       </div>
     );
@@ -179,6 +202,8 @@ export default async function AnalyticsPage() {
         tokens: { $sum: '$tokens' },
         baselineTokens: { $sum: { $ifNull: ['$baselineTokens', 0] } },
         baselineBoots: { $sum: { $cond: [{ $gt: [{ $ifNull: ['$baselineTokens', 0] }, 0] }, 1, 0] } },
+        durationMs: { $sum: { $ifNull: ['$durationMs', 0] } },
+        durationBoots: { $sum: { $cond: [{ $gt: [{ $ifNull: ['$durationMs', 0] }, 0] }, 1, 0] } },
       } },
     ]),
     // Activation funnel — distinct tenants that reached each milestone. Counts
@@ -280,13 +305,23 @@ export default async function AnalyticsPage() {
   // Cold start — today vs brain. Brain side = measured boot payloads served
   // this month; legacy side = measured file-read baseline stamped on those
   // boots, or the documented estimate until one is measured.
-  const boot = bootCompare[0] ?? { boots: 0, tokens: 0, baselineTokens: 0, baselineBoots: 0 };
+  const boot = bootCompare[0] ?? { boots: 0, tokens: 0, baselineTokens: 0, baselineBoots: 0, durationMs: 0, durationBoots: 0 };
   const brainAvg = boot.boots > 0 ? Math.round(boot.tokens / boot.boots) : 0;
   const legacyMeasured = boot.baselineBoots > 0;
   const legacyAvg = legacyMeasured ? Math.round(boot.baselineTokens / boot.baselineBoots) : LEGACY_BOOT_EST_TOKENS;
   const bootSavedPct = brainAvg > 0 && legacyAvg > brainAvg ? Math.round(((legacyAvg - brainAvg) / legacyAvg) * 100) : 0;
   const bootMultiplier = brainAvg > 0 && legacyAvg > brainAvg ? Math.round(legacyAvg / brainAvg) : 0;
   const brainBarPct = legacyAvg > 0 && brainAvg > 0 ? Math.max((brainAvg / legacyAvg) * 100, 1.5) : 0;
+
+  // Time to context — today vs brain (live). Brain side is the real measured
+  // wall-clock assembly time stamped around context_boot/brain_delta; legacy
+  // side is derived from the SAME measured legacy token baseline above (not a
+  // flat constant), so it stays honest even when unmeasured (falls to 0).
+  const ttcBrainAvgMs = boot.durationBoots > 0 ? Math.round(boot.durationMs / boot.durationBoots) : 0;
+  const ttcLegacyAvgMs = estimateLegacyReadMs(legacyAvg);
+  const ttcSavedMs = ttcBrainAvgMs > 0 && ttcLegacyAvgMs > ttcBrainAvgMs ? ttcLegacyAvgMs - ttcBrainAvgMs : 0;
+  const ttcSavedPct = ttcBrainAvgMs > 0 && ttcLegacyAvgMs > ttcBrainAvgMs ? Math.round((ttcSavedMs / ttcLegacyAvgMs) * 100) : 0;
+  const ttcBrainBarPct = ttcLegacyAvgMs > 0 && ttcBrainAvgMs > 0 ? Math.max((ttcBrainAvgMs / ttcLegacyAvgMs) * 100, 1.5) : 0;
 
   // Real token burn — the "what you burn" side of the hero panel.
   const burn = burnMonth[0] ?? { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, cost: 0, calls: 0 };
@@ -767,6 +802,53 @@ export default async function AnalyticsPage() {
               })}
             </div>
             {contAll.tokens === 0 && <p className="mt-3 text-xs text-zinc-600 text-center">No context served yet — the meter fills as agents boot via the gateway.</p>}
+          </div>
+        </Card>
+      </div>
+
+      {/* Continuity meter — time to context (today vs brain, computed live) */}
+      <div className="mt-8">
+        <Card
+          title="Continuity — time to context"
+          meta={ttcBrainAvgMs > 0
+            ? `~${fmtMs(ttcBrainAvgMs)}/boot measured · ${ttcSavedPct}% faster than legacy`
+            : 'no measured boot latency yet'}
+          accent="emerald"
+        >
+          <div className="p-5">
+            <p className="text-xs text-[rgb(var(--text-muted))] mb-4">
+              Wall-clock time from cold start to productive context. Brain side is the real measured
+              assembly time for <code className="text-[rgb(var(--text-secondary))]">context_boot</code> / <code className="text-[rgb(var(--text-secondary))]">brain_delta</code> this
+              month; legacy side is the same measured legacy-boot token baseline above, converted to an
+              estimated skim-reading time (~{LEGACY_READ_TOKENS_PER_SEC} tok/sec) — not a flat guess.
+            </p>
+            {ttcBrainAvgMs === 0 ? (
+              <EmptyState>No measured boot latency yet — this fills in as agents boot via context_boot/brain_delta.</EmptyState>
+            ) : (
+              <div className="flex flex-col lg:flex-row lg:items-center gap-6">
+                <div className="flex-1 space-y-3">
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-[rgb(var(--text-secondary))]">Legacy file-read (est.)</span>
+                      <span className="font-mono text-[rgb(var(--text-primary))]">~{fmtMs(ttcLegacyAvgMs)}</span>
+                    </div>
+                    <div className="h-4 bg-[rgb(var(--bg-page))] rounded overflow-hidden"><div className="h-full rounded bg-zinc-600" style={{ width: '100%' }} /></div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-[rgb(var(--text-secondary))]">Brain boot (measured)</span>
+                      <span className="font-mono text-emerald-400">~{fmtMs(ttcBrainAvgMs)}</span>
+                    </div>
+                    <div className="h-4 bg-[rgb(var(--bg-page))] rounded overflow-hidden"><div className="h-full rounded bg-gradient-to-r from-teal-500/80 to-emerald-400/80" style={{ width: `${ttcBrainBarPct}%` }} /></div>
+                  </div>
+                </div>
+                <div className="lg:w-48 text-center lg:text-right shrink-0">
+                  <p className="text-4xl font-bold text-emerald-400">{ttcSavedPct > 0 ? `${ttcSavedPct}%` : '—'}</p>
+                  <p className="text-xs text-[rgb(var(--text-muted))] mt-1">faster to productive context</p>
+                  {ttcSavedMs > 0 && <p className="text-xs text-zinc-600 mt-2 font-mono">−{fmtMs(ttcSavedMs)}/boot</p>}
+                </div>
+              </div>
+            )}
           </div>
         </Card>
       </div>

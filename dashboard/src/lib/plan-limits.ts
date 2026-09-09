@@ -13,8 +13,10 @@
  * existing importers are unaffected.
  *
  * Kept in lock-step with the gateway (runtime/src/core/billing.ts) so checkout /
- * webhook / gate / UI agree on what each tier unlocks. A limit of -1 means
- * "unlimited".
+ * webhook / gate / UI agree on what each tier unlocks — enforced by the
+ * mirror-parity test runtime/tests/unit/plan-limits-parity.test.ts (a field or
+ * value added on one side only fails the gateway's `npm test`). A limit of -1
+ * means "unlimited".
  */
 
 export type TenantPlan = 'free' | 'solo' | 'team' | 'scale';

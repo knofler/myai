@@ -109,6 +109,55 @@ export async function listReposUnified(tenantId: string): Promise<RepoInfo[]> {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+export interface RepoPathEntry {
+  name: string;
+  path: string;
+  source: 'seed' | 'db';
+}
+
+/**
+ * ADR-021 Phase 3 — THE shared fleet-path resolver for host-side consumers
+ * (shell scripts via GET /api/repos/paths, `myai repos --paths`).
+ *
+ * Returns RAW paths, exactly as registered: DB rows keep the path `myai init`/
+ * `scan` recorded on the user's machine; txt-seed rows keep the raw line
+ * (including a leading `~`) so the HOST client expands `~` against its own
+ * HOME. Deliberately NOT routed through resolveManagedRepoPath — that helper
+ * rewrites to container mounts (REPOS_BASE) / container HOME, which are
+ * meaningless to the host shell scripts this resolver exists to serve.
+ *
+ * DB roster preferred (by name); managed_repos.txt is only the optional
+ * bootstrap seed. Card-only placeholder rows (`/repocard/<name>`, no local
+ * checkout) are excluded — path consumers iterate real checkouts.
+ */
+export async function resolveRepoPaths(tenantId: string): Promise<RepoPathEntry[]> {
+  const byName = new Map<string, RepoPathEntry>();
+
+  const config = getConfig();
+  const reposFile = resolve(config.aiRoot, 'config', 'managed_repos.txt');
+  if (existsSync(reposFile)) {
+    const lines = readFileSync(reposFile, 'utf-8')
+      .split('\n')
+      .map(l => l.split('#')[0].trim())
+      .filter(Boolean);
+    for (const raw of lines) {
+      const name = basename(raw);
+      byName.set(name, { name, path: raw, source: 'seed' });
+    }
+  }
+
+  try {
+    for (const r of await listRepos(tenantId)) {
+      if (r.path.startsWith('/repocard/')) continue; // card-only seed — no local checkout yet
+      byName.set(r.name, { name: r.name, path: r.path, source: 'db' });
+    }
+  } catch (err) {
+    log.warn({ err: (err as Error).message }, 'DB roster unavailable — resolveRepoPaths serving managed_repos.txt seed only');
+  }
+
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /**
  * ADR-021 — idempotent seed: INSERT managed_repos.txt entries into the tenant's
  * DB roster if absent. Insert-only (never overwrites a self-registered / manually

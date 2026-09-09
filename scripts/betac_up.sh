@@ -79,8 +79,15 @@ hr()     { printf '%s\n' "──────────────────
 # ── load .env so path/port overrides resolve here too ────────────────────────
 load_env() {
     [ -f "$REPO_ROOT/.env" ] || return 0
-    # shellcheck disable=SC1091
-    set -a; . "$REPO_ROOT/.env" 2>/dev/null || true; set +a
+    # source=/dev/null (not disable=SC1091): .env is gitignored, so shellcheck
+    # can follow it locally but not in CI — SC1091 fired only there. The
+    # directive must also sit on its own line ahead of the `.` command; on the
+    # old `set -a; . file; set +a` one-liner it bound to `set -a` and left the
+    # source unprotected.
+    set -a
+    # shellcheck source=/dev/null
+    . "$REPO_ROOT/.env" 2>/dev/null || true
+    set +a
 }
 
 # ── compose -f / --profile arg builder ───────────────────────────────────────

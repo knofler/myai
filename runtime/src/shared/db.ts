@@ -532,6 +532,32 @@ runnerLeaseHistorySchema.index({ tenantId: 1, releasedAt: -1 });
 // collection without a separate rotation job.
 runnerLeaseHistorySchema.index({ releasedAt: 1 }, { expireAfterSeconds: 60 * 24 * 3600 });
 
+// ── RunnerBacklogCursor (task-e9163eb9 — cross-machine backlog-well cursor) ──
+// scripts/queue_topup.sh computed REMAINING = TOTAL - CONSUMED from CONSUMED
+// read out of a gitignored, machine-local file (config/.runner_backlog.cursor).
+// In a fresh checkout/worktree (no local file) CONSUMED silently reads 0
+// regardless of the real consumption state on whichever machine actually
+// drives the runner, so `--report` and the low-backlog check gave different
+// answers depending on which checkout ran them. One document per tenant now
+// holds the authoritative consumed-count in Mongo, mirroring how RunnerLease
+// above (and tasks_list) are already the cross-machine source of truth for
+// other runner state.
+
+export interface IRunnerBacklogCursor extends Document {
+  tenantId: string;
+  consumed: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const runnerBacklogCursorSchema = new Schema<IRunnerBacklogCursor>({
+  tenantId: tenantField,
+  consumed: { type: Number, required: true, default: 0 },
+}, { timestamps: true, collection: 'runner_backlog_cursor' });
+
+// One cursor doc per tenant — upserted in place, never duplicated.
+runnerBacklogCursorSchema.index({ tenantId: 1 }, { unique: true });
+
 // ── RunnerHeartbeat (liveness alerting — distinct from RunnerLease above) ──
 // RunnerLease only has a document while a runner HOLDS a task-concurrency
 // slot, i.e. mid-session. It says nothing about whether the off-hours runner
@@ -1704,6 +1730,7 @@ export interface IContinuityMetric extends Document {
   tool: ContinuityTool;      // which continuity surface served it
   tokens: number;            // estimated tokens served (~4 chars/token upstream)
   baselineTokens?: number;   // measured legacy file-read boot cost at serve time (B7 today-vs-brain)
+  durationMs?: number;       // measured wall-clock time to assemble+serve this context block (time-to-context)
   userId?: string;           // M2 Team tier — tenant member the boot was served to (absent on system/agent traffic)
   sessionId?: string;        // originating gateway session, when known
   createdAt: Date;
@@ -1716,6 +1743,7 @@ const continuityMetricSchema = new Schema<IContinuityMetric>({
   tool: { type: String, required: true, enum: ['context_boot', 'memory_context', 'brain_delta'] },
   tokens: { type: Number, required: true, min: 0 },
   baselineTokens: { type: Number, min: 0 },
+  durationMs: { type: Number, min: 0 },
   userId: { type: String },
   sessionId: { type: String },
 }, { timestamps: true });
@@ -3101,6 +3129,7 @@ export let VectorModel: Model<IVector>;
 export let TaskModel: Model<ITask>;
 export let RunnerLeaseModel: Model<IRunnerLease>;
 export let RunnerLeaseHistoryModel: Model<IRunnerLeaseHistory>;
+export let RunnerBacklogCursorModel: Model<IRunnerBacklogCursor>;
 export let RunnerHeartbeatModel: Model<IRunnerHeartbeat>;
 export let FleetMaintenanceModel: Model<IFleetMaintenance>;
 export let ScheduleModel: Model<ISchedule>;
@@ -3265,6 +3294,7 @@ export async function connectDB(): Promise<typeof mongoose> {
     TaskModel = mongoose.model<ITask>('Task', taskSchema);
     RunnerLeaseModel = mongoose.model<IRunnerLease>('RunnerLease', runnerLeaseSchema);
     RunnerLeaseHistoryModel = mongoose.model<IRunnerLeaseHistory>('RunnerLeaseHistory', runnerLeaseHistorySchema);
+    RunnerBacklogCursorModel = mongoose.model<IRunnerBacklogCursor>('RunnerBacklogCursor', runnerBacklogCursorSchema);
     RunnerHeartbeatModel = mongoose.model<IRunnerHeartbeat>('RunnerHeartbeat', runnerHeartbeatSchema);
     FleetMaintenanceModel = mongoose.model<IFleetMaintenance>('FleetMaintenance', fleetMaintenanceSchema);
     ScheduleModel = mongoose.model<ISchedule>('Schedule', scheduleSchema);

@@ -105,6 +105,31 @@ export interface MarketplaceListing {
   updatedAt: string;
 }
 
+/**
+ * ADR-027 §2's manifest capability declaration — declared at publish time,
+ * frozen by the manifest hash, and reviewed before `published`. Never
+ * inferred from package content and never caller-suppliable at
+ * install/invoke time. Mirrors `marketplace/publish.ts`'s
+ * `PublishManifest.capabilities` shape (the server-side validated input this
+ * gets frozen from) and `core/tenant-context.ts`'s `SandboxResourceLimits`
+ * (the runtime enforcement shape `resourceLimits` is handed to at invoke
+ * time) — kept as its own exported type here rather than imported from
+ * either so `types.ts` (the model layer) stays free of a runtime/core
+ * dependency.
+ */
+export interface PackageCapabilities {
+  /** Subset of the gateway's tool-name space this version may ever call. */
+  declaredTools: string[];
+  /** Fixed egress allowlist (exact domains, no wildcards). Empty = no network. */
+  networkAllowlist: string[];
+  /** Per-invocation resource ceiling (ADR-027 §3). */
+  resourceLimits: {
+    maxWallClockMs: number;
+    maxToolCalls: number;
+    maxOutputBytes: number;
+  };
+}
+
 export interface ListingVersion {
   creatorTenantId: string;      // scope (mirrors the parent listing)
   listingId: string;
@@ -122,9 +147,38 @@ export interface ListingVersion {
    * widening (ADR-028 §4).
    */
   declaredTools: string[];
+  /**
+   * `PackageCapabilities.networkAllowlist` (ADR-027 §2). Optional — additive
+   * back-compat with any `ListingVersion` row that predates this field.
+   * Absent/undefined means "no capability declared" and MUST be treated as
+   * empty (no network reach), the same fail-closed default a real manifest's
+   * empty array means — never inferred as unrestricted.
+   */
+  networkAllowlist?: string[];
+  /**
+   * `PackageCapabilities.resourceLimits` (ADR-027 §2). Optional for the same
+   * additive back-compat reason as `networkAllowlist`; absent means no
+   * declared ceiling was frozen for this row and the platform default (§3)
+   * applies — never treat absence as "unlimited".
+   */
+  resourceLimits?: PackageCapabilities['resourceLimits'];
   reviewedBy?: string;          // userId of the platform reviewer
   publishedAt?: string;
   createdAt: string;
+}
+
+/**
+ * Read a `ListingVersion`'s full ADR-027 §2 capability triple, defaulting any
+ * pre-existing row that predates `networkAllowlist`/`resourceLimits` to
+ * empty/no-capability rather than undefined — the single place callers
+ * should read this from instead of re-deriving the same three-way default.
+ */
+export function packageCapabilitiesOf(version: ListingVersion): PackageCapabilities {
+  return {
+    declaredTools: version.declaredTools,
+    networkAllowlist: version.networkAllowlist ?? [],
+    resourceLimits: version.resourceLimits ?? { maxWallClockMs: 0, maxToolCalls: 0, maxOutputBytes: 0 },
+  };
 }
 
 /**

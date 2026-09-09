@@ -28,7 +28,7 @@ const SCRIPTS_DIR = path.join(REPO_ROOT, 'scripts');
 //   handler → in-process JS (used by `doctor`)
 const COMMANDS = [
   { name: 'setup', args: '[args...]', script: 'myai_setup.sh',
-    desc: 'Global first-run wizard (once per machine, BEFORE any repo work): the ONE question — connect an existing brain (--brain <url> / $MYAI_BRAIN_REMOTE) or provision a new one (local by default, states the ownership/data-locality deal + consent, optional private remote). --yes for non-interactive consent. Auto-triggered by any other stateful command when ~/.myai/config is missing (see needsAutoSetup below) — never re-triggers once set up; --force redoes it' },
+    desc: 'Global first-run wizard (once per machine, BEFORE any repo work): the ONE question — connect an existing brain (--brain <url> / $MYAI_BRAIN_REMOTE) or provision a new one (local by default, states the ownership/data-locality deal + consent, optional private remote). --yes for non-interactive consent. Auto-triggered by any other stateful command when ~/.myai/config is missing (see needsAutoSetup below) — never re-triggers once set up; --force redoes it. `setup --machine` is the separate machine-arrival path: idempotently checks/fixes Dropbox conflicts, git re-attach across the repo fleet, the Docker stack, npm\'s global prefix, and runner registration in one pass — reports fixed vs. needs-operator (--dry-run/--yes/--install-runner/--rebuild-docker/--json)' },
   { name: 'init', args: '[path]', script: 'myai_init.sh',
     desc: 'Greenfield by default: drop a ~30-line kernel CLAUDE.md + gitignored .myai-local (no AI/ folder) — framework resolves from the installed module. --managed forces the legacy AI/-scaffold (portable docker-compose + .env + guided wizard); --force replaces a non-kernel CLAUDE.md; --zero-prompt (or env MYAI_ZERO_PROMPT=1) guarantees a scripted/headless run never blocks on stdin, regardless of TTY state' },
   { name: 'up', args: '[args...]', script: 'myai_up.sh',
@@ -71,6 +71,8 @@ const COMMANDS = [
     desc: 'Propagate the MCP server config through the installed module (not update_all): `mcp repo [path]` writes/refreshes a repo .mcp.json from the bundled template (deep-merge — framework servers canonical, custom preserved); `mcp sync [museum|tech|personal|all]` refreshes the per-org Claude config dirs from the template; `mcp print` shows the base config. --dry-run supported' },
   { name: 'mirror', args: '[args...]', script: 'mongo_mirror.sh',
     desc: 'Keep a LOCAL copy of the gateway memory + registry so localhost is not single-point-of-failure on Atlas. Streams mongodump→mongorestore (Atlas → local by default) in a throwaway mongo:7 container — no host mongo tools. --dry-run previews; --collections a,b scopes; --reverse (local → Atlas) is guarded behind --yes; --install-schedule [--every-minutes N] / --schedule-status / --uninstall-schedule manage the periodic (hourly default) launchd/cron refresh' },
+  { name: 'sync', args: '[args...]', script: 'mongo_sync.sh',
+    desc: 'ADR-022 local-first mongo mode: converge Atlas and the local myai-mongo in whichever direction is designated PRIMARY. Plain call syncs PRIMARY → SECONDARY (idempotent); `sync status` shows primary + last successful sync; `sync set-primary atlas|local` flips the designation; --dry-run previews; --collections a,b scopes. `sync schedule install|status|uninstall [--every-minutes N|--every-hours N]` installs/inspects/removes BOTH the periodic sync job and an independent staleness canary that raises a notification-engine alert once the last successful sync exceeds a threshold — never installed automatically' },
   { name: 'rotate-keys', args: '<local|tenant> [args...]', script: 'myai_rotate_keys.sh',
     desc: 'Self-rotate a gateway credential with a dual-valid grace window (zero-downtime): `rotate-keys local [--grace-minutes N]` rewrites GATEWAY_LOCAL_TOKEN in .env, keeping the old value valid for the grace window; `rotate-keys tenant <tenantId> [--grace-minutes N] [--env live|test]` mints a new tenant bootstrap API key via the gateway (local-trust only), old key stays valid server-side until grace elapses — new key is shown ONCE' },
   { name: 'tenant', args: '<create|list|suspend|reactivate|rotate-key> [args...]', script: 'myai_tenant.sh',
@@ -103,6 +105,8 @@ const COMMANDS = [
     desc: 'One-command release cut: `release [patch|minor|major]` bumps package.json + CHANGELOG.md from Conventional Commits, clean-room-validates (shell unit suite + publish_guard.sh leak scan + a Docker install/smoke check), and commits locally — any validation failure auto-reverts the bump. `release --tag` (run on main after the commit merges) tags + pushes the release and prints the `gh release create` follow-up. --dry-run previews; --skip-tests/--skip-guard/--skip-docker skip a validation stage; --json for scripts' },
   { name: 'completions', args: '<shell>', handler: completions,
     desc: 'Generate a shell completion script (commands, flags, and dynamic --repo names) for bash | zsh | fish. Prints to stdout; install instructions are inline as comments in the generated script. Command list is read straight off this table, so it can never drift from `myai --help` — enforced by runtime/tests/unit/cli-dispatch.test.ts' },
+  { name: 'repos', args: '[--paths] [--json]', handler: reposCommand,
+    desc: 'Fleet roster (ADR-021 Phase 3 resolver shim): gateway DB `repos` collection preferred, config/managed_repos.txt bootstrap-seed fallback. Default prints repo names; --paths prints one absolute checkout path per line (for shell consumers); --json prints entries with name/path/source plus which resolver answered. MYAI_REPOS_NO_GATEWAY=1 forces the seed file' },
   { name: '__repos', args: '[args...]', handler: printRepos, hidden: true,
     desc: 'Internal: list managed repo names (one per line) from config/managed_repos.txt — used by shell completion to fill in --repo values' },
 ];
@@ -214,15 +218,18 @@ function findAnthropicKey() {
 // runtime/src/shared/config.ts's KNOWN_DEFAULT_LOCAL_TOKEN (SECURITY task-7f8b20a3).
 const KNOWN_DEFAULT_LOCAL_TOKEN = 'myai-local-bridge-dev';
 
-// Look for GATEWAY_LOCAL_TOKEN in the environment, then in a local .env (cwd or
-// package root) — same resolution order as findAnthropicKey.
-function findGatewayLocalToken() {
-  const envVal = process.env.GATEWAY_LOCAL_TOKEN;
+// Look for GATEWAY_LOCAL_TOKEN (or a sibling var like the rotation-grace
+// GATEWAY_LOCAL_TOKEN_PREVIOUS) in the environment, then in a local .env (cwd
+// or package root) — same resolution order as findAnthropicKey.
+function findGatewayLocalToken(varName) {
+  const name = varName || 'GATEWAY_LOCAL_TOKEN';
+  const envVal = process.env[name];
   if (envVal && envVal.trim()) return { value: envVal.trim(), src: 'environment' };
+  const re = new RegExp(`^\\s*${name}\\s*=\\s*(.+?)\\s*$`, 'm');
   for (const dir of [process.cwd(), REPO_ROOT]) {
     const f = path.join(dir, '.env');
     if (!fs.existsSync(f)) continue;
-    const m = fs.readFileSync(f, 'utf8').match(/^\s*GATEWAY_LOCAL_TOKEN\s*=\s*(.+?)\s*$/m);
+    const m = fs.readFileSync(f, 'utf8').match(re);
     if (m && m[1] && m[1].trim()) return { value: m[1].trim(), src: path.relative(process.cwd(), f) || '.env' };
   }
   return null;
@@ -358,6 +365,85 @@ function runnerBacklogWellStatus(repoRoot) {
   return { exists: true, total, consumed, remaining, backlogPath };
 }
 
+// SessionStart hook timing (OPS task-085b3748): every hooks/session/*.sh runs
+// through hooks/hook_share/timing/timed_hook.sh, which appends
+// `<boot_id> <start_ms> <dur_ms> <exit> <hook_basename>` per hook to a
+// per-machine, gitignored log (state/.hook-timing.log.<host>). This reads the
+// LAST recorded boot and returns its wall-clock (hooks run in parallel, so
+// wall = latest finish - earliest start, not the sum) plus the slowest hooks,
+// so `myai doctor` exposes where boot latency went. MYAI_HOOK_TIMING_LOG
+// overrides the path (tests pin it so a host's real log can't leak in).
+function sessionHookTimingStatus(repoRoot) {
+  let logPath = process.env.MYAI_HOOK_TIMING_LOG || '';
+  if (!logPath) {
+    // Newest .hook-timing.log* in state/ or AI/state/ (cwd first, then the
+    // install root) — dir scan instead of recomputing the hostname suffix.
+    const stateDirs = [
+      path.join(process.cwd(), 'state'),
+      path.join(process.cwd(), 'AI', 'state'),
+      path.join(repoRoot, 'state'),
+      path.join(repoRoot, 'AI', 'state'),
+    ];
+    let newest = 0;
+    for (const dir of stateDirs) {
+      if (!fs.existsSync(dir)) continue;
+      let names = [];
+      try { names = fs.readdirSync(dir); } catch { continue; }
+      for (const name of names) {
+        if (!name.startsWith('.hook-timing.log')) continue;
+        if (name.includes('.reported.') || name.includes('.tmp.')) continue;
+        const f = path.join(dir, name);
+        let st;
+        try { st = fs.statSync(f); } catch { continue; }
+        if (st.isFile() && st.mtimeMs > newest) { newest = st.mtimeMs; logPath = f; }
+      }
+    }
+  }
+  if (!logPath || !fs.existsSync(logPath)) return { exists: false };
+
+  const rows = fs.readFileSync(logPath, 'utf8').split('\n')
+    .map((l) => l.trim().split(/\s+/))
+    .filter((p) => p.length >= 5 && /^[0-9]+$/.test(p[1]) && /^[0-9]+$/.test(p[2]));
+  if (rows.length === 0) return { exists: false };
+
+  const lastBootId = rows[rows.length - 1][0];
+  const boot = rows.filter((p) => p[0] === lastBootId)
+    // p[5] (out bytes) is optional — logs written before TOKEN task-2a431e9b
+    // have only 5 fields, so default the byte count to 0.
+    .map((p) => ({ start: Number(p[1]), dur: Number(p[2]), exit: p[3], name: p[4], bytes: Number(p[5] || 0) }));
+  const minStart = Math.min(...boot.map((h) => h.start));
+  const maxEnd = Math.max(...boot.map((h) => h.start + h.dur));
+  const slowest = boot.slice().sort((a, b) => b.dur - a.dur).slice(0, 3);
+
+  let budgetMs = 20000;
+  const confCandidates = [
+    path.join(process.cwd(), 'config', 'session-limits.json'),
+    path.join(process.cwd(), 'AI', 'config', 'session-limits.json'),
+    path.join(repoRoot, 'config', 'session-limits.json'),
+  ];
+  const conf = confCandidates.find((f) => fs.existsSync(f));
+  if (conf) {
+    try {
+      const b = JSON.parse(fs.readFileSync(conf, 'utf8'))?.session_hooks?.budget_ms;
+      if (Number.isFinite(b)) budgetMs = b;
+    } catch { /* malformed config — keep the default budget */ }
+  }
+
+  return {
+    exists: true,
+    logPath,
+    hooks: boot.length,
+    wallMs: maxEnd - minStart,
+    budgetMs,
+    bootEpochMs: maxEnd,
+    // Boot-cost KPI (TOKEN task-2a431e9b): bytes of visible hook stdout this
+    // boot. scripts/boot_cost.sh adds CLAUDE.md for the full per-session total.
+    hookOutBytes: boot.reduce((s, h) => s + (Number.isFinite(h.bytes) ? h.bytes : 0), 0),
+    slowest,
+    failures: boot.filter((h) => h.exit !== '0').map((h) => `${h.name} (exit ${h.exit})`),
+  };
+}
+
 // Host ports the self-contained stack binds (docker-compose.yml).
 const STACK_PORTS = [
   [3100, 'gateway HTTP/MCP'],
@@ -429,6 +515,17 @@ function runDoctorChecks() {
   } else {
     check('GATEWAY_LOCAL_TOKEN', true, `set (${localToken.src})`);
   }
+  // The rotation-grace PREVIOUS slot must never carry the published default
+  // either — `myai rotate-keys local` persists the old value there, so a
+  // rotation away from the default used to leave the public credential live in
+  // .env for the grace window. The gateway now refuses it at load (config.ts)
+  // and rotateLocalToken grants it no grace; surface any stale .env entry so
+  // the operator cleans it up. Silent when absent or a real (private) token.
+  const prevToken = findGatewayLocalToken('GATEWAY_LOCAL_TOKEN_PREVIOUS');
+  if (prevToken && prevToken.value === KNOWN_DEFAULT_LOCAL_TOKEN) {
+    check('GATEWAY_LOCAL_TOKEN_PREVIOUS', 'warn',
+      `rotation-grace slot holds the published default ("${KNOWN_DEFAULT_LOCAL_TOKEN}", public in the npm package) via ${prevToken.src} — the gateway refuses it under enforcement; remove GATEWAY_LOCAL_TOKEN_PREVIOUS and _PREVIOUS_EXPIRES_AT from .env`);
+  }
 
   // ── offline / degraded mode (BRAIN B6) — all warn-only: offline is a
   //    SUPPORTED mode (Ollama auto-connect + brain degraded-read), so none of
@@ -495,6 +592,26 @@ function runDoctorChecks() {
     check('runner backlog well', low ? 'warn' : true,
       `${well.remaining} remaining / ${well.total} total (consumed ${well.consumed})`
       + (low ? ` — below RUNNER_BACKLOG_MIN (${backlogMin}); queue_topup.sh will enqueue a PLANNER task on its next cycle` : ''));
+  }
+
+  // ── session hook timing — warn-only: the boot latency budget
+  //    (hooks/hook_share/timing/timed_hook.sh). Over-budget boots also print
+  //    a slowest-3 line inline at session start; this exposes the last boot's
+  //    breakdown on demand.
+  const timing = sessionHookTimingStatus(REPO_ROOT);
+  if (!timing.exists) {
+    check('session hook timing', true,
+      'no boot recorded yet — the timing log appears after the next Claude session start');
+  } else {
+    const ageMin = Math.round((Date.now() - timing.bootEpochMs) / 60000);
+    const ago = ageMin < 120 ? `${ageMin}m ago` : `${Math.round(ageMin / 60)}h ago`;
+    const slow = timing.slowest.map((h) => `${h.name} ${h.dur}ms`).join(', ');
+    const over = timing.wallMs > timing.budgetMs;
+    check('session hook timing', over ? 'warn' : true,
+      `last boot (${ago}): ${timing.hooks} hooks, ${timing.wallMs}ms wall`
+      + `${over ? ` — OVER budget (${timing.budgetMs}ms)` : ` (budget ${timing.budgetMs}ms)`}`
+      + ` — slowest: ${slow}`
+      + (timing.failures.length ? ` — failed: ${timing.failures.join(', ')}` : ''));
   }
 
   // ── packaged framework files ─────────────────────────────────────────────
@@ -870,6 +987,69 @@ function printRepos() {
   return true;
 }
 
+// ── `myai repos` — ADR-021 Phase 3 fleet-roster resolver shim ───────────────
+// Gateway DB roster preferred (GET /api/repos/paths, tenant `repos` collection
+// ∪ txt seed resolved server-side); config/managed_repos.txt is only the
+// bootstrap-seed fallback. Same dependency-free node-child HTTP pattern as
+// probeOllamaDaemon so the CLI stays synchronous.
+function reposPathsFromGateway() {
+  const token = findGatewayLocalToken();
+  let u;
+  try { u = new URL(process.env.GATEWAY_BASE || 'http://localhost:3100'); } catch { return null; }
+  const probe =
+    `const http=require('http');` +
+    `const req=http.get({host:${JSON.stringify(u.hostname)},port:${Number(u.port) || 80},path:'/api/repos/paths',timeout:4000,` +
+    `headers:{'x-gateway-local-token':${JSON.stringify(token ? token.value : '')}}},res=>{` +
+    `if(res.statusCode!==200){res.resume();process.exit(1)}` +
+    `let b='';res.on('data',d=>b+=d);res.on('end',()=>process.stdout.write(b))});` +
+    `req.on('error',()=>process.exit(1));` +
+    `req.on('timeout',()=>{req.destroy();process.exit(1)});`;
+  const r = spawnSync(process.execPath, ['-e', probe], { encoding: 'utf8' });
+  if (r.status !== 0 || !r.stdout) return null;
+  try {
+    const j = JSON.parse(r.stdout);
+    return Array.isArray(j.repos) && j.repos.length > 0 ? j.repos : null;
+  } catch { return null; }
+}
+
+// managed_repos.txt → [{name, path, source:'seed'}] with raw (possibly ~-rooted) paths.
+function reposSeedEntries() {
+  const file = path.join(REPO_ROOT, 'config', 'managed_repos.txt');
+  if (!fs.existsSync(file)) return [];
+  const seen = new Set();
+  const entries = [];
+  for (const raw of fs.readFileSync(file, 'utf8').split('\n')) {
+    const line = raw.split('#')[0].trim();
+    if (!line) continue;
+    const name = path.basename(line.replace(/\/+$/, ''));
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    entries.push({ name, path: line, source: 'seed' });
+  }
+  return entries;
+}
+
+function reposCommand(extraArgs) {
+  const args = extraArgs || [];
+  const os = require('node:os');
+  const expand = (p) => String(p || '').replace(/^~\//, os.homedir() + '/');
+  let entries = process.env.MYAI_REPOS_NO_GATEWAY === '1' ? null : reposPathsFromGateway();
+  const source = entries ? 'gateway' : 'seed-file';
+  if (!entries) entries = reposSeedEntries();
+  if (args.includes('--json')) {
+    console.log(JSON.stringify({
+      source,
+      count: entries.length,
+      repos: entries.map((r) => ({ name: r.name, path: expand(r.path), source: r.source })),
+    }, null, 2));
+  } else if (args.includes('--paths')) {
+    for (const r of entries) if (r.path) console.log(expand(r.path));
+  } else {
+    for (const r of entries) console.log(r.name);
+  }
+  return true;
+}
+
 function generateBashCompletion() {
   const words = COMMANDS.filter((c) => !c.hidden).map((c) => c.name).concat(['-h', '--help', '-v', '--version']).join(' ');
   return `#!/usr/bin/env bash
@@ -1080,7 +1260,7 @@ function runFallback(argv) {
 // `config` is exempt too: it is the tool that CREATES/edits ~/.myai/config, so
 // auto-triggering the interactive setup wizard on its absence would both block
 // scripted `config set` runs and gate the front-end on the very file it manages.
-const SETUP_EXEMPT_COMMANDS = new Set(['setup', 'doctor', 'root', 'completions', '__repos', 'config']);
+const SETUP_EXEMPT_COMMANDS = new Set(['setup', 'doctor', 'root', 'completions', 'repos', '__repos', 'config']);
 
 function needsAutoSetup(argv) {
   const args = argv.slice(2);
@@ -1155,6 +1335,9 @@ module.exports = {
   generateFishCompletion,
   reposList,
   printRepos,
+  reposCommand,
+  reposSeedEntries,
+  reposPathsFromGateway,
   findAnthropicKey,
   portInUse,
   hostReachable,
@@ -1162,6 +1345,7 @@ module.exports = {
   brainFreshness,
   mirrorScheduleStatus,
   runnerBacklogWellStatus,
+  sessionHookTimingStatus,
   printHelp,
   runFallback,
   needsAutoSetup,

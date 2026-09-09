@@ -247,6 +247,10 @@ export async function indexBrainAtoms(tenantId: string, brainDir: string, repoNa
  * state/handoff/archive vectors for that repo. Falls back to the slug itself
  * when no match is found (e.g. an unregistered/ad-hoc namespace) — indexing
  * still works, just under the slug spelling.
+ *
+ * The 'ai_management' literal here is the SAME canonical master-repo id
+ * scripts/lib/repo_id.sh resolves for the task queue and the SCHEDULE banner
+ * (task-89077bf0) — keep both in sync if this ever grows more aliases.
  */
 export function repoNameForBrainNamespace(namespace: string): string {
   if (slugify('ai_management') === namespace) return 'ai_management';

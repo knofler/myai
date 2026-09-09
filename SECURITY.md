@@ -291,6 +291,14 @@ running in:
    (empty = allow all).
 5. Keep `tenancy.enforce` on (the default) — don't set `TENANT_ENFORCE=false`
    outside tests.
+6. Run the supply-chain gate: `./scripts/dependency_scan.sh` — `npm audit`
+   (fails on any high/critical CVE in production deps) plus a license-
+   compliance pass against a permissive allowlist, per npm surface
+   (`runtime/`, `dashboard/`). CI runs it automatically on dependency-touching
+   PRs and on a weekly schedule (`.github/workflows/dependency-scan.yml`),
+   which also opens a bounded auto-upgrade PR for safe semver-patch bumps
+   (lockfile-only, verified, capped at 5, `deps/auto-patch-*` → `test` —
+   never straight to `main`).
 
 ---
 

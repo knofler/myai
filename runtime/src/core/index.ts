@@ -40,6 +40,7 @@ import { startPoolCapacityDriftAlerts, stopPoolCapacityDriftAlerts } from '../mo
 import { startMongoMirrorAlerts, stopMongoMirrorAlerts } from '../monitoring/mongo-mirror-alerter.js';
 import { startDedicatedPoolAlerts, stopDedicatedPoolAlerts } from '../monitoring/dedicated-pool-alerter.js';
 import { startDockerVmDiskAlerts, stopDockerVmDiskAlerts } from '../monitoring/docker-vm-disk-alerter.js';
+import { startRepoStalenessAlerts, stopRepoStalenessAlerts } from '../monitoring/repo-runner-staleness-alerter.js';
 import { startBudgetReconciliation, stopBudgetReconciliation } from '../monitoring/budget-reconciliation.js';
 import { initSentry, flushSentry } from '../monitoring/sentry.js';
 import { logLicenseStatus } from './license.js';
@@ -223,6 +224,7 @@ export async function bootstrap(configPath?: string): Promise<void> {
     stopMongoMirrorAlerts();
     stopDedicatedPoolAlerts();
     stopDockerVmDiskAlerts();
+    stopRepoStalenessAlerts();
     stopPriorityAgingSweep();
     stopSecurityAnomalyAlerts();
     stopBudgetReconciliation();
@@ -418,6 +420,18 @@ export async function bootstrap(configPath?: string): Promise<void> {
     startBudgetReconciliation();
   } else {
     log.info('Budget reconciliation disabled by BUDGET_RECONCILIATION_DISABLED=1');
+  }
+
+  // Per-repo runner-log staleness — distinct from runner-heartbeat-store's
+  // fleet-wide "is the runner process alive at all" check: this flags a
+  // SPECIFIC repo whose job-history log hasn't advanced in
+  // REPO_RUNNER_STALENESS_THRESHOLD_HOURS (default 48h) while its own queue
+  // still has pending work, even if the fleet runner is heartbeating fine
+  // elsewhere. Disable with REPO_RUNNER_STALENESS_ALERTS_DISABLED=1.
+  if (process.env.REPO_RUNNER_STALENESS_ALERTS_DISABLED !== '1') {
+    startRepoStalenessAlerts();
+  } else {
+    log.info('Repo-runner-staleness alerts disabled by REPO_RUNNER_STALENESS_ALERTS_DISABLED=1');
   }
 
   // Outbound webhooks — fan lifecycle events out to tenant-registered HTTP

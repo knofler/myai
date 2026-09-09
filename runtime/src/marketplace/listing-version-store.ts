@@ -18,7 +18,7 @@
  * creation flow yet, so slug stands in as the join key for now.
  */
 import type { ListingVersion, VersionStatus } from './types.js';
-import { canTransitionVersion } from './listing-lifecycle.js';
+import { canTransitionVersion, canApproveListingVersion } from './listing-lifecycle.js';
 
 function key(creatorTenantId: string, listingId: string, version: string): string {
   return `${creatorTenantId}::${listingId}::${version}`;
@@ -78,6 +78,9 @@ export interface UpsertInReviewInput {
   changelog: string;
   artifactUri: string;
   declaredTools: string[];
+  /** ADR-027 §2 — optional so callers seeding pre-ADR-027 rows still typecheck. */
+  networkAllowlist?: string[];
+  resourceLimits?: { maxWallClockMs: number; maxToolCalls: number; maxOutputBytes: number };
 }
 
 /**
@@ -102,6 +105,8 @@ export function upsertInReviewListingVersion(input: UpsertInReviewInput): Listin
       changelog: input.changelog,
       artifactUri: input.artifactUri,
       declaredTools: input.declaredTools,
+      networkAllowlist: input.networkAllowlist,
+      resourceLimits: input.resourceLimits,
       createdAt: now,
     };
     store.set(key(input.creatorTenantId, input.listingId, input.version), created);
@@ -127,6 +132,8 @@ export function upsertInReviewListingVersion(input: UpsertInReviewInput): Listin
     changelog: input.changelog,
     artifactUri: input.artifactUri,
     declaredTools: input.declaredTools,
+    networkAllowlist: input.networkAllowlist,
+    resourceLimits: input.resourceLimits,
   };
   store.set(key(input.creatorTenantId, input.listingId, input.version), updated);
   return updated;
@@ -173,6 +180,13 @@ export interface ReviewDecisionInput {
   /** `approved` or `draft` (reject → back to draft, per the version transition table). */
   to: Extract<VersionStatus, 'approved' | 'draft'>;
   reviewedBy: string;
+  /**
+   * ADR-027 §2 minimum-necessary review criterion — high-risk `declaredTools`
+   * (`listing-lifecycle.ts`'s `HIGH_RISK_MARKETPLACE_TOOLS`) the reviewer has
+   * explicitly acknowledged as required for this listing's stated purpose.
+   * Only consulted when `to: 'approved'`; a reject needs no justification.
+   */
+  justifiedHighRiskTools?: string[];
 }
 
 /** Apply a reviewer's approve/reject decision to an `in_review` ListingVersion. */
@@ -181,7 +195,10 @@ export function reviewListingVersion(input: ReviewDecisionInput): ListingVersion
   if (!existing) {
     throw new Error(`no such ListingVersion ${input.listingId}@${input.version}`);
   }
-  const result = canTransitionVersion(existing.status, input.to);
+  const result =
+    input.to === 'approved'
+      ? canApproveListingVersion(existing, input.justifiedHighRiskTools ?? [])
+      : canTransitionVersion(existing.status, input.to);
   if (!result.ok) {
     throw new Error(`cannot move ListingVersion ${input.listingId}@${input.version} to ${input.to}: ${result.reason}`);
   }

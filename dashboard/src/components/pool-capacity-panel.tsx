@@ -46,22 +46,26 @@ function AgenticQualityRow({ providers }: { providers: PoolCapacityQuality[] }) 
 
 export function PoolCapacityPanel({ capacity }: { capacity: PoolCapacity }) {
   if (!capacity.available) return null;
-  const tokenPool = capacity.pools.find((p) => p.kind !== 'usd-reserve' && (p.weeklyBudgetTokens ?? 0) > 0);
+  // Plan L5 says EACH pool's remaining weekly budget — the snapshot emits
+  // several token pools (claude-tech + the paced Fable bucket), so render one
+  // gauge per budgeted token pool, not just the first match.
+  const tokenPools = capacity.pools.filter((p) => p.kind !== 'usd-reserve' && (p.weeklyBudgetTokens ?? 0) > 0);
   const reserve = capacity.pools.find((p) => p.kind === 'usd-reserve');
   const agentic = capacity.pools.find((p) => p.pool === 'agentic-fallback');
-  if (!tokenPool && !reserve && !agentic) return null;
+  if (tokenPools.length === 0 && !reserve && !agentic) return null;
   const fmtTok = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
   const qualityByProvider = agentic?.qualityByProvider ?? [];
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-      {tokenPool && (
+      {tokenPools.map((tokenPool) => (
         <StatCard
+          key={tokenPool.pool}
           label={`${tokenPool.pool} — week ${capacity.week ?? ''}`}
           value={`${fmtTok(tokenPool.weeklyRemainingTokens ?? 0)} tok left`}
           sub={`${tokenPool.pctUsedWeekly ?? 0}% of weekly budget used`}
           accent={(tokenPool.pctUsedWeekly ?? 0) >= 80 ? 'yellow' : 'green'}
         />
-      )}
+      ))}
       {reserve && (
         <StatCard
           label="API-credit reserve"

@@ -187,8 +187,75 @@ services:
     networks:
       - myai-net
 
+  # Self-hosted GitHub Actions runner — the durable fix for Actions minute spend.
+  #
+  # Lives in the `ci` PROFILE, so it is part of the myai project (one namespace in
+  # Docker Desktop, no stray `ai` project from the folder name) while staying out
+  # of everyday `docker compose up`. Profile membership is what makes that safe:
+  # a profiled service is NOT an orphan, so `down --remove-orphans` — the command
+  # hooks/session/01-machine-switch.sh tells operators to run — leaves it alone.
+  # Sharing a project name across two compose FILES does not have that property;
+  # there the runner is an orphan and gets destroyed.
+  #
+  # Drive it with scripts/runner_selfhosted.sh (mints the registration token via
+  # gh, so no PAT is ever written to disk).
+  #
+  # NOTE — no /var/run/docker.sock mount here, on purpose. The pilot workflow
+  # (script-unit-tests) is hermetic: git + python3 + node only. Mounting the socket
+  # would hand every workflow step root-equivalent control of the host Docker
+  # daemon. Only add it if you migrate a Docker-dependent workflow, and only
+  # because this repo is private with no fork-PR exposure.
+  #
+  # Deliberately NOT on myai-net: CI jobs have no business reaching the gateway
+  # or mongo. It only needs outbound internet, so it stays on the default network.
+  gh-runner:
+    profiles: ["ci"]
+    build:
+      context: ./ci/runner
+      args:
+        RUNNER_VERSION: "2.336.0"
+        RUNNER_ARCH: "arm64"
+        NODE_VERSION: "22.23.2"
+    image: myai-gh-runner:2.336.0
+    container_name: myai-gh-runner
+    restart: unless-stopped
+    environment:
+      REPO_URL: "https://github.com/knofler/ai_management"
+      RUNNER_TOKEN: "${RUNNER_TOKEN:-}"
+      RUNNER_NAME: "${RUNNER_NAME:-myai-local}"
+      RUNNER_LABELS: "self-hosted,linux,ARM64,myai-local"
+    volumes:
+      - gh-runner-config:/home/runner/actions-runner
+    mem_limit: ${GH_RUNNER_MEM_LIMIT:-4g}
+    cpus: 4.0
+    # run.sh needs longer than Docker's 10s default to release its session with
+    # GitHub. Too short and the next start loops on "A session for this runner
+    # already exists" until GitHub expires the stale one.
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   myai-mongo-data:
+  # Name-pinned to its pre-consolidation value, but deliberately NOT `external`.
+  # This volume holds the runner's GitHub registration; it was created under the
+  # old `ai` project (the folder name), so letting compose re-derive it as
+  # `myai_gh-runner-config` would hand the runner an empty config dir and force a
+  # full re-registration.
+  #
+  # Compose suggests `external: true` for adopting a volume across projects, and
+  # that is a TRAP here: compose refuses to CREATE an external volume, so once
+  # `runner_selfhosted.sh reset` wipes it (its documented job), the next `up` dies
+  # on "external volume not found" — the runner ends up deregistered AND
+  # unstartable, and a fresh machine that never had the volume cannot start it at
+  # all. A plain `name:` pin reuses the existing volume just as well (one cosmetic
+  # "created for project ai" warning per `up`) and still recreates it after a
+  # reset. The warning is the cheaper half of that trade. Do not rename.
+  gh-runner-config:
+    name: ai_gh-runner-config
 
 networks:
   myai-net:

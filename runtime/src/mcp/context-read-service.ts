@@ -27,7 +27,7 @@ import { listPlan, type PlanDayView } from '../repos/plan-store.js';
 import { searchVectors, type VectorSearchResult } from '../memory/vector-store.js';
 import { brainEnvFor, brainMainSha, brainManifest, readCompiledBrief } from '../core/distill.js';
 import type { BrainManifest, BrainManifestNamespace, BrainManifestStore } from '../core/distill.js';
-import { brainSyncPull } from '../core/brain.js';
+import { brainSyncPull, brainSyncWarning } from '../core/brain.js';
 import { tighten } from './context-text.js';
 
 const log = createChildLogger({ module: 'context-read-service' });
@@ -51,6 +51,8 @@ export interface BrainBriefRead {
   brief: string;
   /** Brain main HEAD — the next-boot `brain_delta` anchor. */
   sha?: string;
+  /** Set when local main is diverged/stale vs origin — see BrainSyncResult (task-1195b1a7). */
+  syncWarning?: string;
 }
 
 /**
@@ -119,11 +121,16 @@ export const defaultContextReadService: ContextReadService = {
       const env = brainEnvFor(tenantId);
       // Pull-on-boot: bounded fast-fail fetch + ff-pull of brain main before
       // reading, so a boot on this machine serves what another machine merged.
-      // Non-fatal — offline reads local main (BRAIN_OFFLINE.md).
-      brainSyncPull(env);
+      // Non-fatal — offline reads local main (BRAIN_OFFLINE.md). A diverged/
+      // stale clone can't ff — that used to be a totally silent no-op; now the
+      // resulting `syncWarning` rides along on the brief so a boot can never
+      // silently trust a months-stale main (task-1195b1a7).
+      const sync = brainSyncPull(env);
+      const syncWarning = brainSyncWarning(sync);
+      if (syncWarning) log.warn({ tenantId, repo, sync }, syncWarning);
       const brief = readCompiledBrief(repo, env);
       if (!brief) return undefined;
-      return { brief, sha: brainMainSha(env) };
+      return { brief, sha: brainMainSha(env), ...(syncWarning ? { syncWarning } : {}) };
     } catch (err) {
       log.debug({ err, repo }, 'brain brief read failed — falling back to handoff store');
       return undefined;

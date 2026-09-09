@@ -7,6 +7,8 @@ agents_invoke
 agents_list
 artifacts_list
 artifacts_register
+backlog_cursor_get
+backlog_cursor_set
 brain_bandit_stats
 brain_blame
 brain_branch
@@ -35,6 +37,7 @@ brain_pin
 brain_pop
 brain_recall_analytics
 brain_revert
+brain_router_train_readiness
 brain_search
 brain_seed
 brain_seed_status

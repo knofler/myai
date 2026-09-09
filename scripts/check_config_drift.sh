@@ -34,6 +34,10 @@
 #   ./scripts/check_config_drift.sh /path/to/repo  # single repo
 #   ./scripts/check_config_drift.sh --status       # print last recorded run, no run
 #
+# Runs on-demand only unless scheduled — see setup_config_drift_schedule.sh to
+# install a daily launchd (macOS) / cron (Linux) timer that runs this
+# unattended and keeps the --status state file current.
+#
 # Env overrides (used by scripts/tests/test_check_config_drift.sh for a
 # hermetic fixture run — never touch these for a normal invocation):
 #   CONFIG_DRIFT_MASTER      canonical master dir (default: this repo)

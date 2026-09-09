@@ -11,7 +11,15 @@
  * surface). SHA-256 remains correct for API keys (see auth.ts header).
  */
 import crypto from 'node:crypto';
-import { UserModel, TenantModel, DEFAULT_TENANT_ID, type IUser, type UserRole, type TenantPlan } from '../shared/db.js';
+import {
+  UserModel,
+  TenantModel,
+  DEFAULT_TENANT_ID,
+  type IUser,
+  type UserRole,
+  type TenantPlan,
+  type TenantRegion,
+} from '../shared/db.js';
 import { checkEntitlement, EntitlementError } from './entitlements.js';
 import { provisionTenant } from './tenant-keys.js';
 import { redeemInvite, markInviteAccepted } from './invites.js';
@@ -27,6 +35,17 @@ import { recordSession, type DeviceInfo } from './user-sessions.js';
 import { recordAuditEvent } from './audit-log.js';
 
 const log = createChildLogger({ module: 'user-auth' });
+
+// ── Data residency (ADR-024 Phase 2b) ──
+// `req.body` reaches signup() unvalidated (server.ts hands it straight
+// through) — a bad/absent `region` must degrade to the schema default rather
+// than ever reaching provisionTenant() as garbage.
+const VALID_REGIONS: readonly TenantRegion[] = ['us', 'eu', 'au'];
+function normalizeRegion(value: unknown): TenantRegion | undefined {
+  return typeof value === 'string' && (VALID_REGIONS as readonly string[]).includes(value)
+    ? (value as TenantRegion)
+    : undefined;
+}
 
 // ── Lockout (auto-unlock-via-email is the recovery path — account-unlock.ts) ──
 // After LOCKOUT_THRESHOLD consecutive failed logins, the account locks for a
@@ -299,6 +318,11 @@ export interface SignupInput {
    *  LegalConsent record is written at the current document versions. When
    *  LEGAL_CONSENT_REQUIRED=1 (hosted posture) signup REJECTS without it. */
   acceptTerms?: boolean;
+  /** Data-residency region to pin the new tenant to (ADR-024). Defaults to
+   *  'us' when absent/invalid — only meaningful on the fresh-tenant path
+   *  (ignored on invite joins, which join a tenant whose region is already
+   *  pinned). Surfaced by the dashboard's signup "choose your data region" step. */
+  region?: TenantRegion;
 }
 
 export interface SignupResult {
@@ -389,6 +413,7 @@ export async function signup(input: SignupInput, device: DeviceInfo = {}): Promi
     tenantId,
     name: tenantName,
     plan: 'free',
+    region: normalizeRegion(input.region),
     ownerEmail: email,
     env: 'live',
   });

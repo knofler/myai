@@ -23,6 +23,10 @@
 #                                               federated semantic search: atoms + session
 #                                               corpus, ranked together (needs the gateway —
 #                                               the ONE brain subcommand that isn't local-git-only)
+#   myai brain converge                        make local main == origin/main (boot fork-killer):
+#                                               ff / auto-merge / push. Auto-resolves ONLY the
+#                                               regenerable distiller outputs; a real atom
+#                                               conflict aborts + escalates. Zero model tokens.
 #   myai brain distill [ns …]                  recompile brief/working/rollup on main
 #   myai brain blame <code-sha|brain-ref>      code↔memory provenance, both directions
 #   myai brain revert <sha>                    undo a commit with an inverse commit
@@ -137,6 +141,7 @@ case "$cmd" in
   log)      brain_git log --oneline --graph -n "${1:-10}" ;;
   diff)     brain_diff "$@" ;;
   search)   cmd_search "$@" ;;
+  converge) brain_converge "$@" ;;
   distill)  brain_distill "$@" ;;
   blame)    brain_blame "$@" ;;
   revert)   brain_revert "$@" ;;

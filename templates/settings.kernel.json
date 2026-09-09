@@ -1,5 +1,5 @@
 {
-  "$comment": "myAI kernel settings \u2014 dropped by `myai init` (greenfield) into a kernel-only repo's .claude/settings.json. Wires the PreToolUse SAFETY hooks (block-push-main, secret-scan, no-local-npm, protected-files) from the installed ai-management module, resolved at hook-exec time via `myai root`. The hook BODIES live in the module, never a per-repo copy (plan S-INIT-5, ADR-016 \u00a70.5). Each command FAILS LOUD (exit 2 = block the tool) if the module is unresolvable, so a broken/missing install can never silently run this repo WITHOUT its safety rails. permissions.defaultMode=bypassPermissions matches the operator's standing config on every other repo \u2014 without it a fresh greenfield scaffold falls back to the user-level default (auto) and can't boot into bypass like the rest of the fleet (diagnosed 2026-08-02, exo).",
+  "$comment": "myAI kernel settings — dropped by `myai init` (greenfield) into a kernel-only repo's .claude/settings.json. Wires the PreToolUse SAFETY hooks (block-push-main, secret-scan, no-local-npm, protected-files) from the installed ai-management module, resolved at hook-exec time WITHOUT depending on PATH: $MYAI_ROOT, then `myai root` (with ~/.local/bin prepended), then the standard global prefixes. A PATH-only lookup made these hooks fail CLOSED intermittently — `myai` lives in ~/.local/bin, which a hook shell does not reliably inherit, so `myai root` returned empty and every Bash call was blocked until an identical retry happened to work (reported from api_management 2026-08-31). The unresolvable diagnostic goes to STDOUT, not stderr: a stderr-only message surfaced as \"No stderr output\" and hid the cause entirely. The hook BODIES live in the module, never a per-repo copy (plan S-INIT-5, ADR-016 §0.5). Each command FAILS LOUD (exit 2 = block the tool) if the module is unresolvable, so a broken/missing install can never silently run this repo WITHOUT its safety rails. permissions.defaultMode=bypassPermissions matches the operator's standing config on every other repo — without it a fresh greenfield scaffold falls back to the user-level default (auto) and can't boot into bypass like the rest of the fleet (diagnosed 2026-08-02, exo).",
   "permissions": {
     "defaultMode": "bypassPermissions"
   },
@@ -10,15 +10,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "_R=\"$(myai root 2>/dev/null)\"; if [ -z \"$_R\" ]; then echo 'myAI module unresolvable \u2014 safety hook (block-push-main) cannot run. Reinstall: npm i -g ai-management' >&2; exit 2; fi; exec bash \"$_R/hooks/pre-tool/01-block-push-main.sh\""
+            "command": "PATH=\"$HOME/.local/bin:$PATH\"; _R=\"${MYAI_ROOT:-}\"; [ -z \"$_R\" ] && _R=\"$(myai root 2>/dev/null)\"; [ -z \"$_R\" ] && { for _c in \"$HOME/.local/lib/node_modules/ai-management\" /usr/local/lib/node_modules/ai-management /opt/homebrew/lib/node_modules/ai-management; do [ -d \"$_c\" ] && { _R=\"$_c\"; break; }; done; }; if [ -z \"$_R\" ]; then echo \"BLOCKED: myAI module unresolvable - safety hook (block-push-main) cannot run. Reinstall: npm i -g ai-management  (checked \\$MYAI_ROOT, myai root, and the standard global prefixes)\"; exit 2; fi; exec bash \"$_R/hooks/pre-tool/01-block-push-main.sh\""
           },
           {
             "type": "command",
-            "command": "_R=\"$(myai root 2>/dev/null)\"; if [ -z \"$_R\" ]; then echo 'myAI module unresolvable \u2014 safety hook (secret-scan) cannot run. Reinstall: npm i -g ai-management' >&2; exit 2; fi; exec bash \"$_R/hooks/pre-tool/03-secret-scan.sh\""
+            "command": "PATH=\"$HOME/.local/bin:$PATH\"; _R=\"${MYAI_ROOT:-}\"; [ -z \"$_R\" ] && _R=\"$(myai root 2>/dev/null)\"; [ -z \"$_R\" ] && { for _c in \"$HOME/.local/lib/node_modules/ai-management\" /usr/local/lib/node_modules/ai-management /opt/homebrew/lib/node_modules/ai-management; do [ -d \"$_c\" ] && { _R=\"$_c\"; break; }; done; }; if [ -z \"$_R\" ]; then echo \"BLOCKED: myAI module unresolvable - safety hook (secret-scan) cannot run. Reinstall: npm i -g ai-management  (checked \\$MYAI_ROOT, myai root, and the standard global prefixes)\"; exit 2; fi; exec bash \"$_R/hooks/pre-tool/03-secret-scan.sh\""
           },
           {
             "type": "command",
-            "command": "_R=\"$(myai root 2>/dev/null)\"; if [ -z \"$_R\" ]; then echo 'myAI module unresolvable \u2014 safety hook (no-local-npm) cannot run. Reinstall: npm i -g ai-management' >&2; exit 2; fi; exec bash \"$_R/hooks/pre-tool/05-no-local-npm.sh\""
+            "command": "PATH=\"$HOME/.local/bin:$PATH\"; _R=\"${MYAI_ROOT:-}\"; [ -z \"$_R\" ] && _R=\"$(myai root 2>/dev/null)\"; [ -z \"$_R\" ] && { for _c in \"$HOME/.local/lib/node_modules/ai-management\" /usr/local/lib/node_modules/ai-management /opt/homebrew/lib/node_modules/ai-management; do [ -d \"$_c\" ] && { _R=\"$_c\"; break; }; done; }; if [ -z \"$_R\" ]; then echo \"BLOCKED: myAI module unresolvable - safety hook (no-local-npm) cannot run. Reinstall: npm i -g ai-management  (checked \\$MYAI_ROOT, myai root, and the standard global prefixes)\"; exit 2; fi; exec bash \"$_R/hooks/pre-tool/05-no-local-npm.sh\""
           }
         ]
       },
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "_R=\"$(myai root 2>/dev/null)\"; if [ -z \"$_R\" ]; then echo 'myAI module unresolvable \u2014 safety hook (protected-files) cannot run. Reinstall: npm i -g ai-management' >&2; exit 2; fi; exec bash \"$_R/hooks/pre-tool/04-protected-files.sh\""
+            "command": "PATH=\"$HOME/.local/bin:$PATH\"; _R=\"${MYAI_ROOT:-}\"; [ -z \"$_R\" ] && _R=\"$(myai root 2>/dev/null)\"; [ -z \"$_R\" ] && { for _c in \"$HOME/.local/lib/node_modules/ai-management\" /usr/local/lib/node_modules/ai-management /opt/homebrew/lib/node_modules/ai-management; do [ -d \"$_c\" ] && { _R=\"$_c\"; break; }; done; }; if [ -z \"$_R\" ]; then echo \"BLOCKED: myAI module unresolvable - safety hook (protected-files) cannot run. Reinstall: npm i -g ai-management  (checked \\$MYAI_ROOT, myai root, and the standard global prefixes)\"; exit 2; fi; exec bash \"$_R/hooks/pre-tool/04-protected-files.sh\""
           }
         ]
       },
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "c=$(jq -r '.tool_input.command // empty' 2>/dev/null); case \"$c\" in *bin/myai.cjs*|*\"myai \"*|\"myai\") printf '\\033[48;5;208;38;5;16m  myai \u25b8 %s  \\033[0m\\n' \"$c\";; esac; exit 0"
+            "command": "c=$(jq -r '.tool_input.command // empty' 2>/dev/null); case \"$c\" in *bin/myai.cjs*|*\"myai \"*|\"myai\") printf '\\033[48;5;208;38;5;16m  myai ▸ %s  \\033[0m\\n' \"$c\";; esac; exit 0"
           }
         ]
       },
@@ -45,7 +45,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "t=$(jq -r '.tool_name // empty' 2>/dev/null); case \"$t\" in mcp__myai__*) printf '\\033[48;5;208;38;5;16m  myai \u25b8 %s  \\033[0m\\n' \"${t#mcp__myai__}\";; esac; exit 0"
+            "command": "t=$(jq -r '.tool_name // empty' 2>/dev/null); case \"$t\" in mcp__myai__*) printf '\\033[48;5;208;38;5;16m  myai ▸ %s  \\033[0m\\n' \"${t#mcp__myai__}\";; esac; exit 0"
           }
         ]
       }

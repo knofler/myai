@@ -12,7 +12,7 @@
 
 import { connectDB, Task } from '@/lib/db';
 import { getActiveTenant, tenantFilter } from '@/lib/tenant';
-import { readRunnerHealth, getRunnerLiveness, getFleetMaintenanceStatus, type RunnerRepoHealth } from '@/lib/runner-health';
+import { readRunnerHealth, getRunnerLiveness, getFleetRunners, getFleetMaintenanceStatus, type RunnerRepoHealth, type FleetRunnerRow } from '@/lib/runner-health';
 import { timeAgo, fmtSydney } from '@/lib/format';
 import { Card, StatCard, EmptyState, THead } from '@/components/ui/card';
 import { Badge, TaskStatusBadge, RoutedBadge } from '@/components/ui/badge';
@@ -71,7 +71,7 @@ function MaintenanceBanner({ maintenance }: { maintenance: Awaited<ReturnType<ty
   return (
     <div className="bg-amber-950/40 border border-amber-500/50 rounded-xl p-5">
       <div className="flex items-start gap-3">
-        <span className="text-2xl leading-none">🚧</span>
+        <span className="text-2xl leading-none" aria-hidden="true">🚧</span>
         <div>
           <h2 className="text-base font-semibold text-amber-300">
             Fleet maintenance active — all runner claims paused
@@ -136,6 +136,62 @@ function RecentRoutingCard({ routedTasks }: { routedTasks: RoutedTaskRow[] }) {
   );
 }
 
+function RunnerStatusBadge({ online, busy }: { online: boolean; busy: boolean }) {
+  if (!online) return <Badge className="bg-red-500/15 text-red-300 border border-red-500/30">offline</Badge>;
+  if (busy) return <Badge className="bg-blue-500/15 text-blue-300 border border-blue-500/30">busy</Badge>;
+  return <Badge className="bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">online</Badge>;
+}
+
+/** Fleet panel (task-c0a03fcc): every registered runner in the shared pool —
+ *  name/host, online/busy, last job, last-seen — sourced from
+ *  lib/fleet-runners.ts's join of heartbeat + lease + lease-history. A
+ *  runner that stops heartbeating stays in the table (marked offline, sunk
+ *  to the bottom) rather than disappearing once its pulse lapses. */
+function FleetRunnersCard({ runners }: { runners: FleetRunnerRow[] }) {
+  return (
+    <Card title="Fleet — registered runners" meta={`${runners.length} machine(s) in the pool`}>
+      {runners.length === 0 ? (
+        <EmptyState>No runner has heartbeated, held a lease, or appeared in the runs log yet.</EmptyState>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="card-table w-full text-sm">
+            <THead
+              cols={[
+                { label: 'Runner' },
+                { label: 'Status' },
+                { label: 'Last job' },
+                { label: 'Last seen' },
+              ]}
+            />
+            <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
+              {runners.map((r) => (
+                <tr key={r.machine} className={`hover:bg-[rgb(var(--bg-hover))]/30 ${!r.online ? 'bg-red-950/10' : ''}`}>
+                  <td className="m-title px-4 py-2.5">
+                    <p className="text-[rgb(var(--text-primary))] font-mono text-xs">{r.machine}</p>
+                    {r.holder && <p className="text-zinc-600 text-[10px] font-mono mt-0.5">{r.holder}</p>}
+                  </td>
+                  <td data-label="Status" className="px-4 py-2.5">
+                    <RunnerStatusBadge online={r.online} busy={r.busy} />
+                  </td>
+                  <td data-label="Last job" className="px-4 py-2.5 text-[rgb(var(--text-secondary))] text-xs max-w-xs truncate" title={r.lastJobLabel ?? ''}>
+                    {r.lastJobLabel ?? <span className="text-zinc-600">—</span>}
+                  </td>
+                  <td data-label="Last seen" className="px-4 py-2.5 text-xs">
+                    <span className={r.online ? 'text-[rgb(var(--text-muted))]' : 'text-red-400 font-semibold'}>
+                      {r.lastHeartbeatAt ? timeAgo(r.lastHeartbeatAt) : 'never'}
+                    </span>
+                    {r.lastHeartbeatAt && <span className="text-zinc-600 ml-2">{fmtSydney(r.lastHeartbeatAt, 'time')}</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function timeAgoFromMinutes(minutes: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
@@ -145,14 +201,15 @@ function timeAgoFromMinutes(minutes: number): string {
 
 export default async function RunnerHealthView() {
   await connectDB();
-  const [health, depth, liveness, maintenance, routedTasks] = await Promise.all([
-    readRunnerHealth(), queueDepth(), getRunnerLiveness(), getFleetMaintenanceStatus(), recentRoutedTasks(),
+  const [health, depth, liveness, fleetRunners, maintenance, routedTasks] = await Promise.all([
+    readRunnerHealth(), queueDepth(), getRunnerLiveness(), getFleetRunners(), getFleetMaintenanceStatus(), recentRoutedTasks(),
   ]);
 
   if (!health || !health.available) {
     return (
       <div className="space-y-6">
         <MaintenanceBanner maintenance={maintenance} />
+        <FleetRunnersCard runners={fleetRunners} />
         <Card title="Runner Health">
           <EmptyState>
             No runner-health artifact yet. Generate it on the runner host with{' '}
@@ -177,7 +234,7 @@ export default async function RunnerHealthView() {
       {!liveness.alive && (
         <div className="bg-red-950/40 border border-red-600/50 rounded-xl p-5">
           <div className="flex items-start gap-3">
-            <span className="text-2xl leading-none">📡</span>
+            <span className="text-2xl leading-none" aria-hidden="true">📡</span>
             <div>
               <h2 className="text-base font-semibold text-red-300">
                 {liveness.machines.length === 0
@@ -200,7 +257,7 @@ export default async function RunnerHealthView() {
       {g.stall && (
         <div className="bg-red-950/40 border border-red-600/50 rounded-xl p-5">
           <div className="flex items-start gap-3">
-            <span className="text-2xl leading-none">🛑</span>
+            <span className="text-2xl leading-none" aria-hidden="true">🛑</span>
             <div>
               <h2 className="text-base font-semibold text-red-300">
                 Zero-work stall — {g.consecutiveZeroWork} consecutive fires shipped nothing
@@ -216,6 +273,9 @@ export default async function RunnerHealthView() {
           </div>
         </div>
       )}
+
+      {/* ── Fleet — registered runners (task-c0a03fcc) ──────────── */}
+      <FleetRunnersCard runners={fleetRunners} />
 
       {/* ── At-a-glance stats ───────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">

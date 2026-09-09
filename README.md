@@ -1518,7 +1518,7 @@ JSON-RPC 2.0 over HTTP. This is the endpoint other LLMs (Claude Code in any repo
 - `tools/call` — invoke a tool (params: `{name, arguments}`)
 - `ping` — keepalive
 
-**165 MCP tools** (representative subset below — see [`runtime/src/mcp/tools.ts`](runtime/src/mcp/tools.ts) for the full set incl. `memory_reindex`, `schedules_*` incl. `schedules_seed`, `budgets_*`, `agents_invoke`, `skills_invoke`, `morning_sweep`, `evening_sweep`, `dispatch_cycle`, `fleet_overview`, `standing_agents_status`, `notifications_*`, `health_alerts_*`):
+**168 MCP tools** (representative subset below — see [`runtime/src/mcp/tools.ts`](runtime/src/mcp/tools.ts) for the full set incl. `memory_reindex`, `schedules_*` incl. `schedules_seed`, `budgets_*`, `agents_invoke`, `skills_invoke`, `morning_sweep`, `evening_sweep`, `dispatch_cycle`, `fleet_overview`, `standing_agents_status`, `notifications_*`, `health_alerts_*`):
 
 | Category | Tool | Purpose |
 |----------|------|---------|
@@ -1889,7 +1889,7 @@ Every block ends with a `… N more — run "more <type>" to see all` hint.
 | `ai tools` | Show 5 of each category |
 | `more agents` | Dump all 62 agents grouped by category |
 | `more skills` | Dump all 136 skills |
-| `more mcp tools` or `more mcp` | Dump all 165 MCP tools with full input schemas |
+| `more mcp tools` or `more mcp` | Dump all 168 MCP tools with full input schemas |
 | `more routes` | Dump all HTTP + WS + MCP + dashboard routes (same as the Gateway Routes section above) |
 | `ai tools help` or `help ai tools` | Print this usage block |
 

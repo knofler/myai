@@ -22,10 +22,10 @@
  * Token budgets are expressed in chars at ~4 chars/token.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { brainRemoteUrl, brainSyncPull, isBrainRepo, myaiHome, resolveBrainDir, slugify } from './brain.js';
+import { brainRemoteUrl, brainSyncPull, brainSyncWarning, isBrainRepo, myaiHome, resolveBrainDir, slugify } from './brain.js';
 import type { BrainLogEntry } from './brain.js';
 import { recordDeltaDegrade } from './brain-health.js';
 import { SYSTEM_CONTEXT } from './tenant-context.js';
@@ -45,7 +45,7 @@ const BRIEF_ONELINE_CHARS = 280;
 const WORKING_CHARS = 8000;
 /** brainDelta default total budget — ~800 tokens (plan target 300–800). */
 const DELTA_BUDGET_CHARS = 3200;
-/** Per-atom cap inside a delta so one giant atom can't eat the whole budget. */
+/** Per-atom FLOOR inside a delta so one giant atom can't eat the whole budget — scaled up with `budget`, see brainDeltaCore. */
 const DELTA_ATOM_CHARS = 900;
 /**
  * Cap on the raw commits list in a delta — an unbounded `git log` over a
@@ -108,6 +108,13 @@ export interface Atom {
   file: string;
   /** UTC stamp prefix of the filename (sortable). */
   ts: string;
+  /**
+   * Frontmatter `kind:` — 'session' | 'handoff' | 'memory' from the Node
+   * writer, plus 'session-auto' for the shell stop hook's mechanical
+   * checkpoints (hooks/stop/05-brain-autoatom.sh). Inferred from the atom's
+   * directory when the frontmatter predates the field.
+   */
+  kind: string;
   slug: string;
   /** Body with the frontmatter stripped. */
   body: string;
@@ -170,12 +177,14 @@ function readAtoms(dir: string, relDir: string): Atom[] {
     .map((file) => {
       const raw = readFileSync(join(abs, file), 'utf8');
       const slugLine = raw.match(/^slug: (.+)$/m);
+      const kindLine = raw.match(/^kind: (.+)$/m);
       const topicLine = raw.match(/^topic: (.+)$/m);
       const supLine = raw.match(/^supersedes: (.+)$/m);
       const sha8 = file.match(/-([0-9a-f]{8})\.md$/)?.[1] ?? '';
       return {
         file,
         ts: file.slice(0, 16),
+        kind: kindLine ? kindLine[1].trim() : relDir.endsWith('/handoffs') ? 'handoff' : 'session',
         slug: slugLine ? slugLine[1].trim() : file.replace(/\.md$/, ''),
         body: stripFrontmatter(raw),
         // Atoms written before ADR-020 carry no topic → treated as 'general'.
@@ -259,8 +268,57 @@ export interface DistillResult {
  * NEVER a growing prose blob — the topic index is what makes "never blank"
  * cheap and keeps GOLD hard-capped (ADR-020).
  */
+/**
+ * The atom that headlines GOLD and SILVER — brief.md's current-status
+ * one-liner and working.md's `## Latest handoff`: the NEWEST live,
+ * hand-written atom across BOTH handoffs/ and sessions/, a handoff atom
+ * winning only a same-second tie.
+ *
+ * Why not `handoffs[0] ?? sessions[0]` (the rule this replaces): `wrap up`
+ * step 1e writes ONE kind=session atom as THE primary continuity record and
+ * no handoff atom, so whichever handoff atom happened to be written last
+ * headlined the brief forever, however many wraps followed. Observed
+ * 2026-09-09 on ai-management: three wraps later (PR #440/#441/#442) brief.md
+ * still opened with the 2026-09-07 PR #439 wrap, so every returning
+ * `agent mode -min` boot — where `brain_delta` says upToDate and the compiled
+ * brief IS the boot — reported a superseded ACTION block.
+ *
+ * `session-auto` atoms (the stop hook's zero-LLM checkpoints) never headline:
+ * they are mechanical tallies, not a handoff. Superseded atoms (ADR-020) are
+ * retired from candidacy exactly as they leave SILVER. Mirrored by
+ * `_brain_distill_ns` in scripts/lib/brain.sh — the two distillers MUST agree
+ * or the gateway merge path and the shell merge path compile different briefs.
+ */
+function headlineAtom(handoffs: Atom[], sessions: Atom[]): Atom | undefined {
+  const liveFiles = new Set(pruneSuperseded([...handoffs, ...sessions]).live.map((a) => a.file));
+  const rank = (a: Atom) => (a.kind === 'handoff' ? 0 : 1);
+  const candidates = [...handoffs, ...sessions]
+    .filter((a) => a.kind !== 'session-auto' && liveFiles.has(a.file))
+    // Plain comparison, not localeCompare: stamps are fixed-width ASCII
+    // (YYYYMMDDTHHMMSSZ) and the rest of this file orders filenames the same way.
+    .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0) || rank(a) - rank(b));
+  return candidates[0] ?? handoffs[0] ?? sessions[0];
+}
+
+/**
+ * The headline atom of a namespace as it stands on main — what brief.md /
+ * working.md lead with. Exposed so `brain_merge` can mirror the session's
+ * primary continuity record into the gateway handoff store (`handoff_read`):
+ * that store had gone dark on 2026-07-26 because `wrap up` writes the brain atom
+ * and never calls `handoff_write`. Returns undefined for an empty namespace.
+ */
+export function headlineFor(name: string, env: NodeJS.ProcessEnv = process.env): { file: string; slug: string; ts: string; body: string } | undefined {
+  const dir = requireBrain(env);
+  const ns = slugify(name);
+  if (!ns) return undefined;
+  return withMain(dir, () => {
+    const a = headlineAtom(readAtoms(dir, `repos/${ns}/handoffs`), readAtoms(dir, `repos/${ns}/sessions`));
+    return a ? { file: a.file, slug: a.slug, ts: a.ts, body: a.body } : undefined;
+  });
+}
+
 function renderBrief(ns: string, handoffs: Atom[], sessions: Atom[], liveOverride?: Atom[]): string {
-  const latest = handoffs[0] ?? sessions[0];
+  const latest = headlineAtom(handoffs, sessions);
   const lines = [
     `# ${ns} — boot brief`,
     '',
@@ -333,8 +391,9 @@ function renderWorking(ns: string, handoffs: Atom[], sessions: Atom[], liveOverr
     }
     parts.push('');
   }
-  if (handoffs[0]) {
-    parts.push('## Latest handoff', '', handoffs[0].body.trim(), '');
+  const latest = headlineAtom(handoffs, sessions);
+  if (latest) {
+    parts.push('## Latest handoff', '', latest.body.trim(), '');
   }
   const groups = groupByTopic(live.filter((a) => !a.pinned));
   for (const topic of topicsByRecency(groups)) {
@@ -589,6 +648,46 @@ export function brainMainSha(env: NodeJS.ProcessEnv = process.env): string | und
   return gitOk(dir, 'rev-parse', '--verify', '--quiet', 'main') ? git(dir, 'rev-parse', 'main') : undefined;
 }
 
+// ── per-repo delta anchor (BRAIN-2) ───────────────────────────────────────
+// `brain_merge` stamps the main SHA it just landed at here, per repo
+// namespace, the moment a session's atoms land on main. A later
+// `brain_delta({ repo })` call with no explicit `since` resolves it from
+// here instead of degrading to a full boot — this is the anchor an agent
+// used to have to grep out of its own last handoff's `Brain:` header.
+// Local to this machine's `myaiHome` (like the delta-degrade log) — never
+// committed to the brain repo itself.
+
+function lastAnchorPath(env: NodeJS.ProcessEnv): string {
+  return join(myaiHome(env), 'brain-last-anchor.json');
+}
+
+function readLastAnchors(env: NodeJS.ProcessEnv): Record<string, string> {
+  try {
+    const path = lastAnchorPath(env);
+    if (!existsSync(path)) return {};
+    return JSON.parse(readFileSync(path, 'utf8')) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+/** The brain main SHA `repo`'s own last `brain_merge` landed at, if any. */
+export function readLastAnchor(repo: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return readLastAnchors(env)[slugify(repo)];
+}
+
+/** Stamp `repo`'s delta anchor to `sha` (best-effort — must never break the merge it decorates). */
+export function writeLastAnchor(repo: string, sha: string, env: NodeJS.ProcessEnv = process.env): void {
+  try {
+    mkdirSync(myaiHome(env), { recursive: true });
+    const anchors = readLastAnchors(env);
+    anchors[slugify(repo)] = sha;
+    writeFileSync(lastAnchorPath(env), `${JSON.stringify(anchors, null, 2)}\n`, 'utf8');
+  } catch {
+    // best-effort bookkeeping — a write failure here must never fail brain_merge
+  }
+}
+
 /**
  * The compiled boot brief for a repo, read from brain MAIN (plain file via git
  * plumbing — works whatever branch is checked out). Returns undefined when the
@@ -818,6 +917,11 @@ export interface BrainManifestNamespace {
   hasWorking: boolean;
   sessions: number;
   handoffs: number;
+  /** BRAIN-2: the main SHA this repo's own last `brain_merge` landed at — the
+   * anchor a returning `agent mode -min` boot can hand `brain_delta({ repo })`
+   * as `since` with zero file reads (surfaced read-free via context_boot /
+   * the MCP-initialize bundle). Absent until this repo's first merge. */
+  lastAnchor?: string;
 }
 
 export interface BrainManifest {
@@ -873,6 +977,7 @@ export function brainManifest(env: NodeJS.ProcessEnv = process.env): BrainManife
         hasWorking: existsSync(join(reposDir, ns, 'working.md')),
         sessions: countMd(join(reposDir, ns, 'sessions')),
         handoffs: countMd(join(reposDir, ns, 'handoffs')),
+        lastAnchor: readLastAnchor(ns, env),
       }))
     : [];
 
@@ -941,24 +1046,32 @@ export interface BrainDeltaResult {
   cappedHard?: boolean;
   /** Approx token cost of the returned payload (~4 chars/token). */
   tokenEstimate: number;
+  /**
+   * Set when pull-on-boot could NOT catch local main up with origin/main
+   * (diverged or dirty, with commits genuinely behind) — this delta was
+   * computed from a stale `main` and may be missing sessions merged on other
+   * machines. Every return path of `brainDelta` carries this when it applies
+   * so a divergent clone can never silently serve a delta (task-1195b1a7).
+   */
+  syncWarning?: string;
 }
 
 /**
  * "What changed in the brain since <sha>?" — the ~300–800 token catch-up.
  * Scope with `repo` to one namespace (+ cross-repo memory/). Unknown or absent
- * `since` degrades to the blank-agent path: the ~150-token compiled brief.
+ * `since` degrades to the blank-agent path: the ~150-token compiled brief —
+ * UNLESS `repo` is scoped and that repo has a stored BRAIN-2 delta anchor
+ * (the SHA its own last `brain_merge` landed at), in which case that anchor
+ * is used automatically: a repo-scoped call needs no `since` at all.
  * Pass `topic` (the session's actual working topic, ADR-020 `BRAIN_TOPICS`
  * slug) to apply GOLD/SILVER/BRONZE tier-then-topic-match atom ordering
  * instead of plain chronological order — see `BrainDeltaResult.atoms`.
  */
-export function brainDelta(
-  opts: { since?: string; repo?: string; budget?: number; topic?: string } = {},
-  env: NodeJS.ProcessEnv = process.env,
+function brainDeltaCore(
+  opts: { since?: string; repo?: string; budget?: number; topic?: string },
+  env: NodeJS.ProcessEnv,
 ): BrainDeltaResult {
   const dir = requireBrain(env);
-  // Pull-on-boot: catch up main from origin before diffing (bounded fast-fail,
-  // non-fatal) — so a delta on this machine sees what another machine merged.
-  brainSyncPull(env);
   const sha = git(dir, 'rev-parse', 'main');
   const budget = opts.budget && opts.budget > 400 ? Math.floor(opts.budget) : DELTA_BUDGET_CHARS;
   const ns = opts.repo ? slugify(opts.repo) : undefined;
@@ -977,7 +1090,11 @@ export function brainDelta(
     return r;
   };
 
-  const since = opts.since?.trim();
+  // BRAIN-2: an explicit `since` always wins; omitted + `repo` scoped falls
+  // back to the anchor that repo's own last `brain_merge` stamped (see
+  // writeLastAnchor) — a caller no longer has to grep its own last handoff
+  // for the SHA. No stored anchor yet (this repo's first merge) → full boot.
+  const since = opts.since?.trim() || (ns ? readLastAnchor(ns, env) : undefined);
   if (!since) return fullBoot();
   if (!gitOk(dir, 'rev-parse', '--verify', '--quiet', `${since}^{commit}`)) return fullBoot();
   const resolved = git(dir, 'rev-parse', `${since}^{commit}`);
@@ -1060,6 +1177,14 @@ export function brainDelta(
       .map(({ c }) => c.path);
   }
 
+  // Per-atom cap. A flat DELTA_ATOM_CHARS chopped every wrap atom: `wrap up`
+  // step 1e's session atom is a ~300-token (~1200-char) narrative whose ACTION
+  // block sits at the END, so the 900-char slice returned the recap and dropped
+  // the one part a returning boot needs — and an explicit larger `budget` never
+  // lifted it (2026-09-09: budget 5000 and 20000 both returned the same
+  // 900-char cut with `truncated: true`). Scale the cap with the budget — half
+  // of it, so at least two atoms always fit — never below the historical floor.
+  const atomCap = Math.max(DELTA_ATOM_CHARS, Math.floor(budget / 2));
   const atoms: Array<{ path: string; content: string }> = [];
   let spent = 0;
   let truncated = false;
@@ -1069,7 +1194,7 @@ export function brainDelta(
       break;
     }
     const raw = rawByPath.get(path)!;
-    const content = tightenText(stripFrontmatter(raw), Math.min(DELTA_ATOM_CHARS, budget - spent));
+    const content = tightenText(stripFrontmatter(raw), Math.min(atomCap, budget - spent));
     if (content.endsWith('…')) truncated = true;
     atoms.push({ path, content });
     spent += content.length;
@@ -1139,6 +1264,32 @@ export function brainDelta(
     }
   }
 
+  return r;
+}
+
+/**
+ * "What changed in the brain since <sha>?" — the ~300–800 token catch-up.
+ * Scope with `repo` to one namespace (+ cross-repo memory/). Unknown or absent
+ * `since` degrades to the blank-agent path: the ~150-token compiled brief.
+ * Pass `topic` (the session's actual working topic, ADR-020 `BRAIN_TOPICS`
+ * slug) to apply GOLD/SILVER/BRONZE tier-then-topic-match atom ordering
+ * instead of plain chronological order — see `BrainDeltaResult.atoms`.
+ *
+ * Pull-on-boot runs first (bounded fast-fail, non-fatal) so a delta on this
+ * machine sees what another machine merged. When local main is diverged or
+ * dirty and genuinely behind origin, that pull is structurally a no-op (ff-only
+ * can't reconcile a divergent history) — `syncWarning` on the result carries
+ * that forward instead of letting a stale clone silently serve a delta that
+ * looks fresh (task-1195b1a7).
+ */
+export function brainDelta(
+  opts: { since?: string; repo?: string; budget?: number; topic?: string } = {},
+  env: NodeJS.ProcessEnv = process.env,
+): BrainDeltaResult {
+  const sync = brainSyncPull(env);
+  const r = brainDeltaCore(opts, env);
+  const warning = brainSyncWarning(sync);
+  if (warning) r.syncWarning = warning;
   return r;
 }
 

@@ -11,6 +11,8 @@ import { timeAgo, timeUntil, fmtSydney, fmtUsd } from '@/lib/format';
 import { PriorityBadge, ModelBadge, LevelDot, Badge } from '@/components/ui/badge';
 import { Card, EmptyState } from '@/components/ui/card';
 import { SydneyClock } from '@/components/sydney-clock';
+import { SavingsHero } from '@/components/savings-hero';
+import { getSavingsTrend, type SavingsTrend } from '@/lib/savings';
 import AutoRefresh from '@/components/auto-refresh';
 import { OnboardingChecklist } from '@/components/onboarding-checklist';
 import { CoachMarks } from '@/components/coach-marks';
@@ -133,6 +135,7 @@ export default async function MissionControl() {
   let todaySpend = 0;
   let taskTotal = 0;
   let doneCount = 0;
+  let savingsTrend: SavingsTrend | null = null;
 
   const startOfDayUTC = (() => {
     const now = new Date();
@@ -144,7 +147,7 @@ export default async function MissionControl() {
     dbOk = true;
     const tenantId = await getActiveTenant();
     const tf = tenantFilter(tenantId);
-    const [w, r, p, pt, nf, lr, fl, spend, tt, dc] = await Promise.all([
+    const [w, r, p, pt, nf, lr, fl, spend, tt, dc, st] = await Promise.all([
       Task.find({ ...tf, status: 'working' }).sort({ startedAt: 1 }).limit(7).lean() as unknown as Promise<TaskDoc[]>,
       Task.find({ ...tf, status: 'review' }).sort({ updatedAt: -1 }).limit(7).lean() as unknown as Promise<TaskDoc[]>,
       Task.find({ ...tf, status: 'pending' }).sort({ priority: 1, createdAt: 1 }).limit(7).lean() as unknown as Promise<TaskDoc[]>,
@@ -158,11 +161,13 @@ export default async function MissionControl() {
       ]) as Promise<Array<{ total: number }>>,
       Task.countDocuments({ ...tf }) as Promise<number>,
       Task.countDocuments({ ...tf, status: 'done' }) as Promise<number>,
+      getSavingsTrend(tf),
     ]);
     working = w; review = r; pending = p; pendingTotal = pt;
     nextFires = nf; lastRuns = lr; fleet = fl;
     todaySpend = spend[0]?.total ?? 0;
     taskTotal = tt; doneCount = dc;
+    savingsTrend = st;
   } catch {
     // Mongo down — render the shell with empty states.
   }
@@ -231,7 +236,10 @@ export default async function MissionControl() {
         <FirstRunQuickstart />
       ) : (
         <>
-      {/* ── The three questions ───────────────────────────────── */}
+      {/* ── Savings hero (the product's headline metric) ──────── */}
+      {savingsTrend && <SavingsHero trend={savingsTrend} />}
+
+      {/* ── The three questions (operate summary) ─────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card
           accent="blue"

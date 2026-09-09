@@ -760,6 +760,61 @@ function dueFilter(now: Date): Record<string, unknown> {
 }
 
 /**
+ * On-runner-fire stale-lease reclaim (task-98c28a7c).
+ *
+ * claimTask stamps `leaseUntil` "for stale-runner reclaim", but the atomic
+ * claim below only ever matches `status:'pending'` — so a task frozen in
+ * `working` past its lease (its runner died / was killed mid-task) was NEVER
+ * reclaimed by a claim, only by the separate `task_lease_reap` cron. That cron
+ * is seeded only when `SEED_SCHEDULES_ON_BOOT=1` (core/index.ts), so on a
+ * gateway without it nothing ever noticed an expired lease and a task could sit
+ * in `working` for days — the incident this fixes: 4 tasks orphaned 5–15 days
+ * (leases Aug 10–20), only unstuck by a manual flip.
+ *
+ * This closes the gap on the hot path: before every claim, release the
+ * caller's IN-SCOPE expired-lease `working` tasks back through the SAME
+ * `failTask` path the cron reaper (reapStaleLeases) uses, so
+ * retryCount/backoff/maxRetries→dead_letter semantics are identical to a
+ * genuine runner-reported failure. A queue-path fire releases the stale task
+ * to `pending` (picked up on a later fire once its retry backoff clears, or by
+ * any other runner); an explicit `--task-id` fire — which bypasses the backoff
+ * window, matching operator-retry semantics elsewhere in claimTaskImpl —
+ * reclaims it in the SAME fire.
+ *
+ * Scope mirrors the claim below EXACTLY (tenant, then taskId | repo, with
+ * ignoreRepos overriding repo) — never the cross-tenant sweep reapStaleLeases
+ * does — so it stays cheap on the per-fire claim path: a no-op empty find in
+ * the overwhelmingly common no-stale-work case, and a `--repo`/`--task-id` run
+ * never disturbs another repo's or tenant's in-flight work. One task's release
+ * failure is logged and never blocks the claim.
+ */
+async function reclaimStaleLeasesInScope(
+  tenantId: string,
+  input: ClaimTaskInput,
+  now: Date,
+  connection?: Connection,
+): Promise<void> {
+  const q: Record<string, unknown> = { status: 'working', leaseUntil: { $lte: now } };
+  if (input.taskId) q.taskId = input.taskId;
+  else if (input.repo) q.repo = input.repo;
+  if (input.ignoreRepos && input.ignoreRepos.length) q.repo = { $nin: input.ignoreRepos };
+
+  const stale = await scopedFind(TaskModel, tenantId, q, connection).exec() as unknown as ITask[];
+  for (const doc of stale) {
+    try {
+      await failTask(tenantId, {
+        taskId: doc.taskId,
+        error: `Lease expired at ${doc.leaseUntil?.toISOString() ?? 'unknown'} — runner ` +
+          `"${doc.claimedBy ?? 'unknown'}" never completed or died mid-task. ` +
+          `Reclaimed on runner fire before claim.`,
+      }, now, connection);
+    } catch (err) {
+      log.error({ err, taskId: doc.taskId, tenantId }, 'On-fire stale-lease reclaim failed');
+    }
+  }
+}
+
+/**
  * Atomically claim the highest-priority pending task (ADR-011 slice 2).
  *
  * A single `findOneAndUpdate({status:'pending', …}, {$set:{status:'working', …}})`
@@ -782,6 +837,22 @@ export async function claimTask(tenantId: string, input: ClaimTaskInput, connect
   const startMs = Date.now();
   const result = await claimTaskImpl(tenantId, input, connection);
   if (result) {
+    // Queue-wait span (created → claimed): for a "why was this task slow?"
+    // question this gap usually dwarfs every execution span, and without it
+    // the trace starts at claim time and silently hides the stall. On a retry
+    // re-claim this measures created→re-claim (total time to this attempt).
+    const createdMs = new Date(result.createdAt).getTime();
+    if (Number.isFinite(createdMs) && createdMs <= startMs) {
+      recordSpan({
+        traceKey: result.taskId,
+        name: 'gateway.queue_wait',
+        service: 'gateway',
+        startMs: createdMs,
+        endMs: startMs,
+        status: 'ok',
+        attributes: { taskId: result.taskId, repo: result.repo, priority: result.priority, retryCount: result.retryCount },
+      });
+    }
     recordSpan({
       traceKey: result.taskId,
       name: 'gateway.task_claim',
@@ -803,6 +874,17 @@ async function claimTaskImpl(tenantId: string, input: ClaimTaskInput, connection
   // work without killing any runner process.
   if (await isFleetPaused(tenantId)) return null;
   const now = new Date();
+
+  // On-fire stale-lease reclaim (task-98c28a7c) — BEFORE we try to claim,
+  // release this caller's expired-lease `working` tasks back to the queue so a
+  // dead runner's orphaned task self-heals without waiting on the (optionally
+  // unseeded) task_lease_reap cron. Runs after the fleet-pause check (a paused
+  // fleet has no side effects) and before the budget gate (releasing to pending
+  // consumes no budget, so a budget-blocked tenant's stuck lease is still
+  // freed). For an explicit --task-id fire the released task is reclaimed in
+  // this same call; for a queue fire it becomes claimable once its retry
+  // backoff clears. See reclaimStaleLeasesInScope.
+  await reclaimStaleLeasesInScope(tenantId, input, now, connection);
 
   // Runner budget-aware execution gate (task-7fed6488) — before claiming
   // anything for this tenant, check whether its $ / off-hours-minutes budget

@@ -25,6 +25,7 @@ import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
 import AutoRefresh from '@/components/auto-refresh';
 import Link from 'next/link';
+import { dbUnreachableHint } from '@/lib/db-hint';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,7 +76,7 @@ export default async function ActivationFunnelPage({
       <div className="max-w-7xl mx-auto">
         <PageHeader title="Activation funnel" subtitle="Signup → first ship, with per-stage drop-off and signup cohorts." />
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
-          Database not reachable — the funnel needs the gateway Mongo at :27200.
+          {dbUnreachableHint('the funnel')}
         </div>
       </div>
     );

@@ -17,19 +17,30 @@
 #            headers["x-gateway-local-token"] = os.environ["GW_TOKEN"]
 #
 # The token must MATCH the gateway's GATEWAY_LOCAL_TOKEN (docker-compose.yml /.env).
-# Resolution order: existing env → repo .env (GATEWAY_LOCAL_TOKEN=) → compose default.
+# Resolution order: existing env → $MYAI_ENV_FILE → repo .env (GATEWAY_LOCAL_TOKEN=)
+#                 → ~/.myai/.env (kernel-only repos) → compose default.
 # For a hosted deployment, set a strong GATEWAY_LOCAL_TOKEN in .env on BOTH the
 # gateway and wherever these scripts run.
 
 _gw_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
 if [ -z "${GATEWAY_LOCAL_TOKEN:-}" ]; then
-  # lib lives at <root>/scripts/lib/ (master) or <root>/AI/scripts/lib/ (managed);
-  # ../../.env is the repo/AI .env in both layouts.
-  _gw_envf="$_gw_lib_dir/../../.env"
-  if [ -f "$_gw_envf" ]; then
+  # Candidate .env files, most specific first:
+  #   $MYAI_ENV_FILE     explicit override (CI, tests, unusual layouts).
+  #   <lib>/../../.env   the repo/AI .env - lib lives at <root>/scripts/lib/
+  #                      (master) or <root>/AI/scripts/lib/ (managed).
+  #   ~/.myai/.env       machine-local store. REQUIRED for a KERNEL-ONLY repo (no
+  #                      per-repo AI/ copy), whose lib resolves inside the
+  #                      globally-installed module: there ../../.env is
+  #                      <npm root>/ai-management/.env, which never exists. Without
+  #                      this candidate, resolution fell through to the dev
+  #                      placeholder below, the gateway 401'd the MCP handshake, and
+  #                      every myai tool silently vanished from the session - the
+  #                      exact failure seen in the DXP repo on 2026-08-31.
+  for _gw_envf in "${MYAI_ENV_FILE:-}" "$_gw_lib_dir/../../.env" "$HOME/.myai/.env"; do
+    [ -n "$_gw_envf" ] && [ -f "$_gw_envf" ] || continue
     _gw_t="$(grep -E '^GATEWAY_LOCAL_TOKEN=' "$_gw_envf" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'\''' | xargs 2>/dev/null)"
-    [ -n "$_gw_t" ] && GATEWAY_LOCAL_TOKEN="$_gw_t"
-  fi
+    if [ -n "$_gw_t" ]; then GATEWAY_LOCAL_TOKEN="$_gw_t"; break; fi
+  done
 fi
 GATEWAY_LOCAL_TOKEN="${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}"
 export GATEWAY_LOCAL_TOKEN
@@ -86,4 +97,59 @@ gw_warn_auth_fail() {
     echo "  until the token is fixed. See scripts/lib/gateway.sh."
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
   } >&2
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# Runner-backlog cursor helpers (task-e9163eb9): the cross-machine "how many
+# config/runner_backlog.jsonl lines are consumed" counter, backed by the
+# gateway's backlog_cursor_get/backlog_cursor_set MCP tools (one Mongo doc
+# per tenant, tasks/runner-backlog-cursor-store.ts). Replaces reading/writing
+# a gitignored, machine-local config/.runner_backlog.cursor file, which read
+# CONSUMED=0 on any fresh checkout/worktree regardless of the real consumption
+# state on whichever machine actually drives the runner — the false
+# "985 remaining" a diagnostic run from an isolated worktree would otherwise
+# see. Callers (queue_topup.sh, hooks/session/17-schedule-status.sh) must
+# treat an empty/failing get as "could not determine" and skip whatever
+# decision depends on it, never silently substitute 0.
+# ─────────────────────────────────────────────────────────────────────────
+
+# gw_backlog_cursor_get [timeout-seconds] → echoes the consumed count
+# (integer) on success; prints nothing and returns 1 on any failure
+# (gateway down, auth fail, malformed response).
+gw_backlog_cursor_get() {
+  local raw
+  raw=$(curl -sf -m "${1:-8}" -X POST http://localhost:3100/mcp \
+    -H 'content-type: application/json' \
+    -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
+    -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"backlog_cursor_get","arguments":{}},"id":1}' 2>/dev/null)
+  [ -z "$raw" ] && return 1
+  printf '%s' "$raw" | /usr/bin/python3 -c 'import sys, json
+try:
+    t = json.load(sys.stdin)["result"]["content"][0]["text"]
+    d = json.loads(t)
+    if "consumed" not in d:
+        raise KeyError("consumed")
+    print(int(d["consumed"]))
+except Exception:
+    sys.exit(1)
+' 2>/dev/null
+}
+
+# gw_backlog_cursor_set <consumed> [timeout-seconds] → best-effort set;
+# returns 0 iff the gateway confirmed the write, 1 on any failure.
+gw_backlog_cursor_set() {
+  local consumed="$1" raw
+  raw=$(curl -sf -m "${2:-8}" -X POST http://localhost:3100/mcp \
+    -H 'content-type: application/json' \
+    -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
+    -d "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"backlog_cursor_set\",\"arguments\":{\"consumed\":${consumed}}},\"id\":1}" 2>/dev/null)
+  [ -z "$raw" ] && return 1
+  printf '%s' "$raw" | /usr/bin/python3 -c 'import sys, json
+try:
+    t = json.load(sys.stdin)["result"]["content"][0]["text"]
+    d = json.loads(t)
+    sys.exit(0 if "consumed" in d else 1)
+except Exception:
+    sys.exit(1)
+' 2>/dev/null
 }

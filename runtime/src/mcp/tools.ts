@@ -1,4 +1,5 @@
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { resolve } from 'node:path';
 import { getConfig } from '../shared/config.js';
 import { searchVectors, storeVector, getVectorCount, recallSession } from '../memory/vector-store.js';
@@ -15,6 +16,7 @@ import { recordJobHistory, searchJobHistory, JOB_HISTORY_STATUSES } from '../tas
 import type { JobHistoryStatus } from '../shared/db.js';
 import { runInlineCycle, inlineQuotaUsage, INLINE_OPERATIONS } from '../tasks/inline-executor.js';
 import { acquireLease, heartbeatLease, releaseLease, listLeases, listLeaseHistory } from '../tasks/runner-lease-store.js';
+import { getBacklogCursor, setBacklogCursor } from '../tasks/runner-backlog-cursor-store.js';
 import { recordHeartbeat, getRunnerLiveness } from '../tasks/runner-heartbeat-store.js';
 import { enterFleetMaintenance, exitFleetMaintenance, getFleetMaintenanceStatus } from '../tasks/fleet-maintenance-store.js';
 import { listRepoPaths, listReposUnified, getRepoStatus, prioritizeRepos, scanDirectory } from '../repos/repo-registry.js';
@@ -25,6 +27,7 @@ import {
 } from '../repos/code-graph.js';
 import type { PrTriageInput, EdgeType } from '../repos/code-graph.js';
 import { getBanditStats } from '../repos/bandit-stats.js';
+import { getRouterTrainReadiness } from '../repos/router-train-readiness.js';
 import { upsertRepoCard, listRepoCards } from '../repos/app-card-store.js';
 import type { RepoCardLevel } from '../repos/app-card-store.js';
 import { createNewApp } from '../repos/new-app.js';
@@ -47,7 +50,7 @@ import {
   startFleetRun, updateFleetRepo, finishFleetRun, getFleetRun, latestFleetRun, listFleetRuns,
 } from '../repos/fleet-run-store.js';
 import type { FleetRepoInput, FleetRepoPatch, FleetRepoActionStatus } from '../repos/fleet-run-store.js';
-import { complete as llmComplete, isConfigured as isLlmConfigured, getAllProviderHealth, getProviderHealth, resetProvider, enterMaintenance, exitMaintenance, assertKnownProvider, getRecentDroppedHops } from '../llm/provider.js';
+import { complete as llmComplete, isConfigured as isLlmConfigured, getAllProviderHealth, getProviderHealth, resetProvider, enterMaintenance, exitMaintenance, assertKnownProvider, getRecentDroppedHops, getRecentRoutingDecisions } from '../llm/provider.js';
 import {
   createSchedule,
   updateSchedule,
@@ -102,7 +105,7 @@ import {
   ideaBranch, isBrainRepo, observeAppend, pinAtom, resolveBrainDir, sessionMerge, sessionStart, unpinAtom, writeAtom,
 } from '../core/brain.js';
 import type { AtomKind, BrainSection } from '../core/brain.js';
-import { brainDelta, brainEnvFor, brainLookup, brainManifest, distillAfterMergeWithDedup, reconcileMain } from '../core/distill.js';
+import { brainDelta, brainEnvFor, brainLookup, brainMainSha, brainManifest, distillAfterMergeWithDedup, headlineFor, reconcileMain, writeLastAnchor } from '../core/distill.js';
 import { computeBrainHealth } from '../core/brain-health.js';
 import { recordRecallEvent } from '../core/recall-telemetry.js';
 import { computeRecallAnalytics } from '../core/recall-analytics.js';
@@ -623,6 +626,23 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       },
     },
   },
+  // ── RUNNER BACKLOG CURSOR (task-e9163eb9 — cross-machine backlog well) ──
+  {
+    name: 'backlog_cursor_get',
+    description: 'Read the cross-machine runner-backlog well cursor: how many config/runner_backlog.jsonl lines have been consumed (popped) so far. Replaces the gitignored, machine-local config/.runner_backlog.cursor file so scripts/queue_topup.sh --report and its low-backlog check agree regardless of which machine or worktree runs them. One counter per tenant; returns 0 when never set.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'backlog_cursor_set',
+    description: 'Set the cross-machine runner-backlog well cursor (consumed count) — task-e9163eb9. Called by scripts/queue_topup.sh after popping backlog items or after its self-heal recomputes a corrected consumed count.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        consumed: { type: 'number', description: 'New consumed count (non-negative integer)' },
+      },
+      required: ['consumed'],
+    },
+  },
   // ── REPOS ─────────────────────────────────────────────
   {
     name: 'repos_list',
@@ -901,7 +921,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'continuity_stats',
-    description: 'The cold-start tokens-saved meter. Every context_boot bundle, brain_delta catch-up, and memory_context block the gateway serves is metered (estimated tokens = the re-teaching cost the operator avoided); this tool returns the tenant-scoped rollup: month-to-date and all-time boots + tokens saved, split by serving tool, plus `coldStart` — the today-vs-brain comparison (avg tokens per session start on the brain path vs the measured legacy file-read baseline). Surfaced on the dashboard /analytics page and in `myai status` — the headline continuity number ("myAI saved N tokens this month").',
+    description: 'The cold-start tokens-saved meter. Every context_boot bundle, brain_delta catch-up, and memory_context block the gateway serves is metered (estimated tokens = the re-teaching cost the operator avoided, plus the real wall-clock ms taken to assemble it); this tool returns the tenant-scoped rollup: month-to-date and all-time boots + tokens saved, split by serving tool, plus `coldStart` — the today-vs-brain comparison (avg tokens per session start on the brain path vs the measured legacy file-read baseline) — and `timeToContext` — the SAME comparison in wall-clock ms (measured brain-path assembly time vs. the legacy baseline tokens converted to an estimated skim-reading time). Surfaced on the dashboard /analytics page and in `myai status` — the headline continuity number ("myAI saved N tokens this month").',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1498,7 +1518,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'provider_health',
-    description: 'Get detailed resilience health for LLM providers. Shows per-provider circuit breaker state (closed/open/half-open), failure/success counts, rate limiter token availability, total acquired/rejected tokens, and failover-chain data (inter-hop backoff config, hops attempted/succeeded-as-fallback, hops dropped for retry-budget/cost-budget). The "all providers" response (no `provider` filter) also includes the chain-wide configured retry budget (`retryBudget.maxHops`) and the most recent dropped fallback hops (`recentDroppedHops`). Optionally filter to a single provider.',
+    description: 'Get detailed resilience health for LLM providers. Shows per-provider circuit breaker state (closed/open/half-open), failure/success counts, rate limiter token availability, total acquired/rejected tokens, and failover-chain data (inter-hop backoff config, hops attempted/succeeded-as-fallback, hops dropped for retry-budget/cost-budget). The "all providers" response (no `provider` filter) also includes the chain-wide configured retry budget (`retryBudget.maxHops`), the most recent dropped fallback hops (`recentDroppedHops`), and the live tier-router decision feed (`recentRoutingDecisions` — provider/model/reason for recent real LLM calls, newest first). Optionally filter to a single provider.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1728,12 +1748,17 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'brain_manifest',
-    description: 'Control-plane boot manifest (BRAIN B2): "know where what is without reading it." A tiny table-of-contents over the stores the 3-plane router dispatches against (brain-git, repo-sqlite-index, atlas-vectors — each with its fetch tools), this brain\'s namespaces (name + hasBrief/hasWorking + atom counts, NO bodies), the cross-repo memory atom count, and `freshnessSha` (the brain main HEAD SHA to anchor a later brain_delta({since})). Extends ADR-020\'s tiered topic index one level up — which store/namespace to descend into, not which topic within one. Cheap by construction: directory listings + git rev-parse only, never an atom read.',
+    description: 'Control-plane boot manifest (BRAIN B2): "know where what is without reading it." A tiny table-of-contents over the stores the 3-plane router dispatches against (brain-git, repo-sqlite-index, atlas-vectors — each with its fetch tools), this brain\'s namespaces (name + hasBrief/hasWorking + atom counts + `lastAnchor`, NO bodies), the cross-repo memory atom count, and `freshnessSha` (the brain main HEAD SHA to anchor a later brain_delta({since})). BRAIN-2: each namespace\'s `lastAnchor` is the SHA that repo\'s own last `brain_merge` landed at — pass it (or omit `since` entirely, since `brain_delta({repo})` now defaults to it) for that repo\'s zero-file-read returning-boot catch-up. Extends ADR-020\'s tiered topic index one level up — which store/namespace to descend into, not which topic within one. Cheap by construction: directory listings + git rev-parse only, never an atom read.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'brain_bandit_stats',
     description: 'Read-only snapshot of the BRAIN B-7 retrieval_bandit\'s current state (bandit_arms table): per query context, which retrieval config (k, rerank on/off) the bandit currently favors (argmax-exploit pick), the per-arm pull counts and mean reward backing that pick, and total pulls. Shells out to `retrieval_bandit.py --summary` against this repo\'s index DB — never mutates bandit_arms, unlike the offline replay_tune() pass. `available:false` when the repo has never been indexed (no state/.repo_index.sqlite3 yet) or the bandit has no recorded pulls.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'brain_router_train_readiness',
+    description: 'Router-training readiness (BRAIN B-7.1): labeled route-prediction traces banked (live route_eval rows with a resolved top-1 + the one-time harvested spike file) vs the 500-trace LoRA training floor, plus the trailing ingestion rate and ETA to that floor. Shells out to `brain_router_train_ready.py --json` against this repo\'s index DB — a readiness CHECK only: never trains, never writes (training stays gated/manual in train_router_lora.py). `available:false` when the repo has never been indexed (no state/.repo_index.sqlite3 yet).',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -1858,7 +1883,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'brain_merge',
-    description: 'Merge a session or idea branch into main (--no-ff) — what wrap-up calls. Session branches are deleted after the merge; idea branches survive (long-lived). Defaults to the CURRENT branch. Conflicts abort cleanly and leave the branch unmerged.',
+    description: 'Merge a session or idea branch into main (--no-ff) — what wrap-up calls. Session branches are deleted after the merge; idea branches survive (long-lived). Defaults to the CURRENT branch. Conflicts abort cleanly and leave the branch unmerged. BRAIN-2: also stamps the resulting main SHA as the delta anchor (`lastAnchor`) for every repo namespace this merge touched — surfaced in `brain_manifest`/`context_boot` and used automatically by a later `brain_delta({ repo })` call that omits `since`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1893,13 +1918,13 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'brain_delta',
-    description: 'Diff-only catch-up: "what changed in the brain since <sha>?" Pass the last-seen brain main SHA (`since`, remembered from a previous boot/delta) to get ONLY the delta — new atoms (content, capped), commits, and which compiled artifacts changed — a ~300-800 token payload instead of a full re-boot. No/unknown `since` degrades to the blank-agent path: the compiled ~150-token boot brief. Remember the returned `sha` as the next anchor. Scope with `repo` to one namespace (+ cross-repo memory/). Pass `topic` (the session\'s actual working topic, an ADR-020 `BRAIN_TOPICS` slug) to rank returned atoms GOLD/SILVER/BRONZE-then-topic-match before falling back to recency — so an atom on an unrelated topic can\'t crowd a same-topic atom out of the budget.',
+    description: 'Diff-only catch-up: "what changed in the brain since <sha>?" Pass the last-seen brain main SHA (`since`, remembered from a previous boot/delta) to get ONLY the delta — new atoms (content, capped), commits, and which compiled artifacts changed — a ~300-800 token payload instead of a full re-boot. BRAIN-2: `since` is optional when `repo` is scoped — omit it and the gateway resolves it itself from `lastAnchor`, the SHA that repo\'s own last `brain_merge` landed at (also readable up front via `brain_manifest`/`context_boot`), so a returning boot needs zero file reads and zero client-side SHA bookkeeping. No `since` and no stored anchor (this repo\'s first merge) degrades to the blank-agent path: the compiled ~150-token boot brief. Remember the returned `sha` as the next anchor if you want to pass it explicitly next time. Scope with `repo` to one namespace (+ cross-repo memory/). Pass `topic` (the session\'s actual working topic, an ADR-020 `BRAIN_TOPICS` slug) to rank returned atoms GOLD/SILVER/BRONZE-then-topic-match before falling back to recency — so an atom on an unrelated topic can\'t crowd a same-topic atom out of the budget.',
     inputSchema: {
       type: 'object',
       properties: {
-        since: { type: 'string', description: 'Last-seen brain main SHA (omit for the blank-agent brief path)' },
-        repo: { type: 'string', description: 'Scope to one repo namespace + cross-repo memory/ (optional)' },
-        budget: { type: 'number', description: 'Char budget for atom contents (default 3200 ≈ 800 tokens)' },
+        since: { type: 'string', description: 'Last-seen brain main SHA (optional when `repo` is set — defaults to that repo\'s stored lastAnchor; omit both for the blank-agent brief path)' },
+        repo: { type: 'string', description: 'Scope to one repo namespace + cross-repo memory/ (optional) — also gates the since-omitted lastAnchor default' },
+        budget: { type: 'number', description: 'Char budget for atom contents (default 3200 ≈ 800 tokens). The per-atom cap scales with it — max(900, budget/2) — so a larger budget returns a long wrap atom (and its trailing ACTION block) whole instead of a 900-char head.' },
         topic: { type: 'string', description: 'Session\'s current working topic (ADR-020 slug) — prioritizes topic-matched atoms in the returned order (optional)' },
       },
     },
@@ -2318,6 +2343,8 @@ async function dispatchTool(
     case 'runner_lease_history': return handleRunnerLeaseHistory(tenantId, args);
     case 'runner_heartbeat': return handleRunnerHeartbeat(tenantId, args);
     case 'runner_liveness': return handleRunnerLiveness(tenantId, args);
+    case 'backlog_cursor_get': return handleBacklogCursorGet(tenantId);
+    case 'backlog_cursor_set': return handleBacklogCursorSet(tenantId, args);
     case 'repos_list': return handleReposList(tenantId);
     case 'repos_status': return handleReposStatus(args);
     case 'repos_priority': return handleReposPriority(tenantId);
@@ -2415,6 +2442,7 @@ async function dispatchTool(
     case 'brain_recall_analytics': return handleBrainRecallAnalytics(tenantId, args);
     case 'brain_manifest': return handleBrainManifest(tenantId);
     case 'brain_bandit_stats': return getBanditStats();
+    case 'brain_router_train_readiness': return getRouterTrainReadiness();
     case 'brain_explore': return handleBrainExplore(tenantId, args);
     case 'brain_commit': return handleBrainCommit(tenantId, args);
     case 'brain_observe': return handleBrainObserve(tenantId, args);
@@ -2517,6 +2545,7 @@ async function handleMemoryContext(tenantId: string, args: Record<string, unknow
   if (!repo || typeof repo !== 'string') return { error: 'repo is required' };
   const query = (args.query as string) || `current state of ${repo}`;
   const limit = (args.limit as number) || 5;
+  const contextStartedAt = Date.now();
 
   const [stateChunks, handoffChunks, patterns] = await Promise.all([
     searchVectors(tenantId, { query, repo, source: 'state', limit }),
@@ -2544,7 +2573,13 @@ async function handleMemoryContext(tenantId: string, args: Record<string, unknow
   const tokenEstimate = Math.ceil(text.length / 4);
   // Continuity meter: tokens served here are cold-start tokens the operator
   // did not re-teach by hand. Fire-and-forget — never fails the call.
-  void recordContextServed(tenantId, { repo, tool: 'memory_context', tokens: tokenEstimate, userId: args.userId as string | undefined });
+  void recordContextServed(tenantId, {
+    repo,
+    tool: 'memory_context',
+    tokens: tokenEstimate,
+    durationMs: Date.now() - contextStartedAt,
+    userId: args.userId as string | undefined,
+  });
   return {
     repo,
     query,
@@ -3061,6 +3096,20 @@ async function handleRunnerLiveness(tenantId: string, args: Record<string, unkno
   return getRunnerLiveness(tenantId, { thresholdMinutes: args.thresholdMinutes as number | undefined });
 }
 
+// ── RUNNER BACKLOG CURSOR handlers (task-e9163eb9) ─────────
+
+async function handleBacklogCursorGet(tenantId: string) {
+  return { consumed: await getBacklogCursor(tenantId) };
+}
+
+async function handleBacklogCursorSet(tenantId: string, args: Record<string, unknown>) {
+  const consumed = args.consumed;
+  if (typeof consumed !== 'number' || !Number.isFinite(consumed) || consumed < 0) {
+    return { error: 'consumed is required (non-negative number)' };
+  }
+  return { consumed: await setBacklogCursor(tenantId, Math.floor(consumed)) };
+}
+
 // ── REPO handlers ─────────────────────────────────────────
 
 async function handleReposList(tenantId: string) {
@@ -3199,6 +3248,7 @@ async function handleSessionRecall(tenantId: string, args: Record<string, unknow
 }
 
 async function handleContextBoot(tenantId: string, args: Record<string, unknown>) {
+  const bootStartedAt = Date.now();
   const bundle = await buildBootBundle(tenantId, {
     repo: args.repo as string | undefined,
     query: args.query as string | undefined,
@@ -3209,11 +3259,14 @@ async function handleContextBoot(tenantId: string, args: Record<string, unknown>
   // Continuity meter: every boot bundle served is a cold start the agent did
   // not pay for by re-reading state files. Fire-and-forget. The baseline stamp
   // is the measured legacy file-read cost — the today-vs-brain comparator.
+  // durationMs is the real wall-clock assembly time — the time-to-context
+  // comparator's "brain" side.
   void recordContextServed(tenantId, {
     repo: bundle.parts.activeProject,
     tool: 'context_boot',
     tokens: bundle.tokenEstimate,
     baselineTokens: estimateLegacyBootTokens(),
+    durationMs: Date.now() - bootStartedAt,
     userId: args.userId as string | undefined,
   });
   // Activation funnel: first boot bundle = the tenant reached "first brain boot".
@@ -4353,12 +4406,14 @@ function handleProviderHealth(args: Record<string, unknown>) {
   if (provider) {
     return getProviderHealth(provider);
   }
-  // retryBudget/recentDroppedHops (plan §4a remainder) are chain-wide, not
-  // per-provider, so only surfaced on the "all providers" response.
+  // retryBudget/recentDroppedHops (plan §4a remainder) and the live routing-
+  // decision feed (plan L5 capacity view) are chain-wide, not per-provider,
+  // so only surfaced on the "all providers" response.
   return {
     providers: getAllProviderHealth(),
     retryBudget: { maxHops: getConfig().llm.maxFailoverHops ?? null },
     recentDroppedHops: getRecentDroppedHops(),
+    recentRoutingDecisions: getRecentRoutingDecisions(),
   };
 }
 
@@ -4874,6 +4929,39 @@ async function handleBrainMerge(tenantId: string, args: Record<string, unknown>)
   // re-distilling from the union atom set (task-da19637c). Bounded + non-fatal;
   // offline stays first-class (BRAIN_OFFLINE.md).
   const sync = reconcileMain(env);
+  // BRAIN-2: stamp the delta anchor for every repo this merge touched to the
+  // sha main is actually AT now (post-reconcile, so a concurrent-device heal
+  // is reflected too) — the next `brain_delta({ repo })` for that repo can
+  // resolve `since` server-side with zero file reads instead of a client
+  // grepping its own last handoff for the `Brain:` SHA.
+  const anchorSha = brainMainSha(env);
+  if (anchorSha) {
+    for (const d of distilled) writeLastAnchor(d.namespace, anchorSha, env);
+  }
+  // Mirror each touched namespace's headline atom into the gateway handoff store
+  // (`handoff_read`). The brain atom is the PRIMARY continuity record and `wrap
+  // up` never called `handoff_write`, so that store had gone dark on 2026-07-26
+  // while every reader (dashboard handoff card, context_boot's Mongo fallback,
+  // `handoff_read`) kept serving a July entry as "latest". Best-effort: a DB-less
+  // gateway returns null, and a store error must never fail the merge.
+  for (const d of distilled) {
+    try {
+      const h = headlineFor(d.namespace, env);
+      if (!h) continue;
+      const firstLine = h.body.split('\n').find((l) => l.trim()) ?? '';
+      void writeHandoff(tenantId, {
+        repo: d.namespace,
+        content: h.body,
+        summary: firstLine.replace(/\s+/g, ' ').trim().slice(0, 240),
+        author: 'brain_merge',
+        branch: merged,
+        machine: hostname(),
+        metadata: { atom: h.file, brainSha: anchorSha },
+      }).catch((err) => log.warn({ err, namespace: d.namespace }, 'brain_merge: handoff-store mirror failed — continuing'));
+    } catch (err) {
+      log.warn({ err, namespace: d.namespace }, 'brain_merge: handoff-store mirror skipped — continuing');
+    }
+  }
   // Activation funnel: the wrap-up merge is the continuity "aha" — a session was
   // folded into the brain, closing the loop the product sells. First one stamps
   // the terminal activation milestone. Idempotent, fire-and-forget.
@@ -5127,6 +5215,7 @@ function handleBrainSeedStatus(tenantId: string) {
 }
 
 function handleBrainDelta(tenantId: string, args: Record<string, unknown>) {
+  const deltaStartedAt = Date.now();
   const result = brainDelta({
     since: args.since as string | undefined,
     repo: args.repo as string | undefined,
@@ -5134,12 +5223,14 @@ function handleBrainDelta(tenantId: string, args: Record<string, unknown>) {
     topic: args.topic as string | undefined,
   }, brainEnvFor(tenantId));
   // Continuity meter: a delta catch-up replaces a full legacy session-start
-  // re-read, same as context_boot. Fire-and-forget.
+  // re-read, same as context_boot. Fire-and-forget. durationMs is the real
+  // wall-clock assembly time — the time-to-context comparator's "brain" side.
   void recordContextServed(tenantId, {
     repo: args.repo as string | undefined,
     tool: 'brain_delta',
     tokens: result.tokenEstimate,
     baselineTokens: estimateLegacyBootTokens(),
+    durationMs: Date.now() - deltaStartedAt,
     userId: args.userId as string | undefined,
   });
   // Activation funnel: first delta catch-up = the tenant reached "first brain

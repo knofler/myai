@@ -35,9 +35,19 @@ set +e
 command -v jq >/dev/null 2>&1 || exit 0
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-[ -n "$HOOK_DIR" ] || exit 0
+if [ -z "$HOOK_DIR" ]; then
+    # Real precondition failure — the hook can't resolve its own directory
+    # from $0/BASH_SOURCE. Same class of bug as the pre-fix
+    # hooks/session/18-machine-selfheal.sh (2026-08-27 incident). Warn
+    # instead of vanishing silently.
+    echo "05-brain-autoatom: cannot resolve own directory from \$0 ($0) — session-end brain atom skipped" >&2
+    exit 0
+fi
 ROOT="$(cd "$HOOK_DIR/../.." 2>/dev/null && pwd)"
-[ -n "$ROOT" ] || exit 0
+if [ -z "$ROOT" ]; then
+    echo "05-brain-autoatom: cannot resolve repo root from $HOOK_DIR — session-end brain atom skipped" >&2
+    exit 0
+fi
 LIB="$ROOT/scripts/lib/brain.sh"
 [ -f "$LIB" ] || exit 0
 # shellcheck source=../../scripts/lib/brain.sh
@@ -49,7 +59,9 @@ if [ -n "$INPUT" ] && printf '%s' "$INPUT" | jq -e . >/dev/null 2>&1; then
   SESSION="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
 fi
 
-REPO="$(basename "$ROOT" 2>/dev/null)"
+# brain_repo_name, NOT basename: $ROOT is the worktree when the runner is
+# driving, and a per-task basename mints a throwaway namespace every run.
+REPO="$(brain_repo_name "$ROOT" 2>/dev/null)"
 [ -n "$REPO" ] || REPO="unknown-repo"
 
 BDIR="$(brain_dir 2>/dev/null)"

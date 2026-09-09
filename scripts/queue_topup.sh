@@ -28,7 +28,11 @@ set +e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKLOG="$ROOT/config/runner_backlog.jsonl"
-CURSOR="$ROOT/config/.runner_backlog.cursor"   # gitignored — machine-local consumed count
+# CONSUMED lives in the gateway (backlog_cursor_get/set, task-e9163eb9), NOT a
+# local file — a gitignored config/.runner_backlog.cursor file read CONSUMED=0
+# on any fresh checkout/worktree regardless of the real consumption state on
+# whichever machine actually drives the runner, so --report and the
+# low-backlog check disagreed depending on which machine ran them.
 FLOOR="${RUNNER_QUEUE_FLOOR:-12}"
 BACKLOG_MIN="${RUNNER_BACKLOG_MIN:-6}"
 DRY=false
@@ -73,7 +77,16 @@ archived_total() {
 # =============================================================================
 report_mode() {
   [ -f "$BACKLOG" ] || { [ "$SUMMARY" = true ] || log "report: no backlog file ($BACKLOG) — nothing to report on"; return 0; }
-  CONSUMED=$(cat "$CURSOR" 2>/dev/null | tr -cd '0-9'); [ -z "$CONSUMED" ] && CONSUMED=0
+  CONSUMED=$(gw_backlog_cursor_get)
+  if [ -z "$CONSUMED" ]; then
+    if [ "$(gw_classify_failure "http://localhost:3100/mcp" 8)" = "auth-fail" ]; then
+      gw_warn_auth_fail "queue_topup --report backlog_cursor_get"
+      [ "$SUMMARY" = true ] || log "report: GATEWAY AUTH FAILURE (401/403) — cannot read the backlog cursor; NOT a genuine 0-consumed, fix GATEWAY_LOCAL_TOKEN"
+    else
+      [ "$SUMMARY" = true ] || log "report: gateway unreachable — cannot read the backlog cursor"
+    fi
+    return 0
+  fi
   ARCHIVED=$(archived_total)
   CONSUMED=$(( CONSUMED - ARCHIVED )); [ "$CONSUMED" -lt 0 ] && CONSUMED=0
   if [ "$CONSUMED" -lt 1 ] 2>/dev/null; then
@@ -189,11 +202,18 @@ if [ "$PENDING" -ge "$FLOOR" ] 2>/dev/null; then exit 0; fi   # queue healthy �
 
 log "queue low: $PENDING pending (floor $FLOOR) — topping up"
 
-# ── backlog cursor: how many lines already consumed ──
+# ── backlog cursor: how many lines already consumed (gateway-backed, task-e9163eb9) ──
 [ -f "$BACKLOG" ] || { log "no backlog file ($BACKLOG) — nothing to draw from"; exit 0; }
 ARCHIVED=$(archived_total)
 TOTAL=$(( $(grep -cvE '^\s*(#|$)' "$BACKLOG" 2>/dev/null || echo 0) + ARCHIVED ))
-CONSUMED=$(cat "$CURSOR" 2>/dev/null | tr -cd '0-9'); [ -z "$CONSUMED" ] && CONSUMED=0
+CONSUMED=$(gw_backlog_cursor_get)
+if [ -z "$CONSUMED" ]; then
+  # PENDING above already proved the gateway was reachable moments ago — a
+  # get failure here is a transient race, not "no cursor yet". Bail rather
+  # than assume 0, which would re-pop already-consumed items.
+  log "could not read backlog cursor from the gateway — skipping top-up this cycle (runner will retry)"
+  exit 0
+fi
 REMAINING=$(( TOTAL - CONSUMED ))
 
 # Backlog running low → enqueue the planner task to regenerate it (once).
@@ -206,7 +226,7 @@ REMAINING=$(( TOTAL - CONSUMED ))
 # OPT-IN GATE + HARD BOUNDARY (2026-07-20 fix — root cause of the connect overnight
 # incident, observed 2026-07-06 and again 2026-07-07): the planner task runs as a
 # fully-autonomous LLM session (cli_task_runner.sh spawns it with `claude -p
-# --permission-mode bypassPermissions`, i.e. unrestricted Bash + MCP tool access,
+# --permission-mode auto`, i.e. classifier-gated but prompt-free Bash + MCP tool access,
 # same as any other queued task). Its charter was only ever "append lines to
 # config/runner_backlog.jsonl", but nothing stopped the session from instead
 # calling tasks_create/tasks_update directly against the live gateway queue —
@@ -338,7 +358,7 @@ print(confirmed)
         if [ "$NEW_CONSUMED" -lt "$CONSUMED" ]; then
           log "self-heal: cursor was $CONSUMED but only $HEAL_CONFIRMED backlog line(s) are gateway-confirmed consumed — correcting cursor to $NEW_CONSUMED (file drifted, see task-08dbc72f)"
           CONSUMED="$NEW_CONSUMED"
-          echo "$CONSUMED" > "$CURSOR"
+          gw_backlog_cursor_set "$CONSUMED" || log "self-heal: failed to persist corrected cursor ($CONSUMED) to the gateway — will retry next cycle"
           REMAINING=$(( TOTAL - CONSUMED ))
         fi
       fi
@@ -429,14 +449,50 @@ NEED=$(( FLOOR - PENDING )); [ "$NEED" -lt 1 ] && exit 0
 OFFSET=$(( CONSUMED - ARCHIVED )); [ "$OFFSET" -lt 0 ] && OFFSET=0
 POPPED=0
 SCANNED=0
-while IFS=$'\t' read -r kind a b c d e; do
+# \x1f (unit separator), NOT tab: tab is IFS whitespace, so bash collapses a
+# run of tabs into one delimiter and drops empty fields — an item with an empty
+# agent or desc would shift every later field left, landing the draft date in
+# the wrong variable. (Same defect fixed in reconcile_review_tasks.sh, where it
+# silently broke the per-task ancestor check.) \x1f is not IFS whitespace.
+while IFS=$'\x1f' read -r kind a b c d e f; do
   case "$kind" in
     MALFORMED)
       log "backlog line #$((a)) is not valid JSON, skipping (logged, not treated as end-of-backlog): $b — ${c:0:100}"
       ;;
     ITEM)
-      repo="$a"; title="$b"; priority="$c"; agent="$d"; desc="$e"
+      repo="$a"; title="$b"; priority="$c"; agent="$d"; desc="$e"; drafted="${f:-}"
       [ -n "$title" ] || continue
+      # ── prior-art check (the duplicate-dispatch gate) ───────────────────
+      # A well line is dupe-checked by the PLANNER at DRAFT time and consumed
+      # weeks later; nothing re-checked in between, so work shipped in the gap
+      # reached the runner as live work (2026-09-03: 4 of 5 sessions burned
+      # re-verifying already-shipped items; 6f438513 the cycle before).
+      # ADVISORY ONLY — it never drops an item: measured on this repo the
+      # metric ranks the true shipping commit #1 but at only 0.50-0.80, while
+      # many genuinely-new lines also score high, so it is too noisy to carry
+      # a silent skip. Instead the top-ranked commit is attached to the
+      # description so the agent checks ONE commit and stops early if covered.
+      if [ -x "$SCRIPT_DIR/backlog_prior_art.py" ]; then
+        _pa_args=""
+        [ -n "$drafted" ] && _pa_args="--since $drafted"
+        # shellcheck disable=SC2086
+        _pa=$(/usr/bin/python3 "$SCRIPT_DIR/backlog_prior_art.py" --repo "$repo" --title "$title" $_pa_args --json 2>/dev/null)
+        if [ -n "$_pa" ]; then
+          _pre=$(printf '%s' "$_pa" | /usr/bin/python3 -c 'import sys,json
+try:
+    d=json.load(sys.stdin)
+    sys.stdout.write(d.get("preamble","") if d.get("match") else "")
+except Exception:
+    pass' 2>/dev/null)
+          if [ -n "$_pre" ]; then
+            # $( ) strips the preamble's trailing blank line, so re-add the
+            # separator explicitly — otherwise the hint runs into the first
+            # sentence of the real description.
+            desc="${_pre}"$'\n\n'"${desc}"
+            log "prior-art hint attached to [$repo] $title"
+          fi
+        fi
+      fi
       if [ "$DRY" = true ]; then log "would enqueue [$repo/$priority] $title"
       else
         "$SCRIPT_DIR/schedule_task.sh" --repo "$repo" --title "$title" --priority "$priority" --agent "$agent" --model claude-fable-5 --desc "$desc" >/dev/null 2>&1 \
@@ -449,27 +505,45 @@ while IFS=$'\t' read -r kind a b c d e; do
       ;;
   esac
 done < <(OFFSET="$OFFSET" NEED="$NEED" /usr/bin/python3 -c '
-import sys, os, json
+import sys, os, json, re
 consumed=int(os.environ["OFFSET"]); need=int(os.environ["NEED"])
-lines=[l for l in open(sys.argv[1]) if l.strip() and not l.strip().startswith("#")]
+# Walk the file once, keeping the filtered (non-comment/blank) list EXACTLY as
+# before so the cursor keeps indexing it identically — but remember, per kept
+# line, the date of the most recent "PLANNER refill YYYY-MM-DD" comment above
+# it. That comment is the line DRAFT date, and it bounds the prior-art scan to
+# commits that landed AFTER drafting (see scripts/backlog_prior_art.py).
+_DATE=re.compile(r"(\d{4}-\d{2}-\d{2})")
+lines=[]; dates=[]; cur=""
+for l in open(sys.argv[1]):
+    s=l.strip()
+    if not s:
+        continue
+    if s.startswith("#"):
+        if "refill" in s.lower():
+            m=_DATE.search(s)
+            if m: cur=m.group(1)
+        continue
+    lines.append(l); dates.append(cur)
 emitted=0
 scanned=0
 i=consumed
 while i < len(lines) and emitted < need:
-    l = lines[i]; i += 1; scanned += 1
+    l = lines[i]; d = dates[i]; i += 1; scanned += 1
     try:
         o = json.loads(l)
         title = o.get("title", "")
         if not title:
             raise ValueError("missing/empty title")
     except Exception as e:
-        print("MALFORMED\t%d\t%s\t%s" % (consumed + scanned, str(e).replace("\t", " "), l.strip().replace("\t", " ")))
+        print("MALFORMED\x1f%d\x1f%s\x1f%s" % (consumed + scanned, str(e).replace("\x1f", " "), l.strip().replace("\x1f", " ")))
         continue
-    print("ITEM\t" + "\t".join([o.get("repo","ai_management"), title.replace("\t"," "), o.get("priority","P2"), o.get("agent","dev-fullstack"), o.get("desc","").replace("\t"," ").replace("\n"," ")]))
+    print("ITEM\x1f" + "\x1f".join([o.get("repo","ai_management"), title.replace("\x1f"," "), o.get("priority","P2"), o.get("agent","dev-fullstack"), o.get("desc","").replace("\x1f"," ").replace("\n"," "), d]))
     emitted += 1
-print("SCANNED\t%d" % scanned)
+print("SCANNED\x1f%d" % scanned)
 ' "$BACKLOG")
 
-if [ "$DRY" != true ] && [ "$SCANNED" -gt 0 ]; then echo $(( CONSUMED + SCANNED )) > "$CURSOR"; fi
+if [ "$DRY" != true ] && [ "$SCANNED" -gt 0 ]; then
+  gw_backlog_cursor_set $(( CONSUMED + SCANNED )) || log "failed to persist backlog cursor ($(( CONSUMED + SCANNED ))) to the gateway — next cycle will re-scan this window"
+fi
 log "topped up: $POPPED item(s) enqueued (backlog cursor now $(( CONSUMED + SCANNED ))/$TOTAL)"
 exit 0

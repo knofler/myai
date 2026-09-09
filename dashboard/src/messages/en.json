@@ -10,7 +10,9 @@
     "tagline": "Mission Control",
     "openNav": "Open navigation",
     "closeNav": "Close navigation",
+    "drawerLabel": "Navigation menu",
     "primary": "Primary",
+    "more": "More",
     "tourReplay": "✦ Take the tour",
     "commandHint": "⌘K to jump anywhere"
   },

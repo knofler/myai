@@ -17,10 +17,14 @@
 #
 #   • MANAGED / MASTER (legacy AI/-scaffold) — the fat scaffold used by the
 #     operator's fleet + master repo. Triggered by --managed, by master-repo
-#     auto-detect, or when the target already carries an AI/ folder (an existing
-#     managed repo re-init). Scaffolds AI/ via init_ai.sh, then drops a portable,
-#     self-contained docker-compose stack + .env template and runs the guided
-#     first-run wizard (on a TTY). This path is unchanged from before.
+#     auto-detect, or when the target already carries a REAL legacy scaffold —
+#     AI/agents/, AI/skills/, or AI/state/STATE.md (an existing managed repo
+#     re-init). A repo that merely keeps some docs under AI/ (with none of those
+#     scaffold markers) takes the greenfield path instead — the mere existence of
+#     an AI/ directory is NOT enough (is_legacy_ai_scaffold; task-40cb72fc).
+#     Scaffolds AI/ via init_ai.sh, then drops a portable, self-contained
+#     docker-compose stack + .env template and runs the guided first-run wizard
+#     (on a TTY). This path is unchanged from before.
 #
 # TRY_MYAI_REQUIRES: --managed
 # (2026-07-16 EXO dogfood gap) TRY_MYAI.md's walkthrough scaffolds+runs the
@@ -122,6 +126,21 @@ is_master_repo() {
     && [ -f "$1/templates/CLAUDE_TEMPLATE.md" ]
 }
 
+# ── is_legacy_ai_scaffold DIR → 0 if DIR carries a REAL legacy AI/-scaffold ────
+# The mere EXISTENCE of an AI/ directory is too blunt a signal for "existing
+# managed repo re-init": a single committed doc under AI/ (e.g.
+# AI/plan/FLEET_API_CONTRACTS.md) used to flip a fresh greenfield `myai init`
+# into the 220-file legacy scaffold, silently writing a 435-line CLAUDE.md +
+# framework tree + hooks/ + docker-compose + six agent-config files and creating
+# NO brain namespace — the operator's actual goal never happened, yet the run
+# reported success (observed 2026-08-31 in api_management, task-40cb72fc). Detect
+# the artifacts init_ai.sh actually scaffolds — agents/ or skills/ dirs, or a
+# state/STATE.md — so a repo that merely keeps docs under AI/ correctly takes the
+# greenfield/kernel path instead.
+is_legacy_ai_scaffold() {
+  [ -d "$1/AI/agents" ] || [ -d "$1/AI/skills" ] || [ -f "$1/AI/state/STATE.md" ]
+}
+
 # Sourced for unit tests (scripts/tests/test_myai_init_wizard.sh) — stop before the
 # executable body so the helpers above can be exercised without running init_ai.sh.
 [ "${MYAI_INIT_LIB_ONLY:-0}" = 1 ] && return 0 2>/dev/null
@@ -169,10 +188,16 @@ ABS_TARGET="$(cd "$TARGET" && pwd)"
 # ── Decide the mode ───────────────────────────────────────────────────────────
 # Default is GREENFIELD (kernel-only). Fall back to the legacy AI/-scaffold only
 # for: an explicit --managed, the fat master repo (auto-detect, ADR-016 §0.3), or
-# a repo that already carries an AI/ folder (an existing managed repo re-init).
+# a repo that already carries a REAL legacy scaffold — agents/, skills/, or
+# state/STATE.md, NOT merely an AI/ directory (is_legacy_ai_scaffold). A repo that
+# just keeps some docs under AI/ takes the greenfield/kernel path.
 if [ "$MODE" = "auto" ]; then
-  if is_master_repo "$ABS_TARGET" || [ -d "$ABS_TARGET/AI" ]; then
+  if is_master_repo "$ABS_TARGET"; then
     MODE="managed"
+    c_info "master repo detected → managed scaffold (pass --greenfield for the kernel)"
+  elif is_legacy_ai_scaffold "$ABS_TARGET"; then
+    MODE="managed"
+    c_info "existing AI/ scaffold detected → managed re-init (pass --greenfield for the kernel)"
   else
     MODE="greenfield"
   fi
@@ -194,6 +219,23 @@ if [ "$MODE" = "greenfield" ]; then
   fi
 
   echo "==> myai init (greenfield) → $ABS_TARGET"
+
+  # Cross-machine / cross-process mutual exclusion (LL 2026-07-05, same fix
+  # applied to init_ai.sh in 0a59a6df): guards the config writes below
+  # (.claude/settings.json, .mcp.json) so two concurrent `myai init` runs
+  # against the SAME repo — two machines onboarding at once, or a scripted
+  # re-init racing a manual one — can't race each other's read-modify-write
+  # merge, with the loser silently discarding the winner's change. Scoped to
+  # the greenfield branch only: managed mode below delegates to init_ai.sh,
+  # which takes this same lock itself — acquiring it here too would
+  # self-deadlock that path.
+  # shellcheck source=lib/sync_guard.sh
+  . "$SCRIPT_DIR/lib/sync_guard.sh"
+  if ! acquire_repo_lock "$ABS_TARGET" >/dev/null; then
+    echo "Error: $ABS_TARGET is being initialized by another process right now (lock held) — retry shortly." >&2
+    exit 1
+  fi
+  trap 'release_repo_lock "$ABS_TARGET"' EXIT
 
   # 1. Kernel CLAUDE.md — write when absent; refresh a kernel in place; never
   #    clobber a user-edited/app CLAUDE.md unless --force.
@@ -284,7 +326,16 @@ if [ "$MODE" = "greenfield" ]; then
   #     module — this is the ONLY per-repo pointer, and it fails loud (blocks the
   #     tool) if the module can't be resolved, so a kernel-only repo never runs
   #     without its safety rails. Idempotent: refresh our own wiring in place,
-  #     never clobber a user-authored settings.json.
+  #     never clobber a user-authored settings.json. Refreshing an EXISTING
+  #     kernel file goes through json_merge.py (deep-merge, master/framework
+  #     keys win on shared leaves, repo-local additions survive) instead of a
+  #     raw `cp` overwrite — a raw overwrite here was the 19th fleet-wide
+  #     config-clobber incident's `.mcp.json`/`.claude/settings.json` bug class
+  #     in a THIRD, previously-unaudited callsite: PR #289 (2026-07-02) fixed
+  #     update_all.sh's 5 callsites, 0a59a6df (2026-07-21) fixed init_ai.sh's
+  #     managed-mode callsite, but this greenfield-mode refresh still `cp`'d
+  #     straight over any hook/statusLine/permission a repo had added alongside
+  #     the kernel marker (LL 2026-07-05).
   SETTINGS_SRC="$TEMPLATES_DIR/settings.kernel.json"
   CLAUDE_DIR="$ABS_TARGET/.claude"
   SETTINGS_DST="$CLAUDE_DIR/settings.json"
@@ -294,12 +345,14 @@ if [ "$MODE" = "greenfield" ]; then
       cp "$SETTINGS_SRC" "$SETTINGS_DST"
       c_ok "Wrote .claude/settings.json (module safety hooks via 'myai root')"
     elif grep -q 'myAI kernel settings' "$SETTINGS_DST" 2>/dev/null; then
-      if cmp -s "$SETTINGS_SRC" "$SETTINGS_DST"; then
-        c_info ".claude/settings.json kernel wiring already current — left untouched"
-      else
-        cp "$SETTINGS_SRC" "$SETTINGS_DST"
-        c_ok "Refreshed .claude/settings.json kernel wiring"
-      fi
+      _settings_rc=0
+      _settings_out=$(/usr/bin/python3 "$SCRIPT_DIR/lib/json_merge.py" "$SETTINGS_DST" "$SETTINGS_SRC" 2>&1) || _settings_rc=$?
+      case "${_settings_rc}:${_settings_out}" in
+        0:unchanged) c_info ".claude/settings.json kernel wiring already current — left untouched" ;;
+        0:changed)   c_ok "Refreshed .claude/settings.json kernel wiring (repo-local additions preserved)" ;;
+        0:created)   c_ok "Wrote .claude/settings.json (module safety hooks via 'myai root')" ;;
+        *)           c_warn ".claude/settings.json left untouched ($_settings_out)" ;;
+      esac
     else
       c_warn ".claude/settings.json exists and is not myAI kernel wiring — left untouched"
     fi
@@ -447,7 +500,23 @@ PYEOF
   echo ""
   echo "myai init complete (greenfield) → $ABS_TARGET"
   echo "  Kernel CLAUDE.md + .mcp.json committed; .myai-local gitignored. Framework resolves from the installed module (myai root)."
-  echo "  Next: open the repo in your agent and run 'agent mode' — it boots from the brain via context_boot."
+  # An agent reads .mcp.json ONCE, at startup. Running init from INSIDE a live
+  # agent session therefore writes an .mcp.json that session can never load — so
+  # `myai` never registers, `context_boot`/`brain_delta` are unavailable, and the
+  # very next `agent mode` boots blind off an uncompiled brief while looking
+  # perfectly healthy. Observed 2026-08-31 in api_management: a full `agent mode`
+  # ran with ZERO MCP calls and had to rediscover the keyword protocol by hand.
+  # The old closing line ("open the repo in your agent") quietly assumed the
+  # agent was not open yet, which is the opposite of how init is usually run.
+  if [ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    c_warn "You ran this from INSIDE an agent session — RESTART it before 'agent mode'."
+    echo "        .mcp.json is read once at startup, so this session cannot load the"
+    echo "        'myai' server. Without a restart, 'agent mode' boots with no brain"
+    echo "        (no context_boot / brain_delta) and gives no sign anything is wrong."
+  else
+    echo "  Next: open the repo in your agent and run 'agent mode' — it boots from the brain via context_boot."
+    echo "  (If an agent is ALREADY open here, restart it first — .mcp.json is read only at startup.)"
+  fi
   exit 0
 fi
 

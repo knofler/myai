@@ -1,3 +1,4 @@
+import { isAirGapped } from '../core/license.js';
 import { getConfig } from '../shared/config.js';
 import { createChildLogger } from '../shared/logger.js';
 
@@ -55,6 +56,13 @@ class LocalEmbeddingProvider implements EmbeddingProvider {
     try {
       // Dynamic import — @xenova/transformers
       const mod = await import('@xenova/transformers');
+      if (isAirGapped()) {
+        // AIR_GAPPED hard promise (core/license.ts): never reach huggingface.co
+        // for model weights — load only from the local cache / bundled files.
+        // An uncached model then throws and lands in the hash fallback below
+        // instead of attempting a download.
+        (mod.env as { allowRemoteModels?: boolean }).allowRemoteModels = false;
+      }
       this.pipeline = await mod.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
       log.info('Local embedding model loaded (all-MiniLM-L6-v2)');
       return this.pipeline;
@@ -120,16 +128,34 @@ class OpenAIEmbeddingProvider implements EmbeddingProvider {
 
 let _provider: EmbeddingProvider | null = null;
 
+/**
+ * Pure provider selection — exported for tests. 'openai' only when it is both
+ * configured AND usable: api.openai.com is a hardcoded third-party endpoint,
+ * so AIR_GAPPED=true (core/license.ts, the no-phone-home promise) forces
+ * 'local' even if an OPENAI_API_KEY was left set from a prior config —
+ * exactly the same contract sentry.ts applies to a stale SENTRY_DSN.
+ */
+export function resolveEmbeddingProviderName(
+  configured: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): 'openai' | 'local' {
+  if (configured === 'openai' && env.OPENAI_API_KEY && !isAirGapped(env)) return 'openai';
+  return 'local';
+}
+
 export function getEmbeddingProvider(): EmbeddingProvider {
   if (_provider) return _provider;
 
   const config = getConfig();
   const { provider, model, dimensions } = config.memory.embedding;
 
-  if (provider === 'openai' && process.env.OPENAI_API_KEY) {
+  if (resolveEmbeddingProviderName(provider) === 'openai') {
     _provider = new OpenAIEmbeddingProvider(dimensions, model || 'text-embedding-3-small');
     log.info({ provider: 'openai', model }, 'Using OpenAI embeddings');
   } else {
+    if (provider === 'openai' && process.env.OPENAI_API_KEY && isAirGapped()) {
+      log.warn('OpenAI embeddings configured but AIR_GAPPED=true — using local embeddings (no phone-home in air-gapped mode)');
+    }
     _provider = new LocalEmbeddingProvider(dimensions);
     log.info({ provider: 'local', dimensions }, 'Using local embeddings');
   }

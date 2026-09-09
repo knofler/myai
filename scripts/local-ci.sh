@@ -56,6 +56,34 @@ HISTORY_MODE=0
 HISTORY_SHA=""
 NODE_IMAGE="${LOCAL_CI_NODE_IMAGE:-node:22-alpine}"
 
+# Resource caps for every throwaway container this script starts.
+#
+# WHY: these are ad-hoc `docker run`s, not compose services, and they were
+# previously launched with no --memory/--cpus at all (docker inspect showed
+# memLimit=0, cpus=0). Two consequences, both observed on 2026-09-04:
+#   1. `npm ci && npm run test:coverage` in one of them reached 626 MiB /
+#      450% CPU / 101 PIDs, starving the box. That contention made a
+#      SYNCHRONOUS, spawnSync('git')-chaining brain test blow its 10s
+#      per-test timeout, producing a CI "failure" that was pure flake
+#      (it passed 50/50 on the gh-runner at the same SHA).
+#   2. hooks/session/13-ram-guard.sh sums only DEFAULT-PROFILE COMPOSE
+#      services, so an ad-hoc container is invisible to the 2 GB project
+#      ceiling — the guard reported "403 MB / 2048 MB (under ceiling)"
+#      while that single container was using 626 MiB.
+# Capping here does not make the guard see them (that is the other half of
+# task-6cd9d9c4), but it does stop one local-ci run from eating the machine.
+#
+# Defaults leave real headroom: npm ci + vitest peaked ~660 MiB, so 1500m is
+# ~2.3x that. Override per-run when a heavier gate needs it.
+# An ARRAY, not a string: the two flags must reach docker as two separate
+# words, and an array expands that way under "${CTR_LIMITS[@]}" without
+# relying on unquoted word-splitting (which SC2086 flags, and which zsh
+# would not split at all). Always non-empty, so bash 3.2's empty-array +
+# `set -u` quirk cannot bite.
+CTR_MEMORY="${LOCAL_CI_MEMORY:-1500m}"
+CTR_CPUS="${LOCAL_CI_CPUS:-4}"
+CTR_LIMITS=(--memory="$CTR_MEMORY" --cpus="$CTR_CPUS")
+
 usage() { sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [ $# -gt 0 ]; do
@@ -253,7 +281,7 @@ overall=0
 run_node() {
   # run_node "<sh command>"  — runs in throwaway node container with repo mounted
   command -v docker >/dev/null 2>&1 || { echo "    docker unavailable"; return 3; }
-  docker run --rm -v "$REPO_ROOT":/app -w /app "$NODE_IMAGE" sh -lc "$1"
+  docker run --rm "${CTR_LIMITS[@]}" -v "$REPO_ROOT":/app -w /app "$NODE_IMAGE" sh -lc "$1"
 }
 
 # Find this repo's running DB sidecar (mongo/postgres/mysql) so DB-backed build/
@@ -359,7 +387,7 @@ check_build() {
     fi
     echo "    running gates in built image: $gates"
     # shellcheck disable=SC2086
-    if docker run --rm $netarg $dbenv -w /app "$img" sh -lc "$gates"; then
+    if docker run --rm "${CTR_LIMITS[@]}" $netarg $dbenv -w /app "$img" sh -lc "$gates"; then
       echo "    PASS — build chain green (production-faithful: builder image + $gates)"; return 0
     fi
     echo "    FAIL — lint/typecheck/test failed in builder image"; return 1
@@ -368,7 +396,7 @@ check_build() {
   # ── Fallback: no Dockerfile builder stage → ephemeral node image w/ devDeps ──
   echo "    no builder stage; ephemeral $NODE_IMAGE (npm ci + devDeps): $steps"
   # shellcheck disable=SC2086
-  if docker run --rm $netarg $dbenv -v "$REPO_ROOT":/app -w /app "$NODE_IMAGE" sh -lc "npm ci && $steps"; then
+  if docker run --rm "${CTR_LIMITS[@]}" $netarg $dbenv -v "$REPO_ROOT":/app -w /app "$NODE_IMAGE" sh -lc "npm ci && $steps"; then
     echo "    PASS — build chain green (ephemeral, production-faithful)"; return 0
   fi
   echo "    FAIL — build chain failed (ephemeral)"; return 1
@@ -408,7 +436,7 @@ check_npm_script() {
         || { echo "    FAIL — builder-stage image build failed"; return 1; }
     fi
     # shellcheck disable=SC2086
-    if docker run --rm $netarg $dbenv -w /app "$img" sh -lc "npm run $script"; then
+    if docker run --rm "${CTR_LIMITS[@]}" $netarg $dbenv -w /app "$img" sh -lc "npm run $script"; then
       echo "    PASS — npm run $script green (builder image)"; return 0
     fi
     echo "    FAIL — npm run $script failed in builder image"; return 1
@@ -416,7 +444,7 @@ check_npm_script() {
 
   echo "    no builder stage; ephemeral $NODE_IMAGE (npm ci + devDeps): npm run $script"
   # shellcheck disable=SC2086
-  if docker run --rm $netarg $dbenv -v "$REPO_ROOT":/app -w /app "$NODE_IMAGE" sh -lc "npm ci && npm run $script"; then
+  if docker run --rm "${CTR_LIMITS[@]}" $netarg $dbenv -v "$REPO_ROOT":/app -w /app "$NODE_IMAGE" sh -lc "npm ci && npm run $script"; then
     echo "    PASS — npm run $script green (ephemeral)"; return 0
   fi
   echo "    FAIL — npm run $script failed (ephemeral)"; return 1
@@ -469,7 +497,7 @@ check_runtime_coverage() {
   # spawn the CLI through tsx/esbuild, whose musl (alpine) binary segfaults
   # silently to a bare non-zero exit with no stderr, misreported as a coverage
   # regression; a glibc image matches actual CI (ubuntu-latest) and is stable.
-  if docker run --rm -v "$REPO_ROOT":/app -w /app/runtime node:22 sh -lc \
+  if docker run --rm "${CTR_LIMITS[@]}" -v "$REPO_ROOT":/app -w /app/runtime node:22 sh -lc \
       "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq git >/dev/null 2>&1; npm ci && npm run test:coverage"; then
     echo "    PASS — coverage thresholds met"; return 0
   fi
@@ -500,6 +528,13 @@ echo
 # script-unit-tests.yml's ungated `hygiene` job). set -e-safe rc capture.
 check_tracked_hygiene() {
   local rc=0 out=""
+  # [ -f ] guard (same contract as check_capability_counts_gate): this static
+  # gate's script is master-CI tooling and is NOT in update_all's propagation
+  # set, so in a managed repo the propagated local-ci.sh must SKIP (rc 2), not
+  # hard-fail "No such file or directory" (task-e6d1325e — the same
+  # unpropagated-sibling class as ci_check_map.sh/task-29df1165).
+  [ -f "$SCRIPT_DIR/check_tracked_hygiene.sh" ] \
+    || { echo "  SKIP — check_tracked_hygiene.sh not shipped in this repo"; return 2; }
   out="$("$SCRIPT_DIR/check_tracked_hygiene.sh" --repo "$REPO_ROOT" 2>&1)" || rc=$?
   printf '%s\n' "$out" | sed 's/^/  /'
   return "$rc"
@@ -517,12 +552,74 @@ echo
 # with script-unit-tests.yml). set -e-safe rc capture.
 check_stat_ordering() {
   local rc=0 out=""
+  [ -f "$SCRIPT_DIR/check_stat_ordering.sh" ] \
+    || { echo "  SKIP — check_stat_ordering.sh not shipped in this repo"; return 2; }
   out="$("$SCRIPT_DIR/check_stat_ordering.sh" --repo "$REPO_ROOT" 2>&1)" || rc=$?
   printf '%s\n' "$out" | sed 's/^/  /'
   return "$rc"
 }
 so_rc=0; check_stat_ordering || so_rc=$?
 if [ "$so_rc" -eq 1 ]; then overall=1; fi
+echo
+
+# ── Shellcheck gate (baseline-suppressed) ───────────────────────────────────
+# CRITICAL block, same contract as the gates above: a NEW shellcheck finding
+# (one not already in scripts/ci/shellcheck-baseline.txt) fails the run
+# regardless of branch-protection contexts. Logic lives in
+# scripts/check_shellcheck.sh (shared with script-unit-tests.yml's
+# `static-lint` job). rc 2 = shellcheck not installed on this machine -> SKIP,
+# not FAIL, so local-ci stays usable on a box without it. set -e-safe rc
+# capture (same reason as the tenant-scoping gate above).
+check_shellcheck_gate() {
+  local rc=0 out=""
+  [ -f "$SCRIPT_DIR/check_shellcheck.sh" ] \
+    || { echo "  SKIP — check_shellcheck.sh not shipped in this repo"; return 2; }
+  out="$("$SCRIPT_DIR/check_shellcheck.sh" --repo "$REPO_ROOT" 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/  /'
+  return "$rc"
+}
+shc_rc=0; check_shellcheck_gate || shc_rc=$?
+if [ "$shc_rc" -eq 1 ]; then overall=1; fi
+echo
+
+# ── Bash 3.2 array-safety gate (baseline-suppressed) ────────────────────────
+# CRITICAL block: an empty-array "${NAME[@]}" expansion unguarded under
+# `set -u` is a silent macOS-only crash (bash 3.2 is /bin/bash on every Mac in
+# the fleet) — fixed 3x already (d49145f2, 773028eb, 6911067f). Logic lives in
+# scripts/check_bash32_arrays.sh (shared with script-unit-tests.yml's
+# `static-lint` job). set -e-safe rc capture.
+check_bash32_arrays_gate() {
+  local rc=0 out=""
+  [ -f "$SCRIPT_DIR/check_bash32_arrays.sh" ] \
+    || { echo "  SKIP — check_bash32_arrays.sh not shipped in this repo"; return 2; }
+  out="$("$SCRIPT_DIR/check_bash32_arrays.sh" --repo "$REPO_ROOT" 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/  /'
+  return "$rc"
+}
+b32_rc=0; check_bash32_arrays_gate || b32_rc=$?
+if [ "$b32_rc" -eq 1 ]; then overall=1; fi
+echo
+
+# ── Capability-count gate (task-70ef2d84) ────────────────────────────────────
+# CRITICAL block, same contract as the gates above: README/SHOWCASE/package.json
+# capability-count claims (agents/skills/MCP tools/hooks) must match the shipped
+# artifacts on EVERY PR, not only at release time. Previously the script was
+# wired only into publish_guard.sh step 0, so drift accumulated silently across
+# weeks of PRs and the eventual --fix diff spanned dozens of unrelated changes.
+# rc 2 = scanner precondition missing (no agents//skills//runtime/ — i.e. a
+# managed repo, not the master) -> SKIP, not FAIL, so fleet-rolled local-ci
+# stays usable everywhere. set -e-safe rc capture.
+check_capability_counts_gate() {
+  local rc=0 out=""
+  echo "  [capability counts] README/SHOWCASE/package.json vs shipped artifacts"
+  [ -f "$SCRIPT_DIR/check_capability_counts.sh" ] \
+    || { echo "    SKIP — check_capability_counts.sh not shipped in this repo"; return 2; }
+  out="$(bash "$SCRIPT_DIR/check_capability_counts.sh" --root "$REPO_ROOT" 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/    /'
+  return "$rc"
+}
+cc_rc=0; check_capability_counts_gate || cc_rc=$?
+if [ "$cc_rc" -eq 1 ]; then overall=1; fi
 echo
 
 # Same set -e-safe pattern as the tenant-scoping gate above: rc 2 is SKIP (no

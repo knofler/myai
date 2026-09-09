@@ -35,5 +35,23 @@ fi
 
 MYAI_GATEWAY_MCP_URL="${MYAI_GATEWAY_MCP_URL:-http://localhost:${MCP_PORT:-3100}/mcp}"
 
+# ── DEDICATED npm CACHE (do not "simplify" this away) ────────────────────────
+# A single historical `sudo npm` leaves root-owned files in ~/.npm/_cacache that
+# npm can no longer unlink, and EVERY later `npx` on that machine dies with
+# `EACCES ... Your cache folder contains root-owned files`. That kills THIS
+# wrapper at spawn, which means the myai server never connects and all ~180
+# gateway tools (every brain_*) silently vanish from the session — the exact
+# failure seen on runner-host 2026-08-27 (931 root-owned files dating
+# from Jan-Mar 2026; the machine only hit it now because it hadn't booted the
+# framework since the stdio wrapper landed on 11 Aug).
+#
+# Pointing npx at a cache dir we own makes the bridge immune to the state of the
+# shared user cache. The permanent host fix is still `sudo chown -R 501:20
+# ~/.npm`, but that needs a password and must never be what stands between an
+# agent session and its own memory.
+NPM_CONFIG_CACHE="${MYAI_NPM_CACHE:-$HOME/.npm-myai}"
+export NPM_CONFIG_CACHE
+mkdir -p "$NPM_CONFIG_CACHE" 2>/dev/null || true
+
 exec npx -y mcp-remote "$MYAI_GATEWAY_MCP_URL" \
   --header "x-gateway-local-token:${GATEWAY_LOCAL_TOKEN}"

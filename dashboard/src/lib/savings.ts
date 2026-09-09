@@ -112,3 +112,82 @@ export async function getUserSavings(
     return summary;
   }
 }
+
+export interface SavingsDay { date: string; tokens: number; boots: number }
+export interface SavingsTrend {
+  week: SavingsBucket;       // rolling last 7 UTC days (incl. today)
+  priorWeek: SavingsBucket;  // the 7 UTC days before that
+  daily: SavingsDay[];       // last 7 days, oldest → newest (sparkline series)
+  deltaPct: number | null;   // week-over-week token change; null when no prior baseline
+  usdPerMTokens: number;
+}
+
+function utcDayKey(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Rolling week-over-week cold-start savings for the home hero — "tokens saved
+ * this week" with a 7-day sparkline and a week-over-week trend. Buckets by UTC
+ * day over a 14-day window so the prior week is the trend baseline. Never
+ * throws — degrades to an all-zero trend so the hero always renders.
+ */
+export async function getSavingsTrend(
+  tenantMatch: Record<string, unknown>,
+  opts: { now?: Date } = {},
+): Promise<SavingsTrend> {
+  const rate = usdPerMillionTokens();
+  const now = opts.now ?? new Date();
+  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const windowStart = new Date(todayUtc.getTime() - 13 * 86_400_000); // 14 days incl. today
+  const weekStart = new Date(todayUtc.getTime() - 6 * 86_400_000);    // last 7 days incl. today
+
+  // Pre-seed the 7 sparkline days so gaps render as empty bars, not holes.
+  const dayOrder: string[] = [];
+  const daily = new Map<string, SavingsDay>();
+  for (let i = 6; i >= 0; i--) {
+    const key = utcDayKey(new Date(todayUtc.getTime() - i * 86_400_000));
+    dayOrder.push(key);
+    daily.set(key, { date: key, tokens: 0, boots: 0 });
+  }
+
+  const trend: SavingsTrend = {
+    week: emptyBucket(),
+    priorWeek: emptyBucket(),
+    daily: dayOrder.map((k) => daily.get(k)!),
+    deltaPct: null,
+    usdPerMTokens: rate,
+  };
+
+  try {
+    const rows = await ContinuityMetric.aggregate<{ _id: string; tokens: number; boots: number }>([
+      { $match: { ...tenantMatch, createdAt: { $gte: windowStart } } },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+          tokens: { $sum: '$tokens' },
+          boots: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const weekStartKey = utcDayKey(weekStart);
+    for (const row of rows) {
+      const bucket = row._id >= weekStartKey ? trend.week : trend.priorWeek;
+      bucket.tokens += row.tokens;
+      bucket.boots += row.boots;
+      const day = daily.get(row._id);
+      if (day) { day.tokens += row.tokens; day.boots += row.boots; }
+    }
+
+    trend.week.usd = tokensToUsd(trend.week.tokens, rate);
+    trend.priorWeek.usd = tokensToUsd(trend.priorWeek.tokens, rate);
+    trend.deltaPct = trend.priorWeek.tokens > 0
+      ? (trend.week.tokens - trend.priorWeek.tokens) / trend.priorWeek.tokens
+      : null;
+    trend.daily = dayOrder.map((k) => daily.get(k)!);
+    return trend;
+  } catch {
+    return trend;
+  }
+}

@@ -5,17 +5,18 @@
 # rotation into month-bucketed, grep-searchable archive files.
 #
 # The backlog only ever grows — the PLANNER appends, queue_topup.sh pops via a
-# machine-local, gitignored cursor (config/.runner_backlog.cursor), and
-# nothing ever prunes the file itself. Every PLANNER session pays the cost of
-# reading a slightly larger file, and self-check/dupe-check runs get slower
-# over time (config/runner_backlog.jsonl line ~1114 flagged this directly).
+# cursor (originally a machine-local, gitignored config/.runner_backlog.cursor
+# file; now a gateway-backed counter, see below), and nothing ever prunes the
+# file itself. Every PLANNER session pays the cost of reading a slightly
+# larger file, and self-check/dupe-check runs get slower over time
+# (config/runner_backlog.jsonl line ~1114 flagged this directly).
 #
-# "Fully consumed, fleet-wide" ground truth: NOT the local cursor file. A
-# fresh checkout/worktree has no cursor at all and reads CONSUMED=0 regardless
-# of the real state — that's the still-open 'backlog-well cursor visibility'
-# gap (config/runner_backlog.jsonl line ~1043). Trying to archive based on any
-# one machine's local cursor would risk deleting lines another machine hasn't
-# popped yet.
+# "Fully consumed, fleet-wide" ground truth: NOT the cursor counter, even now
+# that it's gateway-backed (task-e9163eb9 fixed the "fresh checkout reads
+# CONSUMED=0" visibility gap, but a single scalar still can't tell you WHICH
+# lines were popped if the file gets edited out of position). Trying to
+# archive based on the cursor value alone would still risk deleting lines
+# that were never actually popped.
 #
 # Instead this script reuses the cross-machine source of truth queue_topup.sh
 # --report already relies on: the shared gateway's task list (mongo-backed,
@@ -28,14 +29,14 @@
 # top (matches how the pop path reads the file in order).
 #
 # Cursor-shift safety: rewriting the file shifts every remaining line's index
-# down by the archived count. Rather than trying to reach into every other
-# machine's local (gitignored, unreachable-from-here) cursor file, this script
-# does NOT touch them. Instead scripts/queue_topup.sh's TOTAL is computed as
-# archived-line-count (summed from config/archive/runner_backlog-*.jsonl) +
-# current-file-line-count, and the pop position is CONSUMED minus that same
-# archived total — so a machine's CONSUMED counter keeps meaning "lines popped
-# over all of history" and never needs adjusting when a rotation happens on a
-# different machine. See the matching change in queue_topup.sh.
+# down by the archived count. Rather than trying to reach into and adjust the
+# gateway-backed cursor (task-e9163eb9) from here, this script does NOT touch
+# it. Instead scripts/queue_topup.sh's TOTAL is computed as archived-line-count
+# (summed from config/archive/runner_backlog-*.jsonl) + current-file-line-
+# count, and the pop position is CONSUMED minus that same archived total — so
+# the shared CONSUMED counter keeps meaning "lines popped over all of history"
+# and never needs adjusting when a rotation happens on any machine. See the
+# matching change in queue_topup.sh.
 #
 # Usage:
 #   scripts/archive_runner_backlog.sh [--dry-run] [--min N]

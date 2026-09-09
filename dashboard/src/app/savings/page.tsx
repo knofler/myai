@@ -10,6 +10,7 @@ import { getActiveTenant, tenantFilter } from '@/lib/tenant';
 import { getUserSavings } from '@/lib/savings';
 import { fmtTokens, fmtUsd } from '@/lib/format';
 import { StatCard, Card, EmptyState } from '@/components/ui/card';
+import { DataTable, type DataRow } from '@/components/ui/data-table';
 import { PageHeader } from '@/components/page-header';
 import AutoRefresh from '@/components/auto-refresh';
 import ShareButton from './share-button';
@@ -27,6 +28,23 @@ export default async function SavingsPage() {
 
   const { month, total, byUser } = summary;
   const shareText = `myAI saved my team ${fmtTokens(month.tokens)} tokens (${fmtUsd(month.usd)}) of context re-teaching this month.`;
+
+  const memberRows: DataRow[] = byUser.map((u) => ({
+    id: u.userId || 'system',
+    search: (u.userId || 'system agent').toLowerCase(),
+    sort: { member: u.userId || '~', tokens: u.tokens, usd: u.usd, boots: u.boots },
+    cells: [
+      u.userId
+        ? <span className="font-mono text-[rgb(var(--text-primary))]">{u.userId}</span>
+        : <span className="text-zinc-600">system / agent</span>,
+      <span className="text-emerald-400 font-semibold font-mono">{fmtTokens(u.tokens)}</span>,
+      <span className="text-emerald-400 font-mono">{fmtUsd(u.usd)}</span>,
+      <span className="text-[rgb(var(--text-secondary))] font-mono">{u.boots.toLocaleString()}</span>,
+      u.userId ? (
+        <a href={`/savings/card?userId=${encodeURIComponent(u.userId)}`} target="_blank" rel="noopener noreferrer" className="text-[rgb(var(--text-muted))] hover:text-emerald-300 underline underline-offset-2">card ↗</a>
+      ) : <span className="text-zinc-700">—</span>,
+    ],
+  }));
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -79,40 +97,27 @@ export default async function SavingsPage() {
 
       {/* Per-member breakdown */}
       <div className="mb-8">
-        <Card title="Per-member savings (this month)" meta={`${byUser.length} contributor${byUser.length === 1 ? '' : 's'}`}>
-          <div className="p-5">
-            {byUser.length === 0 ? (
-              <EmptyState>No per-member data yet — boots record a member once the gateway carries a <code className="text-[rgb(var(--text-secondary))]">userId</code> (Team tier).</EmptyState>
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))]">
-                    <th className="pb-2">Member</th>
-                    <th className="pb-2 text-right">Tokens saved</th>
-                    <th className="pb-2 text-right">$ saved</th>
-                    <th className="pb-2 text-right">Boots</th>
-                    <th className="pb-2 text-right">Card</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {byUser.map((u) => (
-                    <tr key={u.userId || 'system'} className="border-b border-[rgb(var(--border-subtle))] last:border-0">
-                      <td className="py-2 font-mono text-[rgb(var(--text-primary))]">{u.userId || <span className="text-zinc-600">system / agent</span>}</td>
-                      <td className="py-2 text-right text-emerald-400 font-semibold">{fmtTokens(u.tokens)}</td>
-                      <td className="py-2 text-right text-emerald-400">{fmtUsd(u.usd)}</td>
-                      <td className="py-2 text-right text-[rgb(var(--text-secondary))]">{u.boots.toLocaleString()}</td>
-                      <td className="py-2 text-right">
-                        {u.userId ? (
-                          <a href={`/savings/card?userId=${encodeURIComponent(u.userId)}`} target="_blank" rel="noopener noreferrer" className="text-[rgb(var(--text-muted))] hover:text-emerald-300 underline underline-offset-2">card ↗</a>
-                        ) : <span className="text-zinc-700">—</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </Card>
+        {byUser.length === 0 ? (
+          <Card title="Per-member savings (this month)" meta="0 contributors">
+            <EmptyState>No per-member data yet — boots record a member once the gateway carries a <code className="text-[rgb(var(--text-secondary))]">userId</code> (Team tier).</EmptyState>
+          </Card>
+        ) : (
+          <DataTable
+            title="Per-member savings (this month)"
+            meta={`${byUser.length} contributor${byUser.length === 1 ? '' : 's'}`}
+            searchPlaceholder="Search members…"
+            defaultSort="tokens"
+            defaultDesc
+            columns={[
+              { label: 'Member', sortKey: 'member', mobile: 'title' },
+              { label: 'Tokens saved', align: 'right', sortKey: 'tokens', mobile: 'meta' },
+              { label: '$ saved', align: 'right', sortKey: 'usd', mobile: 'meta' },
+              { label: 'Boots', align: 'right', sortKey: 'boots', mobile: 'detail' },
+              { label: 'Card', align: 'right', mobile: 'detail' },
+            ]}
+            rows={memberRows}
+          />
+        )}
       </div>
 
       <p className="text-xs text-zinc-600">

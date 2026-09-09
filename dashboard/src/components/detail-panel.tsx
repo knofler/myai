@@ -38,9 +38,9 @@ export function DetailPanel({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="panel-enter fixed top-0 right-0 h-screen w-full sm:w-[600px] sm:max-w-[90vw] bg-[rgb(var(--bg-surface))] border-l border-[rgb(var(--border-subtle))] z-50 overflow-y-auto pb-[env(safe-area-inset-bottom)]"
+        className="panel-enter fixed top-0 right-0 h-screen w-full sm:w-[600px] sm:max-w-[90vw] bg-[rgb(var(--bg-surface))] border-l border-[rgb(var(--border-subtle))] z-50 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]"
       >
-        <div className="sticky top-0 bg-[rgb(var(--bg-surface))] border-b border-[rgb(var(--border-subtle))] px-6 py-4 pt-[calc(1rem+env(safe-area-inset-top))] flex items-center justify-between">
+        <div className="sticky top-0 bg-[rgb(var(--bg-surface))] border-b border-[rgb(var(--border-subtle))] px-6 py-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))] truncate">{title}</h2>
           <button
             ref={closeRef}

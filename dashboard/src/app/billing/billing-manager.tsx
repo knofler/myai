@@ -13,6 +13,8 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useTenant } from '@/lib/tenant-context';
 import { ResidencyBadge } from '@/components/residency-badge';
+import { DataTable, type DataRow } from '@/components/ui/data-table';
+import { InvoiceStatusBadge } from '@/components/ui/badge';
 import {
   discountLabel,
   subscriptionStatusLabel,
@@ -50,6 +52,15 @@ interface InvoiceRow {
   currency: string;
   hostedUrl: string | null;
   pdfPath: string;
+}
+
+/** Plain <a> navigation can't set an Authorization header, so the PDF route
+ *  accepts the tenant's key as a query param for this one link (see
+ *  api/billing/invoices/[id]/pdf/route.ts) — append it here rather than
+ *  leaving the download 401 for every tenant. No-op without a key so the
+ *  link still degrades to the (also 401ing) bare path instead of throwing. */
+export function pdfHref(pdfPath: string, apiKey: string | undefined): string {
+  return apiKey ? `${pdfPath}?key=${encodeURIComponent(apiKey)}` : pdfPath;
 }
 
 export default function BillingManager() {
@@ -224,73 +235,49 @@ export default function BillingManager() {
       </div>
 
       {/* Invoice history */}
-      <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
-        <table className="w-full text-sm">
-          <thead>
-            <tr>
-              <th className="whitespace-nowrap border-b border-[rgb(var(--border-subtle))] px-3 py-2 text-left font-medium text-[rgb(var(--text-primary))]">
-                Invoice
-              </th>
-              <th className="whitespace-nowrap border-b border-[rgb(var(--border-subtle))] px-3 py-2 text-left font-medium text-[rgb(var(--text-primary))]">
-                Date
-              </th>
-              <th className="whitespace-nowrap border-b border-[rgb(var(--border-subtle))] px-3 py-2 text-left font-medium text-[rgb(var(--text-primary))]">
-                Status
-              </th>
-              <th className="whitespace-nowrap border-b border-[rgb(var(--border-subtle))] px-3 py-2 text-left font-medium text-[rgb(var(--text-primary))]">
-                Total
-              </th>
-              <th className="whitespace-nowrap border-b border-[rgb(var(--border-subtle))] px-3 py-2 text-left font-medium text-[rgb(var(--text-primary))]">
-                Download
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {invoices.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="border-b border-[rgb(var(--border-subtle))] px-3 py-2 text-[rgb(var(--text-secondary))]">
-                  No invoices yet.
-                </td>
-              </tr>
-            ) : (
-              invoices.map((inv) => (
-                <tr key={inv.id}>
-                  <td className="border-b border-[rgb(var(--border-subtle))] px-3 py-2 align-top text-[rgb(var(--text-primary))]">
-                    {inv.number}
-                  </td>
-                  <td className="border-b border-[rgb(var(--border-subtle))] px-3 py-2 align-top text-[rgb(var(--text-secondary))]">
-                    {inv.date}
-                  </td>
-                  <td className="border-b border-[rgb(var(--border-subtle))] px-3 py-2 align-top text-[rgb(var(--text-secondary))] capitalize">
-                    {inv.status}
-                  </td>
-                  <td className="border-b border-[rgb(var(--border-subtle))] px-3 py-2 align-top text-[rgb(var(--text-secondary))]">
-                    {inv.total} {inv.currency}
-                  </td>
-                  <td className="border-b border-[rgb(var(--border-subtle))] px-3 py-2 align-top">
-                    <a
-                      href={inv.pdfPath}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-teal-400 hover:underline"
-                    >
-                      PDF
-                    </a>
-                    {inv.hostedUrl && (
-                      <>
-                        {' · '}
-                        <a href={inv.hostedUrl} target="_blank" rel="noreferrer" className="text-teal-400 hover:underline">
-                          Stripe
-                        </a>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        title="Invoice history"
+        searchable={false}
+        defaultSort="date"
+        defaultDesc
+        emptyText="No invoices yet."
+        columns={[
+          { label: 'Invoice', sortKey: 'number', mobile: 'title' },
+          { label: 'Date', sortKey: 'date', mobile: 'meta' },
+          { label: 'Status', sortKey: 'status', mobile: 'badge' },
+          { label: 'Total', sortKey: 'total', mobile: 'meta' },
+          { label: 'Download', mobile: 'detail' },
+        ]}
+        rows={invoices.map((inv): DataRow => ({
+          id: inv.id,
+          search: `${inv.number} ${inv.status}`.toLowerCase(),
+          sort: { number: inv.number, date: inv.date, status: inv.status, total: Number(inv.total) || 0 },
+          cells: [
+            <span className="text-[rgb(var(--text-primary))]">{inv.number}</span>,
+            <span className="text-[rgb(var(--text-secondary))]">{inv.date}</span>,
+            <InvoiceStatusBadge status={inv.status} />,
+            <span className="text-[rgb(var(--text-secondary))]">{inv.total} {inv.currency}</span>,
+            <span>
+              <a
+                href={pdfHref(inv.pdfPath, current?.apiKey)}
+                target="_blank"
+                rel="noreferrer"
+                className="text-teal-400 hover:underline"
+              >
+                PDF
+              </a>
+              {inv.hostedUrl && (
+                <>
+                  {' · '}
+                  <a href={inv.hostedUrl} target="_blank" rel="noreferrer" className="text-teal-400 hover:underline">
+                    Stripe
+                  </a>
+                </>
+              )}
+            </span>,
+          ],
+        }))}
+      />
     </div>
   );
 }

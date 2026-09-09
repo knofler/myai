@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server';
 import { GATEWAY_HTTP_URL } from '@/lib/gateway';
 import { setSessionCookie } from '@/lib/session-cookie';
+import { TENANT_REGIONS, type TenantRegion } from '@/lib/residency';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,6 +41,13 @@ export async function POST(req: Request) {
   // strict boolean; the gateway records it per tenant (version + timestamp)
   // and rejects without it when LEGAL_CONSENT_REQUIRED=1.
   const acceptTerms = body.acceptTerms === true;
+  // ADR-024 Phase 2b — "choose your data region" signup step. Only forward a
+  // recognized value; an absent/bad value is left undefined so the gateway
+  // falls back to its own 'us' schema default rather than trusting client input.
+  const region =
+    typeof body.region === 'string' && (TENANT_REGIONS as readonly string[]).includes(body.region)
+      ? (body.region as TenantRegion)
+      : undefined;
 
   if (!name && !inviteToken) return NextResponse.json({ error: 'organisation name is required' }, { status: 400 });
   if (name.length > 120) return NextResponse.json({ error: 'name too long' }, { status: 400 });
@@ -64,6 +72,7 @@ export async function POST(req: Request) {
         referralCode: referralCode || undefined,
         trialCode: trialCode || undefined,
         acceptTerms: acceptTerms || undefined,
+        region,
       }),
       cache: 'no-store',
       signal: AbortSignal.timeout(8000),

@@ -18,6 +18,7 @@
 // without a reload.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { useTenant } from '@/lib/tenant-context';
 import {
   computeIdleState,
@@ -82,7 +83,13 @@ export function IdleTimeoutGuard() {
 
   // No tenant signed in, or the operator disabled the feature (0 = never) →
   // nothing to track, no listeners, no modal.
-  const enabled = Boolean(tenantId) && minutes !== 0;
+  // Never on the auth routes: a tenant remembered in localStorage made the
+  // guard mount on /operator-login and drop a full-screen fixed overlay over a
+  // page nobody is signed in to (observed 2026-09-07 — it read as "the page is
+  // stuck"). Auth pages have no session to expire.
+  const pathname = usePathname();
+  const onAuthRoute = /^\/(login|operator-login)(\/|$)/.test(pathname ?? '');
+  const enabled = Boolean(tenantId) && minutes !== 0 && !onAuthRoute;
 
   useEffect(() => {
     if (!enabled) return;

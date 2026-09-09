@@ -44,6 +44,16 @@ else
 fi
 CONFIG="$AIDIR/config/session-limits.json"
 
+# Per-machine-scoped paths (task-d4c32377, 2026-08-31): both files below are
+# rewritten on every PreToolUse call and are 100% machine-local by nature
+# (STATE dedups off THIS machine's transcript path; RCACHE caches THIS
+# machine's local ~/.claude/projects scan) — sharing them via Dropbox was
+# both a conflicted-copy source AND a latent correctness bug (one machine
+# reading another's dedup/rolling state). See scripts/lib/local_state.sh.
+local_state_path() { printf '%s' "$1"; }  # fallback if lib below is missing
+LOCAL_STATE_LIB="$AIDIR/scripts/lib/local_state.sh"
+[ -f "$LOCAL_STATE_LIB" ] && . "$LOCAL_STATE_LIB"
+
 # Gate: token budget feature on?
 [ "$(jq -r '.token_budget.enabled // false' "$CONFIG" 2>/dev/null)" = "true" ] || exit 0
 
@@ -77,7 +87,7 @@ sess_pct=0
   sess_pct=$(awk "BEGIN { printf \"%.0f\", ($SESS_OUT / $SESS_BUDGET) * 100 }")
 
 # ── Dedup state (per transcript) ─────────────────────────────────────────────
-STATE="$AIDIR/state/.token-metrics"
+STATE="$(local_state_path "$AIDIR/state/.token-metrics")"
 prev_transcript=""; sess_warned=""; checkpointed=0; usage_prompted_epoch=0
 if [ -f "$STATE" ]; then
   prev_transcript=$(sed -n 's/^transcript=//p' "$STATE" | head -1)
@@ -146,7 +156,7 @@ fi
 
 # ── Rolling-window (account-level, cross-repo) ───────────────────────────────
 if [ "$ROLL_ENABLED" = "true" ]; then
-  RCACHE="$AIDIR/state/.token-rolling-cache"
+  RCACHE="$(local_state_path "$AIDIR/state/.token-rolling-cache")"
   roll_out=""; roll_computed=0; roll_warned=0
   if [ -f "$RCACHE" ]; then
     roll_out=$(sed -n 's/^rolling_output=//p' "$RCACHE" | head -1)

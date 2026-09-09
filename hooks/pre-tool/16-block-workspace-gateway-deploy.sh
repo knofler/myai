@@ -64,10 +64,10 @@ for cf in "$DIR/docker-compose.yml" "$DIR/docker-compose.yaml" "$DIR/compose.yml
 done
 [ "$TARGETS_MYAI" = false ] && exit 0
 
-echo "BLOCKED: '$SUB' on the shared myai gateway stack from a runner ci-workspace ($DIR)."
-echo "A workspace clone has no real .env — composing the gateway from here rebinds it to the"
-echo "empty local mongo and split-brains the fleet queue (LL 2026-07-04: 10.5h starvation)."
-echo "Gateway deploys are interactive/selfheal ops run from the MASTER checkout only:"
-echo "  cd <master AI repo> && docker compose build gateway && docker compose up -d gateway dashboard"
-echo "If your change needs a gateway rebuild to take effect, note it in your RESULT line instead."
+echo "BLOCKED: '$SUB' on the shared myai gateway stack from a runner ci-workspace ($DIR)." >&2
+echo "A workspace clone has no real .env — composing the gateway from here rebinds it to the" >&2
+echo "empty local mongo and split-brains the fleet queue (LL 2026-07-04: 10.5h starvation)." >&2
+echo "Gateway deploys are interactive/selfheal ops run from the MASTER checkout only:" >&2
+echo "  cd <master AI repo> && docker compose build gateway && docker compose up -d gateway dashboard" >&2
+echo "If your change needs a gateway rebuild to take effect, note it in your RESULT line instead." >&2
 exit 2

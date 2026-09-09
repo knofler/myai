@@ -60,13 +60,20 @@ while [ $# -gt 0 ]; do
   esac; shift
 done
 
-# Resolve repo name from git toplevel if not given.
+# Resolve repo name from git toplevel if not given, through the ONE canonical
+# resolver (scripts/lib/repo_id.sh, task-89077bf0) so this queue and the
+# SCHEDULE banner (hooks/session/17-schedule-status.sh) can never again
+# disagree about what a given checkout's repo id is — e.g. the master repo's
+# folder is literally "AI" but its canonical id is "ai_management".
+. "$(dirname "$0")/lib/repo_id.sh"
 if [ -z "$REPO" ]; then
   if git rev-parse --show-toplevel >/dev/null 2>&1; then
-    REPO="$(basename "$(git rev-parse --show-toplevel)")"
+    REPO="$(canonical_repo_id "$(git rev-parse --show-toplevel)")"
   else
-    REPO="$(basename "$PWD")"
+    REPO="$(canonical_repo_id "$PWD")"
   fi
+else
+  REPO="$(canonical_repo_id "$REPO")"
 fi
 
 # Gateway + backing-store reachability check (clear message; don't fall over
@@ -119,13 +126,21 @@ if [ "$ACTION" = "list" ] || [ "$ACTION" = "list-all" ]; then
   else HDR="Full queue"; LIMIT=500; fi
   echo "== $HDR =="
   RESPONSES=()
+  # Query every historical alias of REPO (not just its current canonical
+  # spelling) so tasks queued before this repo's ids were unified — e.g.
+  # under the literal "AI" string — still surface here instead of looking
+  # orphaned. Non-master repos alias only to themselves (one query, as before).
+  REPO_ALIASES="$(repo_aliases_for "$REPO")"
   for st in $OPEN_STATUSES; do
     if [ "$ACTION" = "list" ]; then
-      ARGS="{\"repo\":\"$REPO\",\"status\":\"$st\",\"limit\":$LIMIT}"
+      for r in $REPO_ALIASES; do
+        ARGS="{\"repo\":\"$r\",\"status\":\"$st\",\"limit\":$LIMIT}"
+        RESPONSES+=("$(mcp_call tasks_list "$ARGS")")
+      done
     else
       ARGS="{\"status\":\"$st\",\"limit\":$LIMIT}"
+      RESPONSES+=("$(mcp_call tasks_list "$ARGS")")
     fi
-    RESPONSES+=("$(mcp_call tasks_list "$ARGS")")
   done
   python3 -c "
 import sys,json

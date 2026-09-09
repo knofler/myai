@@ -390,6 +390,8 @@ export async function publishSubmission(
     changelog: manifest.changelog,
     artifactUri: stagingKey,
     declaredTools: manifest.capabilities.declaredTools,
+    networkAllowlist: manifest.capabilities.networkAllowlist,
+    resourceLimits: manifest.capabilities.resourceLimits,
   });
 
   return { ok: true, listingVersion, warnings: scanResult.warnings };

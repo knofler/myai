@@ -92,6 +92,10 @@ export const AUDIT_ACTIONS = [
   // Master KMS key rotation (ADR-010 §3.7, envelope encryption) — re-wraps
   // every tenant's DEK; tenantId is 'system' since this is a cross-tenant op.
   'masterkey.rotate',
+  // GATEWAY_LOCAL_TOKEN self-rotation (`myai rotate-keys local`, core/local-token.ts)
+  // — tenantId is 'system' since the local-bridge token is process-wide, not
+  // per-tenant.
+  'localtoken.rotate',
   'rbac.denied',
   'billing.update',
   'connector.change',
@@ -141,6 +145,13 @@ export const AUDIT_ACTIONS = [
   'marketplace.artifact_hash_mismatch',
   'marketplace.scan_verdict',
   'marketplace.scan_override',
+  // ADR-027 §3/STRIDE "Repudiation" row: every tool-call attempt the
+  // executeTool sandbox gate denies (undeclared tool, or the maxToolCalls
+  // ceiling) — tagged with {listingId, version, installId} in `detail` so
+  // "what could/did listing X attempt on date Y" is answerable from the
+  // audit trail alone, without runtime state (core/rbac.ts
+  // `assertDeclaredCapability`).
+  'marketplace.sandbox_gate_denied',
   // Tenant MCP tool plugins (mcp/plugin-tools.ts, env-gated) — registry
   // changes (register/update/remove; handler URLs never recorded — they embed
   // tokens) and every proxied invocation (name, ok/error, latency).

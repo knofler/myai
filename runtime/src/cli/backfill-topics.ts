@@ -45,7 +45,10 @@ const SLUGS = BRAIN_TOPICS.filter((t) => t !== 'general').join(', ');
 
 async function agentsInvokeClassify(atom: ScannedAtom): Promise<string | undefined> {
   const mcp = process.env.GATEWAY_MCP || 'http://localhost:3100/mcp';
-  const token = process.env.GATEWAY_LOCAL_TOKEN || 'myai-local-bridge-dev';
+  // No published-default fallback (SECURITY task-d1318e42): the gateway refuses
+  // 'myai-local-bridge-dev' anyway. Loopback callers need no token at all;
+  // non-loopback callers must set GATEWAY_LOCAL_TOKEN.
+  const token = process.env.GATEWAY_LOCAL_TOKEN || '';
   const message = [
     `Classify this agent-memory atom into exactly ONE topic slug from: ${SLUGS}.`,
     'Reply with ONLY the slug — no punctuation, no explanation.',

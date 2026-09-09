@@ -1,5 +1,8 @@
 #!/bin/bash
 # Hook: Secret Scanner — blocks commits with secrets/API keys/.env files
+# BLOCK REASONS GO TO STDERR (>&2): Claude Code only surfaces a failed
+# PreToolUse hook's STDERR. A reason on stdout is invisible to the operator
+# (task-4fd69473) — they see "No stderr output" and retry blind.
 set +e
 
 INPUT=$(cat)
@@ -15,12 +18,12 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null)
 if [[ "$CMD" == *"git add"* ]] \
    && printf '%s' "$CMD" | grep -qE '\.env(\.(local|production|development|test))?($|[[:space:]"'"'"'/])' \
    && ! printf '%s' "$CMD" | grep -qE '\.env\.example'; then
-  echo "BLOCKED: .env files must not be staged"; exit 2
+  echo "BLOCKED: .env files must not be staged" >&2; exit 2
 fi
 
 # Block staging credentials
-[[ "$CMD" == *"git add"*".pem"* ]] && echo "BLOCKED: .pem files must not be staged" && exit 2
-[[ "$CMD" == *"git add"*".key"* ]] && echo "BLOCKED: .key files must not be staged" && exit 2
+[[ "$CMD" == *"git add"*".pem"* ]] && echo "BLOCKED: .pem files must not be staged" >&2 && exit 2
+[[ "$CMD" == *"git add"*".key"* ]] && echo "BLOCKED: .key files must not be staged" >&2 && exit 2
 
 # git add . / -A: check for .env in working tree.
 # Use anchored regex so `git add .env.example` (single file) is NOT mistaken
@@ -31,13 +34,13 @@ if [[ "$CMD" =~ (^|[[:space:]])"git add ."([[:space:]]|$) ]] || \
    [[ "$CMD" =~ (^|[[:space:]])"git add -A"([[:space:]]|$) ]] || \
    [[ "$CMD" =~ (^|[[:space:]])"git add --all"([[:space:]]|$) ]]; then
   ENV=$(git status --porcelain 2>/dev/null | grep -E '^[ AM?]+\.env$|^[ AM?]+\.env\.(local|production|development|test)$' || true)
-  [[ -n "$ENV" ]] && echo "BLOCKED: git add . would stage real .env files" && exit 2
+  [[ -n "$ENV" ]] && echo "BLOCKED: git add . would stage real .env files" >&2 && exit 2
 fi
 
 # On commit: check staged .env files
 if [[ "$CMD" == *"git commit"* ]]; then
   ENVSTAGED=$(git diff --cached --name-only 2>/dev/null | grep -E '\.env$|\.env\.local$|\.env\.production$|\.env\.development$' || true)
-  [[ -n "$ENVSTAGED" ]] && echo "BLOCKED: .env staged for commit" && exit 2
+  [[ -n "$ENVSTAGED" ]] && echo "BLOCKED: .env staged for commit" >&2 && exit 2
 
   # Scan for secret patterns. Pattern fragments are concatenated at runtime
   # so this file itself does NOT contain a literal `BEGIN.PRIVATE.KEY`
@@ -60,7 +63,7 @@ if [[ "$CMD" == *"git commit"* ]]; then
   PAT_MYAI="myai_(live|test)_[A-Za-z0-9]""{20,}"
   COMBINED="${SECRET_PAT_COMBINED:-${PAT_AWS}|${PAT_OPENAI}|${PAT_GH}|${PAT_GCP}|${PAT_PEM}|${PAT_MYAI}}"
   SECRETS=$(git diff --cached -U0 2>/dev/null | grep -iE "$COMBINED" || true)
-  [[ -n "$SECRETS" ]] && echo "BLOCKED: secrets detected in staged changes" && exit 2
+  [[ -n "$SECRETS" ]] && echo "BLOCKED: secrets detected in staged changes" >&2 && exit 2
 fi
 
 exit 0

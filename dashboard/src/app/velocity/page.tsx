@@ -22,9 +22,11 @@ import {
   type VelocityTaskRow,
   type VelocityTrend,
 } from '@/lib/delivery-velocity';
-import { StatCard, Card, EmptyState, THead } from '@/components/ui/card';
+import { StatCard, Card, EmptyState } from '@/components/ui/card';
+import { DataTable, type DataRow } from '@/components/ui/data-table';
 import { PageHeader } from '@/components/page-header';
 import AutoRefresh from '@/components/auto-refresh';
+import { dbUnreachableHint } from '@/lib/db-hint';
 
 export const dynamic = 'force-dynamic';
 
@@ -77,7 +79,7 @@ export default async function VelocityPage() {
       <div className="max-w-7xl mx-auto">
         <PageHeader title="Velocity" subtitle="Tasks shipped/week · cycle time · throughput trend, per repo." />
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
-          Database not reachable — delivery-velocity metrics need the gateway Mongo at :27200.
+          {dbUnreachableHint('delivery-velocity metrics')}
         </div>
       </div>
     );
@@ -156,46 +158,51 @@ export default async function VelocityPage() {
       </Card>
 
       {/* Per-repo breakdown */}
-      <Card title="Per-repo velocity" meta="sorted by tasks shipped" accent="blue">
-        {repos.length === 0 ? (
+      {repos.length === 0 ? (
+        <Card title="Per-repo velocity" meta="sorted by tasks shipped" accent="blue">
           <EmptyState>No shipped tasks yet in this window.</EmptyState>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <THead
-                cols={[
-                  { label: 'Repo' },
-                  { label: `${DEFAULT_VELOCITY_WEEKS}-week` },
-                  { label: 'Shipped', align: 'right' },
-                  { label: '/week', align: 'right' },
-                  { label: 'Median cycle', align: 'right' },
-                  { label: 'p90', align: 'right' },
-                  { label: 'Trend', align: 'right' },
-                  { label: 'Last shipped', align: 'right' },
-                ]}
-              />
-              <tbody>
-                {repos.map((r) => (
-                  <tr key={r.repo} className="border-b border-[rgb(var(--border-subtle))]/60 hover:bg-[rgb(var(--bg-hover))]/40">
-                    <td className="px-4 py-2.5 font-mono text-[rgb(var(--text-primary))]">{r.repo}</td>
-                    <td className="px-4 py-2.5"><WeekBars counts={r.shippedByWeek} /></td>
-                    <td className="px-4 py-2.5 text-right font-mono">{r.totalShipped}</td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[rgb(var(--text-secondary))]">
-                      {(r.totalShipped / DEFAULT_VELOCITY_WEEKS).toFixed(1)}
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-mono">{fmtCycleMs(r.medianCycleMs)}</td>
-                    <td className="px-4 py-2.5 text-right font-mono text-[rgb(var(--text-secondary))]">{fmtCycleMs(r.p90CycleMs)}</td>
-                    <td className="px-4 py-2.5 text-right"><TrendBadge trend={r.trend} /></td>
-                    <td className="px-4 py-2.5 text-right font-mono text-xs text-[rgb(var(--text-muted))]">
-                      {r.lastShippedAt ? r.lastShippedAt.slice(0, 10) : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+        </Card>
+      ) : (
+        <DataTable
+          title="Per-repo velocity"
+          searchPlaceholder="Search repos…"
+          defaultSort="shipped"
+          defaultDesc
+          columns={[
+            { label: 'Repo', sortKey: 'repo', mobile: 'title' },
+            { label: `${DEFAULT_VELOCITY_WEEKS}-week`, mobile: 'detail' },
+            { label: 'Shipped', align: 'right', sortKey: 'shipped', mobile: 'meta' },
+            { label: '/week', align: 'right', sortKey: 'perWeek', mobile: 'detail' },
+            { label: 'Median cycle', align: 'right', sortKey: 'medianCycle', mobile: 'meta' },
+            { label: 'p90', align: 'right', sortKey: 'p90Cycle', mobile: 'detail' },
+            { label: 'Trend', align: 'right', sortKey: 'trend', mobile: 'meta' },
+            { label: 'Last shipped', align: 'right', sortKey: 'lastShipped', mobile: 'detail' },
+          ]}
+          rows={repos.map((r): DataRow => ({
+            id: r.repo,
+            search: r.repo.toLowerCase(),
+            sort: {
+              repo: r.repo,
+              shipped: r.totalShipped,
+              perWeek: r.totalShipped / DEFAULT_VELOCITY_WEEKS,
+              medianCycle: r.medianCycleMs ?? Infinity,
+              p90Cycle: r.p90CycleMs ?? Infinity,
+              trend: r.trend.deltaPct ?? -Infinity,
+              lastShipped: r.lastShippedAt ?? '',
+            },
+            cells: [
+              <span className="font-mono text-[rgb(var(--text-primary))]">{r.repo}</span>,
+              <WeekBars counts={r.shippedByWeek} />,
+              <span className="font-mono">{r.totalShipped}</span>,
+              <span className="font-mono text-[rgb(var(--text-secondary))]">{(r.totalShipped / DEFAULT_VELOCITY_WEEKS).toFixed(1)}</span>,
+              <span className="font-mono">{fmtCycleMs(r.medianCycleMs)}</span>,
+              <span className="font-mono text-[rgb(var(--text-secondary))]">{fmtCycleMs(r.p90CycleMs)}</span>,
+              <TrendBadge trend={r.trend} />,
+              <span className="font-mono text-xs text-[rgb(var(--text-muted))]">{r.lastShippedAt ? r.lastShippedAt.slice(0, 10) : '—'}</span>,
+            ],
+          }))}
+        />
+      )}
 
       <p className="text-xs text-[rgb(var(--text-muted))] mt-4">
         Cycle time = task <code>createdAt</code> (queued) → <code>completedAt</code> (done). Weeks bucket by UTC Monday.

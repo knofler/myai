@@ -94,6 +94,15 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       const tick = async () => {
         try {
           const res = await fetch('/api/notifications?limit=50', { cache: 'no-store' });
+          if (res.status === 401 || res.status === 403) {
+            // Not signed in (e.g. /operator-login): stop polling instead of a
+            // 401 every 15 s for as long as the tab is open (seen 2026-09-07).
+            if (pollTimer) {
+              clearInterval(pollTimer);
+              pollTimer = undefined;
+            }
+            return;
+          }
           const json = await res.json();
           if (!cancelled && Array.isArray(json.notifications)) mergeEntries(json.notifications);
         } catch {

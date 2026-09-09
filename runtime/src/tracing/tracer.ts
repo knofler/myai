@@ -18,12 +18,15 @@
  * for the same (taskId, span name) pair without ever exchanging them — the
  * runner just reports {name, service, startMs, endMs, status} via the
  * `traces_record` MCP tool (see mcp/tools.ts) and this module does the ID math
- * and storage. No OTel collector/exporter is wired up (single self-hosted
- * gateway process); the in-memory ring buffer + `/traces` HTTP viewer below
- * IS the trace backend for this deployment shape.
+ * and storage. By default the in-memory ring buffer + `/traces` HTTP viewer
+ * below IS the trace backend for this deployment shape; setting the standard
+ * OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_EXPORTER_OTLP_TRACES_ENDPOINT env vars
+ * additionally streams every recorded span to a real OTLP collector
+ * (tracing/otlp-export.ts — batched, best-effort, zero extra deps).
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { createChildLogger } from '../shared/logger.js';
+import { enqueueOtlpSpan } from './otlp-export.js';
 
 const log = createChildLogger({ module: 'tracer' });
 
@@ -151,6 +154,7 @@ export function recordSpan(input: RawSpanInput): RecordedSpan | null {
     };
     spans.push(recorded);
     if (spans.length > MAX_SPANS) spans = spans.slice(spans.length - MAX_SPANS);
+    enqueueOtlpSpan(recorded); // no-op unless OTEL_EXPORTER_OTLP_* is configured
     return recorded;
   } catch (err) {
     log.warn({ err }, 'Failed to record span');
@@ -243,11 +247,24 @@ function renderTraceRows(traceId: string): string {
   const min = Math.min(...traceSpans.map((s) => s.startMs));
   const max = Math.max(...traceSpans.map((s) => s.endMs));
   const span = Math.max(1, max - min);
+  // Real nesting depth: walk the parent chain so agent.session indents under
+  // runner.dispatch under gateway.task_claim (capped — spans can arrive with a
+  // parent that was evicted from the ring buffer, or in pathological cycles).
+  const byId = new Map(traceSpans.map((s) => [s.spanId, s]));
+  const depthOf = (s: RecordedSpan): number => {
+    let depth = 0;
+    let parent = s.parentSpanId ? byId.get(s.parentSpanId) : undefined;
+    while (parent && depth < 4) {
+      depth += 1;
+      parent = parent.parentSpanId ? byId.get(parent.parentSpanId) : undefined;
+    }
+    return s.parentSpanId && depth === 0 ? 1 : depth;
+  };
   const rows = traceSpans.map((s) => {
     const left = ((s.startMs - min) / span) * 100;
     const width = Math.max(0.5, ((s.endMs - s.startMs) / span) * 100);
     const color = s.status === 'error' ? '#c94f4f' : SERVICE_COLOR[s.service];
-    const depth = s.parentSpanId ? 1 : 0;
+    const depth = depthOf(s);
     return `
       <div class="row">
         <div class="label" style="padding-left:${depth * 16}px">

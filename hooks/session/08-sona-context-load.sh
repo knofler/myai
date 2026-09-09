@@ -28,24 +28,25 @@ if [ "$TOTAL" -eq 0 ]; then
   exit 0
 fi
 
-# Show stats
-sona_stats
+# One-line summary only (TOKEN task-2a431e9b). The full SONA block —
+# category breakdown, learning rate, and the per-topic pattern context — is
+# boot noise; `myai doctor` (or `sona_stats` directly) shows it on demand.
+HIGH=$(jq '[.[] | select(.confidence >= 0.8)] | length' "$INDEX" 2>/dev/null || echo 0)
 
-# Load context for common task types based on recent state
+# Detected topics from recent state, kept to a compact inline list.
+TAGS=""
 STATE_FILE="$ROOT/state/STATE.md"
 if [ -f "$STATE_FILE" ]; then
-  # Extract likely tags from state file headings and recent work
   TAGS=$(grep -iE '^\#{1,4}\s' "$STATE_FILE" 2>/dev/null | \
     tr '[:upper:]' '[:lower:]' | \
     grep -oE '(docker|vercel|mongo|api|frontend|hooks|deploy|test|git|ci|aws|azure|terraform)' | \
-    sort -u | head -5 || true)
+    sort -u | head -5 | tr '\n' ' ' | sed 's/ $//' || true)
+fi
 
-  if [ -n "$TAGS" ]; then
-    TAG_ARRAY=($TAGS)
-    echo ""
-    echo "Loading context for detected topics: ${TAG_ARRAY[*]}"
-    sona_context_for_task "${TAG_ARRAY[@]}"
-  fi
+if [ -n "$TAGS" ]; then
+  echo "SONA: $TOTAL patterns ($HIGH high-conf) · topics: $TAGS — 'myai doctor' for detail"
+else
+  echo "SONA: $TOTAL patterns ($HIGH high-conf) — 'myai doctor' for detail"
 fi
 
 exit 0

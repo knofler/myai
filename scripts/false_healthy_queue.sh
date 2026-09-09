@@ -38,6 +38,9 @@ STALE_DAYS="${STALE_DAYS:-14}"
 MCP_PORT="${MCP_PORT:-3100}"
 MCP_URL="${MCP_URL:-http://localhost:${MCP_PORT}/mcp}"
 OUT="${FALSE_HEALTHY_OUT:-$REPO_ROOT/state/false-healthy-queue.json}"
+# ADR-021 Phase 3: roster via the shared resolver (honors MANAGED_REPOS_FILE
+# for hermetic tests; gateway DB roster preferred otherwise, txt seed fallback).
+. "$SCRIPT_DIR/lib/repo_paths.sh" 2>/dev/null || true
 REPOS_FILE="${MANAGED_REPOS_FILE:-$REPO_ROOT/config/managed_repos.txt}"
 IGNORE_FILE="${SCHEDULE_IGNORE_FILE:-$REPO_ROOT/config/schedule_ignore.txt}"
 
@@ -91,26 +94,31 @@ if [ -z "$RESP" ]; then
   exit 0
 fi
 
-if [ ! -f "$REPOS_FILE" ]; then
+if ! declare -F repo_paths >/dev/null 2>&1 && [ ! -f "$REPOS_FILE" ]; then
   write_unavailable
-  echo "false_healthy_queue: $REPOS_FILE not found — wrote unavailable artifact" >&2
+  echo "false_healthy_queue: no fleet roster ($REPOS_FILE not found, resolver lib missing) — wrote unavailable artifact" >&2
   exit 0
 fi
 
 IGNORE_REPOS=""
 [ -f "$IGNORE_FILE" ] && IGNORE_REPOS="$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$IGNORE_FILE" | tr '\n' ',')"
 
-# ── expand managed repos → unique (name, gitRoot) pairs (mirrors fleet_resume.sh git_roots) ──
+# ── expand managed repos → unique git roots (mirrors fleet_resume.sh git_roots) ──
+# ADR-021 Phase 3: enumeration via the shared resolver; the inline parse of
+# $REPOS_FILE stays only as the no-lib fallback.
 git_roots() {
-  local line path root
-  while IFS= read -r line; do
-    line="${line%%#*}"; line="$(echo "$line" | xargs 2>/dev/null)"
-    [ -n "$line" ] || continue
-    path="${line/#\~/$HOME}"
+  local path root
+  while IFS= read -r path; do
     [ -d "$path" ] || continue
     root="$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)" || continue
     echo "$root"
-  done < "$REPOS_FILE" | sort -u
+  done < <(
+    if declare -F repo_paths >/dev/null 2>&1; then
+      repo_paths
+    elif [ -f "$REPOS_FILE" ]; then
+      grep -vE '^\s*(#|$)' "$REPOS_FILE" | sed -e 's/[[:space:]]*#.*$//' -e "s|^~/|$HOME/|"
+    fi
+  ) | sort -u
 }
 
 # ── one row per repo: name<TAB>lastCommitEpoch(or empty) ─────────────────────

@@ -27,6 +27,8 @@ export interface ContextServedEvent {
   tokens: number;
   /** Measured legacy file-read boot cost at serve time — the today-vs-brain comparator. */
   baselineTokens?: number;
+  /** Measured wall-clock ms to assemble+serve this context block — the time-to-context comparator. */
+  durationMs?: number;
   /** M2 Team tier — tenant member the boot was served to. Drives per-user savings + the share card. */
   userId?: string;
   sessionId?: string;
@@ -72,6 +74,22 @@ export function estimateLegacyBootTokens(now: number = Date.now()): number | und
   return tokens;
 }
 
+// ── Time-to-context (cold-start latency, today-vs-brain) ────────────────────
+// The brain side is a real measured `durationMs` stamped by the caller around
+// the bundle-assembly call (DB/file reads — typically low tens of ms). The
+// legacy side has no equivalent wall-clock measurement (nobody instruments a
+// human/agent reading STATE.md by hand), so it is derived from the SAME
+// measured baselineTokens used by the cold-start token comparator, at a
+// conservative skim-reading rate. Deriving it from a real per-boot token
+// measurement — rather than a flat constant — keeps the "legacy" side honest
+// and repo-specific instead of a made-up number.
+export const LEGACY_READ_TOKENS_PER_SEC = 8; // ~480 tokens/min skim-reading state+handoff prose/code
+
+export function estimateLegacyReadMs(tokens: number): number {
+  if (!Number.isFinite(tokens) || tokens <= 0) return 0;
+  return Math.round((tokens / LEGACY_READ_TOKENS_PER_SEC) * 1000);
+}
+
 /**
  * Record one context-served event. Fire-and-forget safe: returns false (never
  * throws) when the DB is down or the event is empty, so callers can `void` it.
@@ -83,12 +101,16 @@ export async function recordContextServed(tenantId: string, event: ContextServed
     const baseline = Number.isFinite(event.baselineTokens) && (event.baselineTokens as number) > 0
       ? Math.round(event.baselineTokens as number)
       : undefined;
+    const durationMs = Number.isFinite(event.durationMs) && (event.durationMs as number) >= 0
+      ? Math.round(event.durationMs as number)
+      : undefined;
     await ContinuityMetricModel.create({
       tenantId,
       repo: event.repo?.trim() || 'unknown',
       tool: event.tool,
       tokens: Math.round(event.tokens),
       baselineTokens: baseline,
+      durationMs,
       userId: event.userId?.trim() || undefined,
       sessionId: event.sessionId,
     });
@@ -121,6 +143,24 @@ export interface ColdStartComparison {
   savedPct: number;
 }
 
+/**
+ * Time-to-context: wall-clock cold-start latency, today (legacy) vs brain.
+ * `brain.avgMs` is a real measurement (durationMs stamped around the boot
+ * bundle's assembly call); `legacy.avgMs` is derived from the SAME measured
+ * baselineTokens as the cold-start token comparator, at a conservative
+ * skim-reading rate (see estimateLegacyReadMs) — not a flat constant.
+ */
+export interface TimeToContextComparison {
+  /** Month-to-date boot-path serves with a measured duration. */
+  brain: { boots: number; avgMs: number };
+  /** Derived from the measured legacy token baseline (0 when unmeasured). */
+  legacy: { avgMs: number };
+  /** legacy.avgMs − brain.avgMs (0 when either side unmeasured). */
+  savedMs: number;
+  /** Percent of the legacy wait avoided per boot (0 when unmeasured). */
+  savedPct: number;
+}
+
 export interface ContinuityStats {
   /** Calendar month-to-date (UTC) — the headline number. */
   month: ContinuityBucket;
@@ -132,6 +172,8 @@ export interface ContinuityStats {
   avgTokensPerBoot: number;
   /** Cold-start today-vs-brain comparison (month-to-date). */
   coldStart: ColdStartComparison;
+  /** Time-to-context today-vs-brain comparison (month-to-date). */
+  timeToContext: TimeToContextComparison;
   /** ISO date the month bucket starts at (UTC). */
   monthStart: string;
   repo?: string;
@@ -146,6 +188,15 @@ function emptyColdStart(): ColdStartComparison {
     brain: { boots: 0, avgTokens: 0 },
     legacy: { measuredBoots: 0, avgTokens: 0 },
     savedPerBoot: 0,
+    savedPct: 0,
+  };
+}
+
+function emptyTimeToContext(): TimeToContextComparison {
+  return {
+    brain: { boots: 0, avgMs: 0 },
+    legacy: { avgMs: 0 },
+    savedMs: 0,
     savedPct: 0,
   };
 }
@@ -170,6 +221,7 @@ export async function getContinuityStats(
     byTool: {},
     avgTokensPerBoot: 0,
     coldStart: emptyColdStart(),
+    timeToContext: emptyTimeToContext(),
     monthStart: start.toISOString().slice(0, 10),
     repo: opts.repo,
   };
@@ -185,6 +237,8 @@ export async function getContinuityStats(
       tokens: number;
       baselineTokens: number;
       baselineBoots: number;
+      durationMs: number;
+      durationBoots: number;
     }>([
       { $match: match },
       {
@@ -194,12 +248,16 @@ export async function getContinuityStats(
           tokens: { $sum: '$tokens' },
           baselineTokens: { $sum: { $ifNull: ['$baselineTokens', 0] } },
           baselineBoots: { $sum: { $cond: [{ $gt: [{ $ifNull: ['$baselineTokens', 0] }, 0] }, 1, 0] } },
+          durationMs: { $sum: { $ifNull: ['$durationMs', 0] } },
+          durationBoots: { $sum: { $cond: [{ $gt: [{ $ifNull: ['$durationMs', 0] }, 0] }, 1, 0] } },
         },
       },
     ]);
 
     let bootTokens = 0;
     let baselineSum = 0;
+    let bootDurationMs = 0;
+    let bootDurationBoots = 0;
     for (const row of rows) {
       stats.total.boots += row.boots;
       stats.total.tokens += row.tokens;
@@ -214,6 +272,8 @@ export async function getContinuityStats(
           bootTokens += row.tokens;
           stats.coldStart.legacy.measuredBoots += row.baselineBoots ?? 0;
           baselineSum += row.baselineTokens ?? 0;
+          bootDurationMs += row.durationMs ?? 0;
+          bootDurationBoots += row.durationBoots ?? 0;
         }
       }
     }
@@ -225,6 +285,15 @@ export async function getContinuityStats(
     if (cs.brain.avgTokens > 0 && cs.legacy.avgTokens > 0) {
       cs.savedPerBoot = Math.max(0, cs.legacy.avgTokens - cs.brain.avgTokens);
       cs.savedPct = Math.round((cs.savedPerBoot / cs.legacy.avgTokens) * 100);
+    }
+
+    const ttc = stats.timeToContext;
+    ttc.brain.boots = bootDurationBoots;
+    ttc.brain.avgMs = bootDurationBoots > 0 ? Math.round(bootDurationMs / bootDurationBoots) : 0;
+    ttc.legacy.avgMs = estimateLegacyReadMs(cs.legacy.avgTokens);
+    if (ttc.brain.avgMs > 0 && ttc.legacy.avgMs > 0) {
+      ttc.savedMs = Math.max(0, ttc.legacy.avgMs - ttc.brain.avgMs);
+      ttc.savedPct = Math.round((ttc.savedMs / ttc.legacy.avgMs) * 100);
     }
     return stats;
   } catch (err) {

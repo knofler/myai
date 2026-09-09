@@ -9,6 +9,7 @@ import { estimateCost } from './cost-estimator.js';
 import { withResilience, CircuitOpenError, RateLimitExhaustedError, ProviderMaintenanceError } from './resilience.js';
 import { probeOllamaCached, pickOllamaModel, offlineNotice } from './offline.js';
 import { route } from './router.js';
+import { recordRoutingDecision } from './routing-log.js';
 import { budgetAwareChain, estimateRequestTokens } from './failover.js';
 import {
   applyRetryBudget,
@@ -573,6 +574,7 @@ export async function complete(req: LlmRequest): Promise<LlmResponse | null> {
     const decision = route(req.routingContext);
     chain = buildModeChain(decision.provider, decision.chain);
     modelOverride = decision.model;
+    recordRoutingDecision({ provider: decision.provider, model: decision.model, reason: decision.reason, source: 'complete' });
     log.info({
       messageCount: req.messages.length,
       routedProvider: decision.provider,
@@ -700,6 +702,7 @@ export async function* completeStream(req: LlmRequest): AsyncGenerator<string, L
   const routingDecision = req.routingContext ? route(req.routingContext) : undefined;
 
   if (routingDecision) {
+    recordRoutingDecision({ provider: routingDecision.provider, model: routingDecision.model, reason: routingDecision.reason, source: 'stream' });
     log.info({
       routedProvider: routingDecision.provider,
       routedModel: routingDecision.model,
@@ -827,6 +830,8 @@ export { getProviderHealth, getAllProviderHealth, resetProvider } from './resili
 // the `provider_health` MCP tool / dashboard API Health page.
 export { getRecentDroppedHops } from './failover-backoff.js';
 export type { DroppedHopEvent } from './failover-backoff.js';
+export { getRecentRoutingDecisions } from './routing-log.js';
+export type { RoutingDecisionEvent } from './routing-log.js';
 // Re-export operator maintenance-mode controls for the gateway / MCP tools.
 export {
   enterMaintenance,

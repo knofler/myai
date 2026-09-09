@@ -78,9 +78,23 @@ export const NAV_GROUPS: NavGroup[] = GROUP_DEFS.map((g) => ({
   links: g.hrefs.map(linkByHref),
 }));
 
-// Mobile bottom tab bar shows the 6 thumb-reachable primaries in the original
-// flat journey order; the full grouped set lives in the sidebar + ⌘K palette.
-export const MOBILE_LINKS: NavLink[] = FLAT_LINKS.filter((l) => l.primary).slice(0, 6);
+// Mobile bottom tab bar: at 375px, grid-cols-6 (the old 6-primary layout)
+// squeezed each tab to ~62px — too narrow for a real touch target. Reserving
+// one of the 5 grid columns for a "More" trigger (rendered by nav.tsx, not
+// part of this array) leaves 4 primaries + More = 5 columns, ~75px each.
+const MOBILE_PRIMARY_TAB_COUNT = 4;
+
+export const MOBILE_LINKS: NavLink[] = FLAT_LINKS.filter((l) => l.primary).slice(
+  0,
+  MOBILE_PRIMARY_TAB_COUNT
+);
+
+// Everything not thumb-reachable in the bottom bar overflows into the "More"
+// sheet, in the same flat journey order (remaining primaries first, since
+// they were the next-most-important destinations, followed by the rest).
+export const MOBILE_MORE_LINKS: NavLink[] = FLAT_LINKS.filter(
+  (l) => !MOBILE_LINKS.some((p) => p.href === l.href)
+);
 
 export function isActive(pathname: string, href: string): boolean {
   return href === '/' ? pathname === '/' : pathname.startsWith(href);

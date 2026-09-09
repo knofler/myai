@@ -23,7 +23,7 @@ export function LocaleSwitcher() {
   }
 
   return (
-    <label className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer">
+    <label className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] active:text-[var(--text-primary)] active:bg-[var(--bg-hover)] transition-colors cursor-pointer">
       <span aria-hidden="true" className="text-sm leading-none">🌐</span>
       <span className="sr-only">{t('label')}</span>
       <select

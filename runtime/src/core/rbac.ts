@@ -19,7 +19,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { type CtxRole, type ToolContext, AuthError } from './tenant-context.js';
 import { getLogger } from '../shared/logger.js';
-import { recordAuditEvent } from './audit-log.js';
+import { recordAuditEvent, auditActorFromCtx } from './audit-log.js';
 import { recordShadowDenial } from '../monitoring/rbac-shadow-store.js';
 
 /**
@@ -325,6 +325,10 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   runner_lease_history: 'read',
   runner_heartbeat: 'work',
   runner_liveness: 'read',
+  // Runner-backlog well cursor (task-e9163eb9) — the cross-machine consumed-
+  // count replacing the gitignored, machine-local config/.runner_backlog.cursor.
+  backlog_cursor_get: 'read',
+  backlog_cursor_set: 'work',
   // Repos registry + code graph
   repos_list: 'read',
   repos_status: 'read',
@@ -431,6 +435,7 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   brain_recall_analytics: 'read',
   brain_manifest: 'read',
   brain_bandit_stats: 'read',
+  brain_router_train_readiness: 'read',
   brain_explore: 'read',
   brain_commit: 'work',
   brain_observe: 'work',
@@ -513,6 +518,18 @@ export function assertDeclaredCapability(ctx: ToolContext | undefined, tool: str
       { tool, listingId: sandbox.listingId, version: sandbox.version, installId: sandbox.installId },
       'rbac.sandbox-tool-not-declared',
     );
+    // STRIDE "Repudiation" row (ADR-027 §"Repudiation"): denied attempts must
+    // be answerable from {listingId, version, installId} alone — append to
+    // the same hash-chained trail `assertCapability`'s 403 path uses above.
+    if (ctx?.tenantId) {
+      recordAuditEvent({
+        tenantId: ctx.tenantId,
+        actor: auditActorFromCtx(ctx),
+        action: 'marketplace.sandbox_gate_denied',
+        target: tool,
+        detail: { reason: 'undeclared_tool', listingId: sandbox.listingId, version: sandbox.version, installId: sandbox.installId },
+      });
+    }
     throw new AuthError(
       `sandboxed invocation attempted undeclared tool '${tool}' (ADR-027 §3)`,
       403,
@@ -537,6 +554,22 @@ export function assertDeclaredCapability(ctx: ToolContext | undefined, tool: str
       },
       'rbac.sandbox-tool-call-ceiling',
     );
+    if (ctx?.tenantId) {
+      recordAuditEvent({
+        tenantId: ctx.tenantId,
+        actor: auditActorFromCtx(ctx),
+        action: 'marketplace.sandbox_gate_denied',
+        target: tool,
+        detail: {
+          reason: 'tool_call_ceiling',
+          listingId: sandbox.listingId,
+          version: sandbox.version,
+          installId: sandbox.installId,
+          count: sandbox.toolCallState.count,
+          maxToolCalls: sandbox.resourceLimits.maxToolCalls,
+        },
+      });
+    }
     throw new AuthError(
       `sandboxed invocation exceeded maxToolCalls ceiling (${sandbox.resourceLimits.maxToolCalls}) (ADR-027 §3)`,
       429,

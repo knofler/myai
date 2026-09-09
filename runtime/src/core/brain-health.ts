@@ -126,6 +126,44 @@ const CONTRADICTION_WINDOW_DAYS = 30;
 const DELTA_DEGRADE_WINDOW_DAYS = 30;
 const FRESHNESS_HORIZON_DAYS = 21;
 const CONTRADICTION_PENALTY_PER_EVENT = 10;
+
+/**
+ * A `brain(merge): session/<ref>` merge is how EVERY `wrap up` lands its session
+ * branch on main — routine, healthy operation, not a contradiction. Counting it
+ * as one made the contradictions subscore structurally unreachable: at 10 points
+ * per event it floored at 0 after ten sessions, and 759 such merges had
+ * accumulated in a 30-day window (683 of them routine), so 15% of the composite
+ * was pinned to zero no matter how healthy the brain actually was.
+ *
+ * What IS a divergence: `boot-sync reconcile on <host> (N behind / M ahead)`
+ * (two machines genuinely diverged), `brain(converge): auto-merge origin/main`
+ * (distiller outputs reconciled), and any merge whose subject we do not
+ * recognise — unknown merges count AGAINST health, which is the conservative
+ * direction for a health metric.
+ */
+const ROUTINE_SESSION_MERGE_RE = /^brain\(merge\):\s*session\//;
+
+/** True when a merge-commit subject represents real brain divergence. */
+export function isDivergenceMerge(subject: string): boolean {
+  return !ROUTINE_SESSION_MERGE_RE.test(subject.trim());
+}
+
+/**
+ * Below this many RESOLVED recall events, the live hit-rate is noise and is
+ * excluded from the composite (reported as null) rather than scored as 0. Four
+ * resolved events yielding 0 used to cost a full 15% weight at value 0 while
+ * recall was demonstrably working — a measurement artifact masquerading as a
+ * memory failure. The raw signal is still reported; only the SCORING is gated.
+ */
+const MIN_LIVE_RECALL_SAMPLE = 20;
+
+/**
+ * Same reasoning as MIN_LIVE_RECALL_SAMPLE, for capture coverage: a handful of
+ * observed sessions is not evidence about capture discipline. This bit after
+ * the namespace GC pruned the historical observe buffers — coverage fell to a
+ * 4-sample 0.5 and dragged 15% of the composite with it, on no real signal.
+ */
+const MIN_CAPTURE_COVERAGE_SAMPLE = 20;
 const DELTA_DEGRADE_PENALTY_PER_EVENT = 10;
 const DAY_MS = 86_400_000;
 /** Trailing window (days) sessions are considered "observed" over — shorter than the
@@ -405,8 +443,12 @@ export function gatherBrainHealthSignals(
   }
 
   const sinceIso = new Date(now.getTime() - CONTRADICTION_WINDOW_DAYS * DAY_MS).toISOString();
-  const mergeLog = git(dir, 'log', 'main', '--merges', `--since=${sinceIso}`, '--format=%H');
-  const contradictionCount = mergeLog ? mergeLog.split('\n').filter(Boolean).length : 0;
+  // %s (subject), not %H: the subject is what distinguishes a routine
+  // wrap-up merge from a genuine divergence reconcile. See isDivergenceMerge.
+  const mergeLog = git(dir, 'log', 'main', '--merges', `--since=${sinceIso}`, '--format=%s');
+  const contradictionCount = mergeLog
+    ? mergeLog.split('\n').filter(Boolean).filter(isDivergenceMerge).length
+    : 0;
 
   let captureCoverage: number | null;
   let captureCoverageSampleSize = 0;
@@ -457,8 +499,16 @@ export function scoreBrainHealth(signals: BrainHealthSignals, now: Date = new Da
   const deltaBudget = clamp(100 - signals.deltaDegradeCount * DELTA_DEGRADE_PENALTY_PER_EVENT);
 
   const recall = signals.recallHitRate === null ? null : clamp(signals.recallHitRate * 100);
-  const liveRecall = signals.liveRecallHitRate === null ? null : clamp(signals.liveRecallHitRate * 100);
-  const captureCoverage = signals.captureCoverage == null ? null : clamp(signals.captureCoverage * 100);
+  // Gated on sample size: too few resolved events is noise, and scoring it as
+  // 0 would penalise the composite for a measurement gap (see MIN_LIVE_RECALL_SAMPLE).
+  const liveRecall = signals.liveRecallHitRate === null
+      || signals.liveRecallSampleSize < MIN_LIVE_RECALL_SAMPLE
+    ? null
+    : clamp(signals.liveRecallHitRate * 100);
+  const captureCoverage = signals.captureCoverage == null
+      || (signals.captureCoverageSampleSize ?? 0) < MIN_CAPTURE_COVERAGE_SAMPLE
+    ? null
+    : clamp(signals.captureCoverage * 100);
 
   const weighted: Array<{ value: number; weight: number }> = [
     { value: freshness, weight: 0.25 },

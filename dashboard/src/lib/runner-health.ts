@@ -9,8 +9,11 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { AI_ROOT } from './docs';
-import { connectDB, RunnerHeartbeat, FleetMaintenance } from './db';
+import { connectDB, RunnerHeartbeat, RunnerLease, RunnerLeaseHistory, Task, FleetMaintenance } from './db';
 import { getActiveTenant, tenantFilter } from './tenant';
+import { buildFleetRunners, type FleetRunnerRow, type FleetHeartbeatLike, type FleetLeaseLike, type FleetLeaseHistoryLike, type FleetTaskLabelLike } from './fleet-runners';
+
+export type { FleetRunnerRow } from './fleet-runners';
 
 export interface RunnerRepoHealth {
   repo: string;
@@ -99,6 +102,36 @@ export async function getRunnerLiveness(thresholdMinutes = DEFAULT_LIVENESS_THRE
     lastMachine: latest.machine,
     machines,
   };
+}
+
+/**
+ * Fleet-wide runner registry: one row per machine that has ever heartbeated,
+ * held a lease, or appears in the lease-history runs log for this tenant —
+ * joined with its current online/busy status and last job (see
+ * lib/fleet-runners.ts for the join logic). Powers the "registered runners"
+ * panel so an operator can see every Mac in the `myai-local` pool, not just
+ * the single most-recent heartbeat.
+ */
+export async function getFleetRunners(thresholdMinutes = DEFAULT_LIVENESS_THRESHOLD_MINUTES): Promise<FleetRunnerRow[]> {
+  await connectDB();
+  const tenantId = await getActiveTenant();
+  const tf = tenantFilter(tenantId);
+
+  const [heartbeats, leases, leaseHistory] = await Promise.all([
+    RunnerHeartbeat.find(tf).lean<FleetHeartbeatLike[]>(),
+    RunnerLease.find(tf).lean<FleetLeaseLike[]>(),
+    RunnerLeaseHistory.find(tf).sort({ releasedAt: -1 }).limit(200).lean<FleetLeaseHistoryLike[]>(),
+  ]);
+
+  const taskIds = new Set<string>();
+  for (const l of leases) if (l.taskId) taskIds.add(l.taskId);
+  for (const h of leaseHistory) if (h.taskId) taskIds.add(h.taskId);
+
+  const tasks = taskIds.size > 0
+    ? await Task.find({ ...tf, taskId: { $in: [...taskIds] } }, { taskId: 1, repo: 1, title: 1 }).lean<FleetTaskLabelLike[]>()
+    : [];
+
+  return buildFleetRunners(heartbeats, leases, leaseHistory, tasks, { thresholdMinutes });
 }
 
 export interface FleetMaintenanceStatus {

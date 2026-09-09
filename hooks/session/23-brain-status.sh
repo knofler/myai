@@ -21,7 +21,13 @@ URL="http://localhost:${PORT}/mcp"
 if [ -n "$NO_COLOR" ]; then B='' R='' G='' C='' Y='' D=''
 else B=$'\033[1m'; R=$'\033[0m'; G=$'\033[1;38;5;208m'; C=$'\033[1;36m'; Y=$'\033[1;33m'; D=$'\033[2m'; fi
 
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    # Real precondition failure (missing/broken .git), not "gateway down" —
+    # see hooks/session/17-schedule-status.sh for the incident this pattern
+    # caused. Warn instead of vanishing silently.
+    echo "23-brain-status: cannot resolve repo (not a git repository) — BRAIN banner skipped" >&2
+    exit 0
+}
 
 # Host→gateway calls MUST carry x-gateway-local-token (enforce=true 401s the
 # Docker bridge IP otherwise). Same convention as 17-schedule-status.sh.
@@ -56,6 +62,17 @@ if lc:
     subj = subj.replace("brain(session):", "").replace("brain(handoff):", "").strip()
 open_br = d.get("branches", []) or []
 stashes = d.get("stashes", []) or []
+sync = d.get("sync") or {}
+# statusline badge (scripts/org-statusline.sh reads this): sha + timestamp
+try:
+    import time
+    _bp = os.path.expanduser("~/.myai/statusline-badge.json")
+    try: _prev = json.load(open(_bp))
+    except Exception: _prev = {}
+    _prev.update({"sha": sha[:8], "ts": int(time.time()), "repo": os.path.basename(os.getcwd())})
+    json.dump(_prev, open(_bp, "w"))
+except Exception:
+    pass
 
 # line 1: the orange 🧠 sign
 line1 = "%s🧠 BRAIN%s %s%s%s%s %s· %d sessions · %d handoffs · %d memory · %d ns%s" % (
@@ -69,6 +86,16 @@ if stashes:
 print(line1 + warn)
 if subj:
     print("   %slast: %s%s" % (D, subj, R))
+# task-1195b1a7: local main behind origin/main (pull-on-boot could not
+# fast-forward — usually a diverged clone) is now a LOUD red line, not a
+# silent no-op. RED (bold) so it cannot be mistaken for the routine yellow
+# open-branch/stash markers above.
+behind = sync.get("behind") or 0
+if behind > 0:
+    RED = "\033[1;31m" if not os.environ.get("NO_COLOR") else ""
+    ahead = sync.get("ahead") or 0
+    tag = "DIVERGED" if sync.get("diverged") else "BEHIND"
+    print("   %s⚠️  BRAIN %s: local main is %d commit(s) behind origin/main (ahead %d) - this boot may be missing recent sessions from other machines. Run \"myai brain merge\" to reconcile.%s" % (RED, tag, behind, ahead, R))
 ' 2>/dev/null)
 
 [ -z "$body" ] && exit 0   # gateway down / brain uninitialized — stay silent
@@ -93,6 +120,15 @@ if score is None or grade is None:
     sys.exit(0)
 
 grade_color = {"excellent": G, "good": C, "fair": Y, "poor": Y}.get(grade, C)
+# statusline badge: add the health score next to the sha written above
+try:
+    _bp = os.path.expanduser("~/.myai/statusline-badge.json")
+    try: _prev = json.load(open(_bp))
+    except Exception: _prev = {}
+    _prev.update({"score": score, "grade": grade})
+    json.dump(_prev, open(_bp, "w"))
+except Exception:
+    pass
 
 # trend: last few recorded snapshots (recordBrainHealthSnapshot, throttled to
 # one per hour) rendered as an arrow chain, oldest first.
@@ -117,4 +153,21 @@ print("   %shealth:%s %s%d/100%s (%s)%s%s" % (D, R, grade_color, score, R, grade
 
 printf '%s\n' "$body"
 [ -n "$health_body" ] && printf '%s\n' "$health_body"
+
+# ── BRAIN-2 anchor visibility (warn-only, silent on the happy path) ──────────
+# A missing delta anchor is exactly why an `agent mode -min` boot degrades to
+# the stale blank-agent brief while this banner prints a healthy-looking brain
+# — the failure mode that rode 7 sessions unresolved and cost a whole session
+# re-deriving settled policy. Name it, and only when it is actually wrong: on
+# the happy path this prints nothing, so the banner keeps its 3-line budget.
+for _brainlib in "$ROOT/scripts/lib/brain.sh" "$ROOT/AI/scripts/lib/brain.sh"; do
+    [ -f "$_brainlib" ] && . "$_brainlib" && break
+done
+if command -v brain_last_anchor >/dev/null 2>&1; then
+    _ns=$(brain_repo_name 2>/dev/null)
+    if [ -n "$_ns" ] && [ -z "$(brain_last_anchor "$_ns" 2>/dev/null)" ]; then
+        printf '   %sanchor:%s %sNONE%s %sfor %s — brain_delta({repo}) will degrade to the compiled brief. Pass an explicit since, and check wrap-up ran brain_merge on a real session branch.%s\n' \
+            "$D" "$R" "$Y" "$R" "$D" "$_ns" "$R"
+    fi
+fi
 exit 0

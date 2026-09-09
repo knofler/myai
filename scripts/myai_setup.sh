@@ -31,16 +31,40 @@
 # Idempotent: a brain already resolvable + a config file on disk short-circuits
 # to a status report (exit 0) unless --force.
 #
+# Onboarding upsell (ADR-023 Slice P2 / ADR-039): connecting to an EXISTING
+# brain (path A) is, by definition, a second-or-later machine for that
+# identity — the highest-intent moment to mention the managed alternative to a
+# self-managed remote. A one-line nudge prints after a successful connect,
+# UNLESS the remote already matches the ADR-017 hosted-brain shape (that
+# tenant already pays for managed sync) or $MYAI_SUPPRESS_UPSELL=1 is set.
+# Never fires on path B (new brain) — a fresh brain has no "second machine"
+# signal.
+#
 # Tests: scripts/tests/test_myai_setup.sh
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# `myai setup --machine` is a DIFFERENT concern from the brain wizard below
+# (machine-local infra bring-up, not brain identity) — dispatch to its own
+# script before touching any brain-wizard state, so both live under the one
+# `myai setup` entrypoint the machine-arrival docs point at.
+for _arg in "$@"; do
+  if [ "$_arg" = "--machine" ]; then
+    _rest=()
+    for _a in "$@"; do [ "$_a" = "--machine" ] || _rest+=("$_a"); done
+    exec bash "$HERE/myai_setup_machine.sh" "${_rest[@]}"
+  fi
+done
+
 # shellcheck source=lib/myai_config.sh
 . "$HERE/lib/myai_config.sh"
 
 usage() {
   cat <<'EOF'
 Usage: myai setup [--brain <url>] [--yes] [--force] [--json]
+       myai setup --machine [--dry-run] [--yes] [--install-runner]
+                             [--rebuild-docker] [--json]
 
 The one-question global first-run wizard: connect an EXISTING private brain,
 or provision a NEW one (local by default; optional private remote). Persists
@@ -54,6 +78,19 @@ resolves the same brain.
                    $MYAI_BRAIN_REMOTE is also given.
   --force         re-run the wizard even if already set up.
   --json          machine-readable result on stdout.
+
+  Connecting an existing brain to a self-managed remote prints a one-line
+  Solo-tier cross-machine-sync tip (never for an already-hosted remote, or a
+  paying customer). Set $MYAI_SUPPRESS_UPSELL=1 to turn it off.
+
+  --machine       THE machine-arrival path (a separate concern from the brain
+                   question above): idempotently checks/fixes Dropbox conflict
+                   files, git re-attach across the repo fleet, the Docker
+                   stack, npm's global prefix, and this machine's runner
+                   registration — reporting what it fixed vs. what still needs
+                   you (e.g. `sudo chown ~/.npm`). See myai_setup_machine.sh
+                   -h for its own flags (--dry-run/--yes/--install-runner/
+                   --rebuild-docker/--json).
 
 Auto-triggered by any stateful `myai` command when ~/.myai/config is missing
 (`myai setup`/`doctor`/`root` themselves never re-trigger it). -v/--help
@@ -117,6 +154,22 @@ _setup_show_consent() {
 EOF
 }
 
+# ── onboarding upsell (ADR-023 Slice P2 / ADR-039) ────────────────────────────
+# See the file header note above. Fires only for a self-managed remote — a
+# remote already shaped like the ADR-017 hosted-brain URL means the tenant
+# already pays for managed sync, so a paying customer never gets nagged.
+# Routed to stderr in --json mode so stdout stays pure JSON (same discipline
+# brain_init's own chatter follows elsewhere in this file).
+_setup_maybe_show_upsell() {
+  local remote="$1"
+  [ -n "$remote" ] || return 0
+  [ "${MYAI_SUPPRESS_UPSELL:-0}" = 1 ] && return 0
+  _myai_is_hosted_brain_remote "$remote" && return 0
+  local msg="myai: tip — connecting an existing brain usually means this is a second machine for this identity. Solo (\$49/mo) replaces your self-managed remote with a managed, hosted one (quota + rotation handled for you) — run 'myai open dashboard' then Pricing."
+  if [ "$as_json" = 1 ]; then echo "$msg" >&2
+  else echo "$msg"; fi
+}
+
 # ── path A: connect an existing brain ─────────────────────────────────────────
 _setup_connect_existing() {
   local url="$1"
@@ -149,6 +202,7 @@ _setup_connect_existing() {
   else
     echo "myai: connected — brain verified at $BDIR${verified:+ (remote: $verified)}"
   fi
+  _setup_maybe_show_upsell "$verified"
 }
 
 # ── path B: provision a new brain (local by default, optional remote) ────────

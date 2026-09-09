@@ -1,5 +1,6 @@
 import { StatCard } from '@/components/ui/card';
-import { SourceBadge } from '@/components/ui/badge';
+import { SourceBadge, SessionStatusBadge } from '@/components/ui/badge';
+import { DataTable } from '@/components/ui/data-table';
 import { connectDB, Session, Vector } from '@/lib/db';
 import { getActiveTenant, tenantFilter } from '@/lib/tenant';
 import SessionSearch from './session-search';
@@ -128,74 +129,53 @@ export default async function SessionsPage() {
       {totalVectors > 0 && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8">
           {/* By source */}
-          <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
-            <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))]">
-              <h2 className="text-lg font-semibold">Vectors by source</h2>
-            </div>
-            <table className="card-table w-full text-sm">
-              <thead>
-                <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
-                  <th className="px-4 py-2">Source</th>
-                  <th className="px-4 py-2 text-right">Count</th>
-                  <th className="px-4 py-2 text-right">% of total</th>
-                  <th className="px-4 py-2 text-right">Latest</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
-                {bySource.map((s) => (
-                  <tr key={s._id ?? '(none)'} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
-                    <td className="px-4 py-2">
-                      <SourceBadge source={s._id || '(none)'} />
-                    </td>
-                    <td className="px-4 py-2 text-right text-[rgb(var(--text-primary))] font-mono">
-                      {numFmt.format(s.count)}
-                    </td>
-                    <td className="px-4 py-2 text-right text-xs text-[rgb(var(--text-muted))] font-mono">
-                      {totalVectors > 0 ? ((s.count / totalVectors) * 100).toFixed(1) : 0}%
-                    </td>
-                    <td className="px-4 py-2 text-right text-xs text-[rgb(var(--text-muted))]">
-                      {s.latestAt ? new Date(s.latestAt).toLocaleDateString() : '-'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            title="Vectors by source"
+            searchable={false}
+            defaultSort="count"
+            defaultDesc
+            columns={[
+              { label: 'Source', mobile: 'badge' },
+              { label: 'Count', align: 'right', sortKey: 'count', mobile: 'meta' },
+              { label: '% of total', align: 'right', mobile: 'detail' },
+              { label: 'Latest', align: 'right', sortKey: 'latest', mobile: 'meta' },
+            ]}
+            rows={bySource.map((s) => ({
+              id: s._id ?? '(none)',
+              search: (s._id || '(none)').toLowerCase(),
+              sort: { count: s.count, latest: s.latestAt ? new Date(s.latestAt).getTime() : 0 },
+              cells: [
+                <SourceBadge key="s" source={s._id || '(none)'} />,
+                <span key="c" className="text-[rgb(var(--text-primary))] font-mono">{numFmt.format(s.count)}</span>,
+                <span key="p" className="text-xs text-[rgb(var(--text-muted))] font-mono">{((s.count / totalVectors) * 100).toFixed(1)}%</span>,
+                <span key="l" className="text-xs text-[rgb(var(--text-muted))]">{s.latestAt ? new Date(s.latestAt).toLocaleDateString() : '-'}</span>,
+              ],
+            }))}
+          />
 
           {/* By repo */}
-          <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
-            <div className="px-4 py-3 border-b border-[rgb(var(--border-subtle))]">
-              <h2 className="text-lg font-semibold">Vectors by repo</h2>
-            </div>
-            {byRepo.length === 0 ? (
-              <div className="p-8 text-center text-sm text-[rgb(var(--text-muted))]">No repo data.</div>
-            ) : (
-              <table className="card-table w-full text-sm">
-                <thead>
-                  <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
-                    <th className="px-4 py-2">Repo</th>
-                    <th className="px-4 py-2 text-right">Vectors</th>
-                    <th className="px-4 py-2 text-right">% of total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
-                  {byRepo.map((r) => (
-                    <tr key={r._id ?? '(unknown)'} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
-                      <td className="px-4 py-2 text-[rgb(var(--text-primary))] font-mono text-xs">
-                        {r._id || '(unknown)'}
-                      </td>
-                      <td className="px-4 py-2 text-right text-[rgb(var(--text-primary))] font-mono">
-                        {numFmt.format(r.count)}
-                      </td>
-                      <td className="px-4 py-2 text-right text-xs text-[rgb(var(--text-muted))] font-mono">
-                        {totalVectors > 0 ? ((r.count / totalVectors) * 100).toFixed(1) : 0}%
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+          <DataTable
+            title="Vectors by repo"
+            searchable={false}
+            defaultSort="count"
+            defaultDesc
+            columns={[
+              { label: 'Repo', mobile: 'title' },
+              { label: 'Vectors', align: 'right', sortKey: 'count', mobile: 'meta' },
+              { label: '% of total', align: 'right', mobile: 'meta' },
+            ]}
+            emptyText="No repo data."
+            rows={byRepo.map((r) => ({
+              id: r._id ?? '(unknown)',
+              search: (r._id || '(unknown)').toLowerCase(),
+              sort: { count: r.count },
+              cells: [
+                <span key="r" className="text-[rgb(var(--text-primary))] font-mono text-xs">{r._id || '(unknown)'}</span>,
+                <span key="v" className="text-[rgb(var(--text-primary))] font-mono">{numFmt.format(r.count)}</span>,
+                <span key="p" className="text-xs text-[rgb(var(--text-muted))] font-mono">{((r.count / totalVectors) * 100).toFixed(1)}%</span>,
+              ],
+            }))}
+          />
         </div>
       )}
 
@@ -211,66 +191,45 @@ export default async function SessionsPage() {
       </div>
 
       {/* ── Gateway Sessions Section (existing) ────────────── */}
-      <div className="mb-3 border-t border-[rgb(var(--border-subtle))] pt-6">
-        <h2 className="text-lg font-semibold">Gateway sessions</h2>
-        <p className="text-sm text-[rgb(var(--text-muted))] mt-1">
-          {serialized.length} sessions ({active.length} active, {closed.length} closed)
-        </p>
+      <div className="border-t border-[rgb(var(--border-subtle))] pt-6">
+        <DataTable
+          title="Gateway sessions"
+          meta={`${serialized.length} sessions · ${active.length} active · ${closed.length} closed`}
+          defaultSort="updated"
+          defaultDesc
+          columns={[
+            { label: 'Session ID', mobile: 'title' },
+            { label: 'Agent', mobile: 'meta' },
+            { label: 'Messages', align: 'center', sortKey: 'messages', mobile: 'detail' },
+            { label: 'Status', align: 'center', mobile: 'badge' },
+            { label: 'Created', sortKey: 'created', mobile: 'detail' },
+            { label: 'Last Activity', sortKey: 'updated', mobile: 'meta' },
+          ]}
+          searchPlaceholder="Search session, agent…"
+          emptyText={
+            <>
+              No sessions yet — create one via WebSocket (:3201) or POST /api/sessions.
+            </>
+          }
+          rows={serialized.map((s) => ({
+            id: s._id,
+            search: `${s.sessionId} ${s.agentName} ${s.status}`.toLowerCase(),
+            sort: {
+              messages: s.messageCount,
+              created: s.createdAt ? new Date(s.createdAt).getTime() : 0,
+              updated: s.updatedAt ? new Date(s.updatedAt).getTime() : 0,
+            },
+            cells: [
+              <span key="id" className="font-mono text-xs text-[rgb(var(--text-secondary))]">{s.sessionId.slice(0, 8)}...</span>,
+              <span key="a" className="text-[rgb(var(--text-primary))]">{s.agentName}</span>,
+              <span key="m" className="text-[rgb(var(--text-secondary))]">{s.messageCount}</span>,
+              <SessionStatusBadge key="s" status={s.status} />,
+              <span key="c" className="text-xs text-[rgb(var(--text-muted))]">{s.createdAt ? new Date(s.createdAt).toLocaleString() : '-'}</span>,
+              <span key="u" className="text-xs text-[rgb(var(--text-muted))]">{s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '-'}</span>,
+            ],
+          }))}
+        />
       </div>
-
-      {serialized.length === 0 ? (
-        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-8 text-center">
-          <p className="text-[rgb(var(--text-secondary))]">No sessions yet</p>
-          <p className="text-xs text-zinc-600 mt-1">
-            Create one via WebSocket (:3201) or POST /api/sessions
-          </p>
-        </div>
-      ) : (
-        <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
-          <table className="card-table w-full text-sm">
-            <thead>
-              <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
-                <th className="px-4 py-3">Session ID</th>
-                <th className="px-4 py-3">Agent</th>
-                <th className="px-4 py-3 text-center">Messages</th>
-                <th className="px-4 py-3 text-center">Status</th>
-                <th className="px-4 py-3">Created</th>
-                <th className="px-4 py-3">Last Activity</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
-              {serialized.map((s) => (
-                <tr key={s._id} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
-                  <td className="px-4 py-2.5 font-mono text-xs text-[rgb(var(--text-secondary))]">
-                    {s.sessionId.slice(0, 8)}...
-                  </td>
-                  <td className="px-4 py-2.5 text-[rgb(var(--text-primary))]">{s.agentName}</td>
-                  <td className="px-4 py-2.5 text-center text-[rgb(var(--text-secondary))]">{s.messageCount}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    <span
-                      className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-                        s.status === 'active'
-                          ? 'bg-emerald-500/10 text-emerald-400'
-                          : s.status === 'closed'
-                            ? 'bg-zinc-700/50 text-[rgb(var(--text-muted))]'
-                            : 'bg-yellow-500/10 text-yellow-400'
-                      }`}
-                    >
-                      {s.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-[rgb(var(--text-muted))]">
-                    {s.createdAt ? new Date(s.createdAt).toLocaleString() : '-'}
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-[rgb(var(--text-muted))]">
-                    {s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '-'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 }

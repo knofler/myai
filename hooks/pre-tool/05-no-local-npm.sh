@@ -36,9 +36,9 @@ fi
 if echo "$COMMAND" | grep -qE '^[[:space:]]*npm[[:space:]]' && echo "$COMMAND" | grep -qE '(^|[[:space:]])(-g|--global)([[:space:]]|$)'; then
   if echo "$COMMAND" | grep -qE '\b(install|i|add)\b' \
      && echo "$COMMAND" | grep -qE '\.tgz([[:space:]"'"'"']|$)|@knofler/ai-management'; then
-    echo "BLOCKED (AI_RULES §19): the framework CLI installs ONLY as the bare registry"
-    echo "package — no tarball (.tgz), no scoped @knofler/ai-management, no npm link."
-    echo "  Use exactly:  npm i -g ai-management"
+    echo "BLOCKED (AI_RULES §19): the framework CLI installs ONLY as the bare registry" >&2
+    echo "package — no tarball (.tgz), no scoped @knofler/ai-management, no npm link." >&2
+    echo "  Use exactly:  npm i -g ai-management" >&2
     exit 2
   fi
   exit 0
@@ -46,8 +46,8 @@ fi
 
 # `npm link` is a forbidden framework-CLI install path (AI_RULES §19).
 if echo "$COMMAND" | grep -qE '^[[:space:]]*npm[[:space:]]+link\b'; then
-  echo "BLOCKED (AI_RULES §19): npm link is not an allowed framework-CLI install path."
-  echo "  Use exactly:  npm i -g ai-management"
+  echo "BLOCKED (AI_RULES §19): npm link is not an allowed framework-CLI install path." >&2
+  echo "  Use exactly:  npm i -g ai-management" >&2
   exit 2
 fi
 
@@ -58,18 +58,18 @@ fi
 
 # Block bare npm install/ci/run/start/build/test/lint (POSIX-compatible regex)
 if echo "$COMMAND" | grep -qE '^[[:space:]]*(npm\s+(install|ci|run|start|build|test|lint))'; then
-  echo "BLOCKED: Direct npm commands are not allowed on the host."
-  echo "Use Docker instead:"
-  echo "  docker compose exec app npm install"
-  echo "  docker compose exec app npm run build"
+  echo "BLOCKED: Direct npm commands are not allowed on the host." >&2
+  echo "Use Docker instead:" >&2
+  echo "  docker compose exec app npm install" >&2
+  echo "  docker compose exec app npm run build" >&2
   exit 2
 fi
 
 # Block bare npx (unless it's inside a docker command — already allowed above)
 if echo "$COMMAND" | grep -qE '^[[:space:]]*npx\s+'; then
-  echo "BLOCKED: Direct npx commands are not allowed on the host."
-  echo "Use Docker instead:"
-  echo "  docker compose exec app npx tsc --noEmit"
+  echo "BLOCKED: Direct npx commands are not allowed on the host." >&2
+  echo "Use Docker instead:" >&2
+  echo "  docker compose exec app npx tsc --noEmit" >&2
   exit 2
 fi
 

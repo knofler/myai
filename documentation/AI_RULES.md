@@ -339,20 +339,46 @@ Many machines keep the dev workspace **inside Dropbox**. Dropbox then tries to i
 `node_modules` (tens of thousands of churning files per repo), build output, and cache dir — pegging
 CPU + RAM and making the Mac unusable. These dirs are **regenerable** (reinstalled / rebuilt per
 machine — the framework is Docker-based) and are **never version-controlled**, so syncing them is pure
-waste. **No machine may sync `node_modules` to Dropbox. Build artifacts ride the same rule.**
+waste. **No machine may sync `node_modules` to Dropbox. Build artifacts — and every repo's `.git` dir — ride the same rule.**
 
 * **Mechanism:** Dropbox's official per-folder ignore flag — extended attribute
   `com.dropbox.ignored=1`. The folder stays on local disk; Dropbox stops indexing/syncing it.
-  Reversible: `xattr -d com.dropbox.ignored <dir>`.
-* **Covered dirs:** `node_modules` (mandated) + `.next`, `dist`, `build`, `coverage`, `.turbo`,
-  `.parcel-cache`, `.nuxt`, `.svelte-kit` (same class of regenerable junk).
+  For regenerable artifact dirs this is reversible: `xattr -d com.dropbox.ignored <dir>`.
+  **`.git` is the exception — NOT reversible in practice.** Marking `.git` ignored PURGES it
+  from the Dropbox **server** as a sync-config change, not a user delete — there is no rewind
+  point once it's gone. This is what stranded runner-host on 2026-08-27/28: it hadn't
+  synced since early July, another machine had already ignored its repos' `.git` dirs (the
+  2026-08-26 fleet sweep), and every managed repo's `.git` was simply gone with no Dropbox
+  restore possible. GitHub — not Dropbox — is the source of truth for `.git`; recovery used
+  `scripts/restore_git_metadata.sh` to rebuild from GitHub refs, not a Dropbox restore.
+* **Covered dirs (auto — regenerable junk):** `node_modules` (mandated) + `.next`, `dist`, `build`,
+  `coverage`, `.turbo`, `.parcel-cache`, `.nuxt`, `.svelte-kit`. `node_modules` is *pruned* — marked
+  but never descended into.
+* **`.git` is covered by the SAME rule but handled by a DIFFERENT, gated tool.** `.git` must never
+  sync (thousands of churning objects; already replicated per machine via GitHub; Dropbox racing two
+  machines' writes into the same `.git` corrupts it — measured on exo 2026-09-04: `git status` 0.02s
+  but GitLens ops up to 6.3s, and outright corruption + unreadable unpushed commits on 2026-07-17).
+  **But marking `.git` ignored is DESTRUCTIVE across machines** (deletes it from every other synced
+  Mac, taking local-only commits with it — the 2026-08-27/28 strand). So `.git` is NEVER marked by
+  the always-on hook — it is only *pruned* (never descended into) there, and *marked* solely by the
+  precondition-gated `scripts/dropbox_ignore_git.sh`.
 * **Enforcement:**
-  * `scripts/dropbox_ignore_artifacts.sh` — idempotent; marks artifact dirs ignored. `--all` sweeps
-    the entire Dropbox root (manual fleet sweep); no-arg scopes to the current repo (fast). macOS +
-    Dropbox only; silent no-op elsewhere (Linux/cloud/container).
-  * `hooks/session/20-dropbox-ignore.sh` — runs every session (`--quiet`), re-ignoring any artifact
+  * `scripts/dropbox_ignore_artifacts.sh` — idempotent; marks **build-artifact** dirs (node_modules +
+    the list above) ignored. `--all` sweeps the entire Dropbox root; no-arg scopes to the current repo
+    (fast). **Does NOT mark `.git`.** macOS + Dropbox only; silent no-op elsewhere.
+  * `scripts/dropbox_ignore_git.sh` — the `.git`-specific tool. **READ-ONLY by default:** walks a root
+    (default: the Dropbox folder in your home directory) and reports every `.git` as IGNORED vs SYNCING. `--apply` marks the SYNCING
+    ones, but REFUSES any repo that isn't safe to lose local-only `.git` state — it requires no
+    uncommitted changes, no unpushed commits, no upstream-less local branch, and no stashes, OR a
+    backup tarball written outside Dropbox first (`--backup` → `~/.git-backups/<repo>-git-<ts>.tar.gz`).
+    Prints the cross-machine deletion warning before applying. `--check-current` is the cheap one-line
+    warn `agent mode` (full) runs alongside the Docker naming check. **Rollout order across machines:**
+    push everything on both → apply on machine A → re-clone/restore `.git` on machine B → apply there.
+    macOS + Dropbox only; silent no-op elsewhere.
+  * `hooks/session/20-dropbox-ignore.sh` — runs every session (`--quiet`), re-ignoring any **artifact**
     dir that reappeared (e.g. after an `npm install`) in the current repo. Registered in
     `.claude/settings.json`. Propagated fleet-wide via `update_all.sh` → enforced on **every machine**.
+    (It never marks `.git` — that stays deliberate/gated per above.)
 * **Disk hygiene:** host `node_modules` shouldn't normally exist anyway — `hooks/pre-tool/05-no-local-npm.sh`
   blocks host npm (Docker-only). Stale ones can be deleted outright (regenerable):
   `find ~/code -type d -name node_modules -prune -exec rm -rf {} +`.
@@ -646,7 +672,11 @@ ladder now: **local qwen (trivial, free) → Sonnet 5 (default) → Opus 4.8 (fa
 capped)**, all under the daily/weekly credit pacing. Tests:
 `scripts/tests/test_runner_local_tier.sh` (8 cases, classifier), `scripts/tests/test_ollama_local_tier.sh`
 (resource-guard + git-plumbing unit tests), `scripts/tests/test_ollama_agent.py` (bounded
-tool-loop unit tests against a fake transport).
+tool-loop unit tests against a fake transport). **End-to-end (2026-07-30):**
+`scripts/tests/test_runner_local_tier_e2e.sh` drives the real `cli_task_runner.sh` binary
+against a hermetic mock gateway + throwaway git fixture and proves a genuinely trivial-keyword
+task completes claim → dispatch (local provider) → review start-to-finish with the paid Sonnet
+CLI never invoked — distinct from the unit-level classifier/resource-guard checks above.
 
 ## 19. Framework CLI install — registry-only `npm i -g ai-management`, NO EXCEPTION (fleet-wide, MANDATORY)
 
@@ -679,3 +709,63 @@ State, memory, and continuity live in the git-versioned **brain** (`brain_*` MCP
 `scan`, `new-app`, `connect`, `schedule`, `doctor`, `mcp`, `root`). No out-of-band manual
 file management of framework internals. This is the durable form of the operator directive:
 one install path, one management surface, identical on every Mac.
+
+## 20. Branch-protection required checks must be PRODUCIBLE for that branch's base (fleet-wide, MANDATORY)
+
+> Operator incident (2026-09-05, task-4140bc8c): `knofler/ai_management`'s **`test`** branch
+> protection listed **`Enforce branch policy`** as a required status check. That check is only
+> ever produced by `merge-gate.yml`, declared `on: pull_request: branches: [main]`. A PR whose
+> **base is `test`** therefore NEVER triggers the workflow, the check is never created, and the
+> PR sits `Expected` → `BLOCKED` forever (verified on PR #436: `mergeable=MERGEABLE`,
+> `mergeStateStatus=BLOCKED`). Because `enforce_admins=false` an admin merges straight through
+> and never notices, but a **non-admin cannot merge ANY PR into `test`** — so the rule meant to
+> protect the branch instead pushes collaborators toward direct pushes to `test`, the exact
+> opposite of its intent. This is independent of the Actions billing block: even with CI fully
+> paid, a base=`test` PR would still hang.
+
+**THE RULE — a required status check on branch `X` is only valid if some workflow produces a
+check of that exact name for a PR whose _base_ is `X`.** A required check that no workflow can
+create for that base is a **phantom check**: it never turns green, so it BLOCKS every non-admin
+PR permanently. Before adding (or keeping) any `contexts[]` entry in a branch's
+`required_status_checks`, confirm a workflow exists with `on: pull_request: branches:` INCLUDING
+that branch AND a `job … name:` (or step-emitted check) matching the context string verbatim.
+
+**Two correct shapes when a phantom check is found:**
+- **(a) Drop the check from that branch's required list** — correct when the check is inherently
+  *base-specific* and doesn't belong on the other branch. `Enforce branch policy` is a **main-only
+  gate** (its job asserts "PRs to main must come from `test`/`hotfix/*`"); running it for base=`test`
+  would fail every feature→test PR with a nonsensical error. So it stays required on **`main`**
+  (where `merge-gate.yml` runs) and is **removed from `test`**. ← the shape applied to ai_management.
+- **(b) Extend the workflow to trigger for both bases** (`branches: [main, test]`) — correct when the
+  check is *meaningful for both* (real CI: Lint / Type-check / Test). This is the blueprint standard
+  ci.yml already uses across the fleet's app repos — they trigger `pull_request: [main, test]` so
+  their required checks genuinely run.
+
+**Convention going forward:** the framework's `merge-gate.yml` (`Enforce branch policy`) is
+**main-only** and must be required on `main` ONLY, never on `test`. Real CI checks that gate `test`
+must come from a `ci.yml` whose `pull_request` trigger includes `test`. New repos scaffolded from the
+blueprint inherit shape (b) for CI; do not require `merge-gate`'s check on `test`.
+
+**Fleet audit (2026-09-05).** Swept every non-archived `knofler/*` repo with a protected `test`
+branch, cross-checking each required context against its workflow triggers:
+
+| Repo | test required checks | base=test producer | Verdict |
+|---|---|---|---|
+| **ai_management** | Enforce branch policy | none (merge-gate = main-only) | **FIXED** — removed from `test` (shape a) |
+| repo-2 | Lint, Type-check, Test | ci.yml `[main, test]` | OK |
+| repo-3 | Lint, Type-check, Test | ci.yml `[main, test]` | OK |
+| repo-4 | Lint, Type-check, Test | ci.yml `[main, test]` | OK |
+| repo-5 | Lint, Type-check, Test | ci.yml `[main, test]` | OK |
+| repo-6 | Lint, Type-check, Test | ci.yml `[main, test]` | OK |
+| repo-7 | Lint, Type-check, Test | ci.yml `[main, test]` | OK |
+| repo-8 | Lint, Type-check, Test | ci.yml `[main]` only | **PHANTOM** → fix (b): add `test` to ci.yml |
+| repo-9 | Lint, Type-check, Test | ci.yml `[main]` only | **PHANTOM** → fix (b) |
+| repo-10 | Lint, Type-check, Test, Audit | ci.yml `[main]` only | **PHANTOM** → fix (b) |
+| repo-11 | Lint and Test, Build Docker image | app-ci.yml `[main]` only | **PHANTOM** → fix (b) |
+| repo-12 | Lint with ruff, Run unit tests, Build Docker image | api-ci.yml `[main]` only | **PHANTOM** → fix (b) |
+| repo-13 | Lint, Type-check, Test | no ci.yml at all | **PHANTOM** → fix (b): add ci.yml `[main, test]` |
+
+The 6 PHANTOM repos share ai_management's bug but their checks are **real CI** meaningful for `test`,
+so the correct remedy is **(b)** — extend each repo's ci.yml `pull_request` trigger to `[main, test]`
+(a code commit in each repo; out of scope for this ai_management-only task). Tracked here for a
+follow-up fleet pass; until fixed, non-admin PRs into those repos' `test` branch hang `Expected`.

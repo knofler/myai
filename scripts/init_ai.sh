@@ -151,7 +151,7 @@ for script in remote.sh telegram-setup.sh rotate_state.sh local-ci.sh yolo.sh ba
 done
 
 # ── Install zero-prompt policy + safety hooks at repo root ──────────────
-# The framework's zero-prompt policy (bypassPermissions default + 136-pattern
+# The framework's zero-prompt policy (auto defaultMode — bypass is org-gated since 2026-09-03 — + 136-pattern
 # allow-list + skip-prompt flags) and the PreToolUse/Session/Stop safety hooks
 # live in the master's root .claude/settings.json + hooks/. Claude Code reads
 # these from <repo-root>/.claude/settings.json and <repo-root>/hooks/.
@@ -168,7 +168,9 @@ mkdir -p "$TARGET_DIR/.claude"
 if [ -d "$REPO_DIR/hooks" ]; then
   mkdir -p "$TARGET_DIR/hooks"
   cp -r "$REPO_DIR/hooks/"* "$TARGET_DIR/hooks/" 2>/dev/null || true
-  chmod +x "$TARGET_DIR/hooks/"*/*.sh 2>/dev/null || true
+  # find, not a fixed-depth glob: hook_share modules nest deeper than
+  # hooks/*/*.sh (e.g. hooks/hook_share/timing/timed_hook.sh).
+  find "$TARGET_DIR/hooks" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
   echo "Copied safety hooks → hooks/"
 fi
 # Deep-merge, never overwrite (AI_RULES §14): a raw overwrite here used to

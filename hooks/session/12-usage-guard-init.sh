@@ -18,7 +18,15 @@ else
   exit 0
 fi
 
-METRICS_FILE="$STATE_DIR/.session-metrics"
+# Per-machine-scoped path (task-d4c32377, 2026-08-31): this file is rewritten
+# wholesale at every SessionStart. Two machines' Dropbox-synced session
+# starts within the same propagation window used to race this exact write —
+# see scripts/lib/local_state.sh for the full root-cause writeup.
+local_state_path() { printf '%s' "$1"; }  # fallback if lib below is missing
+LOCAL_STATE_LIB="$ROOT/scripts/lib/local_state.sh"
+[ -f "$LOCAL_STATE_LIB" ] || LOCAL_STATE_LIB="$ROOT/AI/scripts/lib/local_state.sh"
+[ -f "$LOCAL_STATE_LIB" ] && . "$LOCAL_STATE_LIB"
+METRICS_FILE="$(local_state_path "$STATE_DIR/.session-metrics")"
 
 # Find config (master repo: config/, managed project: AI/config/)
 CONFIG_FILE=""

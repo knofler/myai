@@ -1,0 +1,12 @@
+scripts/cli_task_runner.sh:CLI_MCP_ARGS:2899
+scripts/cli_task_runner.sh:CLI_MCP_ARGS:3014
+scripts/gateway_mongo_backup.sh:NET_FLAGS:191
+scripts/gateway_mongo_backup.sh:NET_FLAGS:246
+scripts/gateway_mongo_backup.sh:NET_FLAGS:259
+scripts/mongo_sync.sh:PASSTHROUGH:168
+scripts/mongo_sync.sh:PASSTHROUGH:170
+scripts/myai_setup.sh:_rest:56
+scripts/schedule_task.sh:RESPONSES:161
+scripts/tests/test_check_bash32_arrays.sh:BUMP_FLAGS:100
+scripts/tests/test_check_bash32_arrays.sh:BUMP_FLAGS:117
+scripts/tests/test_check_bash32_arrays.sh:BUMP_FLAGS:39

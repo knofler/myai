@@ -2,6 +2,29 @@
 
 > The developer works across multiple machines (e.g. a work desktop and a home laptop) with the codebase synced via Dropbox. This creates specific challenges that every AI agent and the developer must handle on session start.
 
+> **Setting up a BRAND NEW Mac?** This file assumes the machine is already
+> built — Homebrew, Node, Docker, a clone, the Claude accounts. For a blank box,
+> start at **`documentation/MACHINE_SETUP.md`** (`scripts/bootstrap_mac.sh` +
+> `config/machine_manifest.txt`), which installs that layer and then hands off
+> to `myai setup --machine` below.
+
+---
+
+## THE machine-arrival command
+
+**`myai setup --machine` is the one command that replaces the whole manual checklist below.** Run it the moment you sit down at a Mac that's been away for a while — before Docker, before `git status`, before anything else:
+
+```bash
+myai setup --machine            # idempotent: applies the safe fixes, reports the rest
+myai setup --machine --dry-run  # report only, write nothing
+myai setup --machine --yes      # also installs the runner + rebuilds the Docker stack
+myai setup --machine --json     # machine-readable report (fixed / ok / needsOperator / skipped)
+```
+
+In one pass it: cleans Dropbox conflicted-copy files, checks `.git` re-attachment across the whole repo fleet (`config/managed_repos.txt`), validates/rebuilds this repo's Docker stack (only ever on a detected master checkout — never a `ci-workspaces` clone, and only with `--rebuild-docker`/`--yes`), fixes an unwritable npm global prefix, checks/installs this machine's autonomous runner registration (`--install-runner`/`--yes`), and runs the general `machine_selfheal.sh` pass (Docker credsStore hangs, gateway split-brain, brain remote wiring, git-hooks). It ends with a report split into **fixed** / **ok** / **needs operator** (e.g. `sudo chown -R $(whoami) $(npm config get prefix)`, or a `restore_git_metadata.sh --apply` command for a repo whose remote couldn't be resolved) / **skipped** — never silent about what it couldn't do itself. Exits non-zero when anything still needs you. See `scripts/myai_setup_machine.sh -h` for every flag; `scripts/tests/test_myai_setup_machine.sh` covers it hermetically.
+
+Everything below this section is the manual reference the command automates — read it to understand *why* each step exists, or to run a piece of it by hand when you want finer-grained control than the one-shot command gives you.
+
 ---
 
 ## The Problem
@@ -54,6 +77,35 @@ If `git status` shows unexpected changes or errors, run:
 ```bash
 git checkout -- .  # Only if you're sure all changes were committed last session
 ```
+
+### Step 3b: Fleet-Wide `.git` Preflight (MANDATORY, automatic)
+
+Step 3 above only checks the *current* repo. A machine that has been away for a
+while can come back with `.git` missing from other repos in the fleet entirely
+(Dropbox purges `.git` as a sync-config change when the ignore-flag policy
+sweeps a folder — see `scripts/restore_git_metadata.sh`'s header for the
+2026-08-27 incident this guards against). That must be caught **at boot**, not
+discovered hours into a session on an unrelated repo.
+
+`hooks/session/26-git-fleet-preflight.sh` runs this automatically on every
+session start (dry-run only, never writes anything):
+
+```bash
+./scripts/restore_git_metadata.sh --fleet   # dry-run by default; no --apply
+```
+
+- **All repos attached** → the hook prints nothing. Boot stays quiet.
+- **A repo is missing `.git`** → the hook names the repo and the exact fix
+  command, e.g.:
+  ```
+  GIT FLEET PREFLIGHT: 1 repo(s) need attention (not discovered mid-session):
+    · CONTENT_API — no .git, remote unresolved
+        → fix: add "CONTENT_API  knofler/<repo>" to config/repo_remotes.txt, then: /…/scripts/restore_git_metadata.sh --apply "/…/CONTENT_API"
+  ```
+  Run the printed `--apply` command (adding a `config/repo_remotes.txt` mapping
+  first if the remote could not be resolved) to re-attach it. Never runs
+  `--apply` automatically — the working tree is preserved but the fix is always
+  a manual, reviewed step.
 
 ### Step 4: Rebuild Docker Containers
 
@@ -185,6 +237,18 @@ Nearly every session across ai_management, agentFlow, connect, and playground wa
 4. **`.gitignore`** broadened beyond `*conflicted copy*` to also cover Case-Conflict dedup suffixes, so a conflict file that does slip through is never accidentally staged in the first place.
 
 Tests: `scripts/tests/test_sync_guard.sh` (skip-if-identical + lock semantics), `scripts/tests/test_git_hooks_conflict_guard.sh` (installer + commit-block behavior).
+
+---
+
+## Root Cause + Durable Fix, layer 2 — hook-written ephemeral state (DEVOPS, 2026-08-31)
+
+The 2026-07-20 fix closed the `update_all.sh` push-down path, but conflicted copies kept recurring — `hooks/session/02-dropbox-conflicts.sh`'s workspace-wide sweep was still finding them weeks later, several explicitly `.state/.*metrics` files. That fix only covered files `update_all.sh` copies from the master into managed repos; it never covered files a hook writes locally at every session.
+
+**Root cause:** a handful of hook-written scratch files — `state/.session-metrics` (session-start + every tool call), `state/.autosave-metrics` (every tool call — the hottest write path in the framework), `state/.token-metrics` and `state/.token-rolling-cache` (every tool call / session start) — are rewritten wholesale (`cat > file`) on a shared path. Their content is 100% machine/session-local (wall-clock counters, a dedup key keyed off *this* machine's `~/.claude/projects/**/*.jsonl` transcript path) — no hook ever needs to read another machine's copy. Because the repo is a literal Dropbox-synced path shared by every Mac (not separate clones), two machines with sessions open in the same propagation window raced these exact writes, dozens of times per session — a far higher-frequency race than the once-per-`update_all.sh`-run case layer 1 fixed.
+
+**Fix (`scripts/lib/local_state.sh`):** `local_state_path` appends a sanitized short-hostname suffix to these four paths, so each machine reads and writes its own file (`state/.session-metrics.<hostname>`, etc.) — no shared path, no race, independent of timing. This also fixed a latent correctness bug, not just a cosmetic one: before this fix a machine could silently read another machine's dedup/rolling-window counters (whichever synced last) and treat them as its own. `.gitignore` broadened to the wildcard form (`state/.session-metrics*` etc.) to match. Deliberately NOT applied to `state/.yolo`, `state/.mongo_primary`, `state/.telegram-active-host` — those are intentionally shared cross-machine singletons (operator toggles, "last active host"), rewritten rarely, not the observed offenders.
+
+Tests: `scripts/tests/test_local_state_path.sh` (suffix/path unit tests + an end-to-end check that two simulated machines, via a PATH-shadowed `hostname` stub, never touch each other's file).
 
 ---
 

@@ -52,7 +52,10 @@ else
 fi
 
 # 2. Scan repository rulesets for an automatic-Copilot-review requirement.
-rules_json="$(gh api "repos/$REPO/rulesets" 2>/dev/null || echo '')"
+#    --paginate: the rulesets endpoint pages at 30; a copilot ruleset on page 2
+#    would otherwise be missed and this audit would falsely report "clean"
+#    (MYTHOS: a scan that silently truncates is a guard that silently passes).
+rules_json="$(gh api --paginate "repos/$REPO/rulesets" 2>/dev/null || echo '')"
 found=0
 if [ -n "$rules_json" ] && echo "$rules_json" | grep -qi 'copilot'; then
   found=1

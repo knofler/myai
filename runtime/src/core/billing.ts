@@ -59,8 +59,10 @@ export function entitlementReason(state: BillingState): string | null {
 
 // ── Per-plan entitlement limits (self-serve tier gating) ───────
 // The single source of truth for what each tier unlocks. Mirrored verbatim in
-// dashboard/src/lib/billing.ts (same discipline as isSubscriptionActive) so the
-// gateway gate, the dashboard UI, and the checkout/webhook agree 1:1 on limits.
+// dashboard/src/lib/plan-limits.ts (same discipline as isSubscriptionActive) so
+// the gateway gate, the dashboard UI, and the checkout/webhook agree 1:1 on
+// limits — enforced by tests/unit/plan-limits-parity.test.ts (drift on either
+// side fails `npm test`).
 //
 // A limit of -1 means "unlimited". `brainMaxAtoms` bounds the git-versioned
 // brain store; `teamSeats` bounds User rows per tenant; `hostedBrain` unlocks
@@ -86,13 +88,16 @@ export interface PlanLimits {
    *  internal, deployment-wide execution cap that throttles/stops calls) and
    *  from the cost-anomaly detector (fraud/runaway spend). */
   includedSpendUsd: number;
+  /** Cross-machine "who's doing what" Team Activity panel on /fleet
+   *  (GO_LIVE_PLAN Team tier). Free/Solo are single-seat — nothing to show. */
+  teamFleetConsole: boolean;
 }
 
 export const PLAN_LIMITS: Readonly<Record<TenantPlan, PlanLimits>> = {
-  free: { brainMaxAtoms: 500, teamSeats: 1, hostedBrain: false, requestsPerMin: 60, monthlyRequests: 10_000, includedSpendUsd: 5 },
-  solo: { brainMaxAtoms: 5_000, teamSeats: 1, hostedBrain: true, requestsPerMin: 300, monthlyRequests: 200_000, includedSpendUsd: 50 },
-  team: { brainMaxAtoms: 50_000, teamSeats: 10, hostedBrain: true, requestsPerMin: 1_000, monthlyRequests: 2_000_000, includedSpendUsd: 250 },
-  scale: { brainMaxAtoms: -1, teamSeats: -1, hostedBrain: true, requestsPerMin: -1, monthlyRequests: -1, includedSpendUsd: -1 },
+  free: { brainMaxAtoms: 500, teamSeats: 1, hostedBrain: false, requestsPerMin: 60, monthlyRequests: 10_000, includedSpendUsd: 5, teamFleetConsole: false },
+  solo: { brainMaxAtoms: 5_000, teamSeats: 1, hostedBrain: true, requestsPerMin: 300, monthlyRequests: 200_000, includedSpendUsd: 50, teamFleetConsole: false },
+  team: { brainMaxAtoms: 50_000, teamSeats: 10, hostedBrain: true, requestsPerMin: 1_000, monthlyRequests: 2_000_000, includedSpendUsd: 250, teamFleetConsole: true },
+  scale: { brainMaxAtoms: -1, teamSeats: -1, hostedBrain: true, requestsPerMin: -1, monthlyRequests: -1, includedSpendUsd: -1, teamFleetConsole: true },
 } as const;
 
 /** Parses an optional numeric env override; `undefined` when unset/blank/NaN
@@ -117,8 +122,9 @@ function numEnv(name: string): number | undefined {
  * without a redeploy — e.g. loosening `free` during a launch promo, or
  * tightening every tier during an incident. `-1` (unlimited) is a valid
  * override value. Only these two fields are env-tunable — the entitlement
- * fields (`brainMaxAtoms`, `teamSeats`, `hostedBrain`, `includedSpendUsd`) stay
- * the hardcoded values mirrored verbatim in dashboard/src/lib/billing.ts.
+ * fields (`brainMaxAtoms`, `teamSeats`, `hostedBrain`, `includedSpendUsd`,
+ * `teamFleetConsole`) stay the hardcoded values mirrored verbatim in
+ * dashboard/src/lib/plan-limits.ts (re-exported by dashboard/src/lib/billing.ts).
  */
 function rateLimitOverrides(plan: TenantPlan, base: PlanLimits): Pick<PlanLimits, 'requestsPerMin' | 'monthlyRequests'> {
   const tier = plan.toUpperCase();
@@ -152,6 +158,13 @@ export function canAddSeat(plan: TenantPlan, currentSeats: number): boolean {
 /** Is the managed hosted-brain remote available on this plan? */
 export function hasHostedBrain(plan: TenantPlan): boolean {
   return planLimits(plan).hostedBrain;
+}
+
+/** Team-tier gate for the /fleet "Team Activity" panel — the cross-machine
+ *  view of every teammate's latest sweep on a shared tenant. Free/Solo are
+ *  single-seat, so there is nothing to show; Team/Scale unlock it. */
+export function hasTeamFleetConsole(plan: TenantPlan): boolean {
+  return planLimits(plan).teamFleetConsole;
 }
 
 // ── Stripe price ↔ plan mapping (pure; the map is injected) ────

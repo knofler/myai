@@ -171,6 +171,42 @@ export function fetchBanditStats(): Promise<BanditStats | null> {
   return callGateway<BanditStats>('brain_bandit_stats', {});
 }
 
+// ── Router-training readiness (BRAIN B-7.1, task-7fdc970b) ──────────────────
+// Mirrors the gateway `brain_router_train_readiness` tool
+// (runtime/src/repos/router-train-readiness.ts → brain_router_train_ready.py):
+// labeled route-prediction traces banked vs the 500-trace LoRA training
+// floor, plus the trailing ingestion rate and ETA to that floor. A readiness
+// CHECK only — training itself stays gated/manual (train_router_lora.py).
+
+export interface RouterTrainSources {
+  liveRouteEvalLabeled: number;
+  harvestedSpikeLabeled: number;
+}
+
+export interface RouterTrainIngestion {
+  windowDays: number;
+  recentLabeled: number;
+  perDay: number;
+}
+
+export interface RouterTrainReadiness {
+  available: boolean;
+  ready: boolean;
+  traceCount: number;
+  minTracesRequired: number;
+  tracesRemaining: number;
+  sources: RouterTrainSources;
+  ingestion: RouterTrainIngestion;
+  /** 0 when ready; null when nothing labeled landed in the window. */
+  etaDays: number | null;
+  estimatedReadyAt: string | null;
+  trainingStatus: string;
+}
+
+export function fetchRouterTrainReadiness(): Promise<RouterTrainReadiness | null> {
+  return callGateway<RouterTrainReadiness>('brain_router_train_readiness', {});
+}
+
 /** Render a brain UTC stamp (`YYYYMMDDTHHMMSSZ`) as a locale date-time; falls
  *  back to the raw value when it isn't the expected shape. */
 export function formatBrainStamp(stamp?: string): string {

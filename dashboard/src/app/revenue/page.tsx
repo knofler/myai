@@ -27,6 +27,7 @@ import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
 import AutoRefresh from '@/components/auto-refresh';
 import Link from 'next/link';
+import { dbUnreachableHint } from '@/lib/db-hint';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,7 +62,7 @@ export default async function RevenuePage() {
       <div className="max-w-7xl mx-auto">
         <PageHeader title="Revenue" subtitle="MRR, ARR, retention, churn, and LTV across all tenants." />
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
-          Database not reachable — revenue metrics need the gateway Mongo at :27200.
+          {dbUnreachableHint('revenue metrics')}
         </div>
       </div>
     );

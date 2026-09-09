@@ -29,6 +29,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useTenant } from '@/lib/tenant-context';
 import { ConsentCheckbox } from '@/components/consent-checkbox';
+import { RegionSelect } from '@/components/region-select';
+import type { TenantRegion } from '@/lib/residency';
 
 const STEPS = ['Sign up', 'Connect a repo', 'Queue a task', 'Watch it ship'] as const;
 
@@ -118,6 +120,8 @@ function OnboardingWizardInner() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // ADR-024 Phase 2b — data-residency region, defaults to 'us' (the schema default).
+  const [region, setRegion] = useState<TenantRegion>('us');
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -172,7 +176,13 @@ function OnboardingWizardInner() {
     setBusy(true);
     setError(null);
     try {
-      const { apiKey: key } = await signup({ name: name.trim(), email: email.trim(), password, acceptTerms: agreed });
+      const { apiKey: key } = await signup({
+        name: name.trim(),
+        email: email.trim(),
+        password,
+        acceptTerms: agreed,
+        region,
+      });
       setApiKey(key ?? null); // always present here (no inviteToken)
       if (requestedPlan && key) {
         await startCheckout(requestedPlan, key);
@@ -272,6 +282,7 @@ function OnboardingWizardInner() {
                 <span className="block text-xs text-[rgb(var(--text-muted))] mb-1">Password</span>
                 <input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" className={inputCls} minLength={8} required />
               </label>
+              <RegionSelect value={region} onChange={setRegion} />
               <ConsentCheckbox checked={agreed} onChange={setAgreed} />
               <button
                 type="submit"

@@ -18,11 +18,35 @@
 # Env: GATEWAY_MCP (default http://localhost:3100/mcp)
 set -euo pipefail
 GATEWAY_MCP=${GATEWAY_MCP:-http://localhost:3100/mcp}
+# /health/deep (the Mongo-pinging deep check) is served by the HTTP server on
+# GATEWAY_HTTP_PORT (default 3200), NOT the MCP port (3100 serves only the shallow
+# /health). Probing 3100/health/deep returns 404 -> mongodb=unknown -> this script
+# REFUSES to ingest a perfectly good schedule. Same bug was fixed in
+# schedule_task.sh (2026-07-xx) but this script was missed; found 2026-08-27 when
+# `schedule plan` could not register its plan on a healthy gateway.
+# Override with GATEWAY_HTTP_PORT / GATEWAY_HEALTH_BASE.
+GATEWAY_HTTP_PORT=${GATEWAY_HTTP_PORT:-3200}
+GATEWAY_HEALTH_BASE=${GATEWAY_HEALTH_BASE:-$(printf '%s' "${GATEWAY_MCP%/mcp}" | sed -E "s#:[0-9]+\$#:${GATEWAY_HTTP_PORT}#")}
 . "$(dirname "$0")/lib/gateway.sh" 2>/dev/null || GATEWAY_LOCAL_TOKEN="${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}"
 FORCE=false; [ "${1:-}" = "--force" ] && FORCE=true
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
-AI_DIR="$ROOT/AI"; [ -d "$AI_DIR" ] || AI_DIR="$ROOT"
+# Resolve by where the ARTIFACT is, not by which directory happens to exist.
+# The MASTER checkout carries a leftover `AI/` subdir (myai init was once run
+# against it — see the signpost in AI/state/AI_AGENT_HANDOFF.md), so the old
+# bare `[ -d "$ROOT/AI" ]` test resolved to $ROOT/AI on master, looked for
+# AI/plan/schedule.json, found nothing and exited 0 — `schedule plan` reported
+# success while ingesting NOTHING. Managed repos are unaffected: their artifact
+# genuinely lives under AI/.
+AI_DIR=""
+for _cand in "$ROOT/AI" "$ROOT"; do
+    if [ -f "$_cand/plan/schedule.json" ]; then AI_DIR="$_cand"; break; fi
+done
+# No artifact in either layout — keep the legacy preference so the message below
+# names the path a managed repo would use.
+if [ -z "$AI_DIR" ]; then
+    AI_DIR="$ROOT/AI"; [ -d "$AI_DIR" ] || AI_DIR="$ROOT"
+fi
 ART="$AI_DIR/plan/schedule.json"
 SENTINEL="$AI_DIR/state/.schedule-ingested"
 [ -f "$ART" ] || { echo "no schedule artifact at $ART — nothing to ingest"; exit 0; }
@@ -40,7 +64,7 @@ fi
 # vanish into a broken store (2026-07-06 localhost:27017-misdirection
 # incident). /health/deep actually pings Mongo and returns non-2xx when down.
 _deep_rc=0
-_deep="$(curl -s -m 8 -w '\n%{http_code}' "${GATEWAY_MCP%/mcp}/health/deep" 2>/dev/null)" || _deep_rc=$?
+_deep="$(curl -s -m 8 -w '\n%{http_code}' "${GATEWAY_HEALTH_BASE}/health/deep" 2>/dev/null)" || _deep_rc=$?
 _deep_status="${_deep##*$'\n'}"
 _deep_body="${_deep%$'\n'*}"
 if [ $_deep_rc -ne 0 ] || [ -z "$_deep_status" ]; then

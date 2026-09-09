@@ -1,4 +1,4 @@
-FROM node:20-slim AS builder
+FROM node:24-slim AS builder
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ RUN npx tsc
 
 # ── Production ──────────────────────────────────
 
-FROM node:20-slim
+FROM node:24-slim
 
 # git: the brain_* MCP tools (core/brain.ts, distill.ts, team-brain.ts) shell out
 # to git against the bind-mounted ~/.myai/brain repo — without it every brain tool

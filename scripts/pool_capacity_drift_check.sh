@@ -56,6 +56,17 @@ export POOL_CAPACITY_DRIFT_STATUS_OUT="${POOL_CAPACITY_DRIFT_STATUS_OUT:-$REPO_R
 
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
+# Refresh the snapshot first so "recorded" is the reconciled pool ledger, not a
+# figure from the last runner fire (2026-09-08): the runner does not fire in the
+# weekday interactive window, so without this every afternoon of interactive work
+# read as "drift". With the refresh, DRIFT means a real bookkeeping fault — the
+# ledger could not be raised to what the transcripts show (unreadable transcripts,
+# wrong CLAUDE_CONFIG_DIR, a failed write), or the ledger is ABOVE the transcripts.
+# Skipped when the caller supplies its own POOL_CAPACITY_OUT (tests / fixtures) or
+# sets POOL_CAPACITY_DRIFT_REFRESH=off.
+if [ -z "${POOL_CAPACITY_OUT:-}" ] && [ "${POOL_CAPACITY_DRIFT_REFRESH:-on}" = "on" ] && [ -x "$SCRIPT_DIR/pool_capacity_snapshot.sh" ]; then
+    CLAUDE_CONFIG_DIR="$CFG" bash "$SCRIPT_DIR/pool_capacity_snapshot.sh" >/dev/null 2>&1 || true
+fi
 RESULT="$("$PY" "$SCRIPT_DIR/lib/pool_capacity_drift.py" "$OUT" "$CFG" "$TOL_PCT" "$TOL_FLOOR" 2>&1)"
 RC=$?
 

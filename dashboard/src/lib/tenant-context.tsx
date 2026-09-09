@@ -15,6 +15,7 @@ import {
   useMemo,
   useState,
 } from 'react';
+import type { TenantRegion } from '@/lib/residency';
 
 export interface TenantSession {
   tenantId: string;
@@ -60,6 +61,11 @@ export interface SignupInput {
    *  Use" checkbox. Recorded per tenant (version + timestamp) on the gateway;
    *  REQUIRED there when LEGAL_CONSENT_REQUIRED=1. */
   acceptTerms?: boolean;
+  /** ADR-024 Phase 2b — data-residency region to pin the new tenant to
+   *  ("choose your data region" signup step). Only meaningful on the
+   *  fresh-tenant path; ignored (the gateway already has a pinned region) on
+   *  invite joins. Absent → the gateway's 'us' schema default. */
+  region?: TenantRegion;
 }
 
 interface TenantContextValue {

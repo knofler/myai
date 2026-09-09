@@ -33,9 +33,19 @@ set +e
 command -v jq >/dev/null 2>&1 || exit 0
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-[ -n "$HOOK_DIR" ] || exit 0
+if [ -z "$HOOK_DIR" ]; then
+    # Real precondition failure — the hook can't resolve its own directory
+    # from $0/BASH_SOURCE. Same class of bug as the pre-fix
+    # hooks/session/18-machine-selfheal.sh (2026-08-27 incident). Warn
+    # instead of vanishing silently.
+    echo "07-brain-observe: cannot resolve own directory from \$0 ($0) — W1.1 observation skipped" >&2
+    exit 0
+fi
 ROOT="$(cd "$HOOK_DIR/../.." 2>/dev/null && pwd)"
-[ -n "$ROOT" ] || exit 0
+if [ -z "$ROOT" ]; then
+    echo "07-brain-observe: cannot resolve repo root from $HOOK_DIR — W1.1 observation skipped" >&2
+    exit 0
+fi
 LIB="$ROOT/scripts/lib/brain.sh"
 [ -f "$LIB" ] || exit 0
 # shellcheck source=../../scripts/lib/brain.sh

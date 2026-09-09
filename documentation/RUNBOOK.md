@@ -130,7 +130,7 @@ that decision belongs to the **master checkout**, not this workspace.
 ```bash
 docker run --rm alpine df -h /                          # VM disk back under ~80%
 docker ps --format '{{.Names}}\t{{.Status}}' | grep myai-mongo   # "Up X" not "Restarting"
-docker exec myai-mongo mongosh --eval 'db.runCommand({ping:1})' --quiet 2>&1 | grep -q '"ok" : 1' && echo "mongo OK"
+docker exec myai-mongo mongosh --eval 'db.runCommand({ping:1})' --quiet 2>&1 | grep -q 'ok: 1' && echo "mongo OK"   # mongosh 2.x prints `{ ok: 1 }`
 ```
 
 If the gateway container was also affected (restarted mid-panic, picked up a
@@ -160,32 +160,38 @@ in the session archive.
 ### Verify (read-only)
 
 ```bash
-docker inspect --format='{{.Created}}' myai-gateway         # image build/creation timestamp
+docker inspect --format='{{.Image}}' myai-gateway | xargs docker image inspect --format='{{.Created}}'   # IMAGE build timestamp — the honest signal
 git log -1 --format='%cI %h %s' -- runtime/                 # latest commit touching runtime/
 git log -1 --format='%cI %h %s' -- dashboard/                # same for dashboard/, if relevant
 ```
 
 If the latest `runtime/`-touching commit's timestamp is **after** the
-container's `Created` timestamp, the running image predates that code — the
-gateway is stale. (This is a live, real example as of this session: the
-running `myai-gateway` container was created `2026-07-26T03:56:46Z`, but
-`runtime/` has a commit at `2026-07-26T09:27:52Z` — i.e. the gateway is
-currently serving code from before that merge.)
+**image build** timestamp, the running image predates that code — the
+gateway is stale. Do NOT use the container's own `Created` timestamp
+(`docker inspect --format='{{.Created}}' myai-gateway`) as the age signal: a
+plain `docker compose up -d` recreates the container from whatever image
+already exists, so a container recreated today from a July image looks
+fresh while serving stale code. (Real example, 26 Jul 2026: `runtime/` had a
+commit at `2026-07-26T09:27:52Z` newer than the running gateway's build —
+i.e. the gateway was serving code from before that merge.)
 
-You can also check the gateway's self-reported health for corroboration:
+You can also check the gateway's self-reported health for corroboration —
+**on port 3200** (`GATEWAY_HTTP_PORT`, the Express HTTP API; port 3100 is
+the MCP transport, whose own minimal `/health` returns
+`{"server":"myai-framework"}` and which has NO `/health/deep` route at all,
+so `curl localhost:3100/health/deep` 404s even on a perfectly fresh gateway
+— do not read that 404 as staleness, a July session made exactly that
+misdiagnosis):
 
 ```bash
-curl -sf http://localhost:3100/health/deep | python3 -m json.tool
+curl -sf http://localhost:3200/health/deep | python3 -m json.tool
 ```
 
-A `404`/`Cannot GET /health/deep` here (curl prints nothing, `json.tool`
-errors `Expecting value`) is itself strong corroborating evidence, not a
-separate bug — it means the running image predates the commit that added the
-route (`runtime/src/core/server.ts`). This is exactly what the live check
-above found in this session: the running `myai-gateway` container was
-created before the newest `runtime/` commit, and `/health/deep` 404s while
-`git grep` confirms the route exists in the current `runtime/src` — textbook
-stale-image signature.
+A `404` **on 3200** (curl prints nothing, `json.tool` errors `Expecting
+value`) is corroborating evidence: it means the running image predates the
+commit that added a route that `git grep` confirms exists in the current
+`runtime/src/core/server.ts`. A healthy fresh gateway returns
+`"status": "healthy"` JSON here.
 
 ### Fix — MASTER CHECKOUT ONLY
 
@@ -204,8 +210,8 @@ master-checkout rebuild") rather than run the compose commands yourself.
 ### Confirm
 
 ```bash
-docker inspect --format='{{.Created}}' myai-gateway     # now newer than the runtime/ commit that triggered the fix
-curl -sf http://localhost:3100/health/deep | python3 -m json.tool   # "healthy", no unexpected `degraded` components
+docker inspect --format='{{.Image}}' myai-gateway | xargs docker image inspect --format='{{.Created}}'   # image build now newer than the runtime/ commit that triggered the fix
+curl -sf http://localhost:3200/health/deep | python3 -m json.tool   # "healthy", no unexpected `degraded` components
 ```
 
 ### Rollback
@@ -234,7 +240,7 @@ unhealthy`, MCP tools that touch memory/registry/tasks start failing.
 ### Verify (read-only)
 
 ```bash
-curl -sf http://localhost:3100/health/deep | python3 -m json.tool | grep -A5 '"mongodb"'
+curl -sf http://localhost:3200/health/deep | python3 -m json.tool | grep -A5 '"mongodb"'   # 3200 = Express API port; 3100 is the MCP transport (no /health/deep)
 docker logs --tail 100 myai-gateway | grep -iE 'mongo|atlas|ECONNREFUSED|ENOTFOUND|timed? ?out'
 # confirm it's genuinely Atlas, not local mongo, that's unreachable:
 docker exec myai-mongo mongosh --eval 'db.runCommand({ping:1})' --quiet
@@ -268,7 +274,7 @@ mechanics in [`MONGO_MIRROR.md`](./MONGO_MIRROR.md#read-side-local-first-failove
 ### Confirm
 
 ```bash
-curl -sf http://localhost:3100/health/deep | python3 -m json.tool | grep -A8 '"mongodb"'
+curl -sf http://localhost:3200/health/deep | python3 -m json.tool | grep -A8 '"mongodb"'
 # expect: "status": "degraded", details.failover.active: true, with primaryUriHost/failoverUriHost/reason/activatedAt
 docker logs --tail 50 myai-gateway | grep -i failover   # activation is logged at error level, loudly, by design
 ```
@@ -286,7 +292,7 @@ MONGO_MIRROR.md). Once Atlas is reachable again:
 ```bash
 # remove or comment out MYAI_DB_FAILOVER in AI/.env, then — MASTER CHECKOUT ONLY:
 docker compose up -d gateway
-curl -sf http://localhost:3100/health/deep | python3 -m json.tool | grep -A5 '"mongodb"'  # "status": "up", no failover block
+curl -sf http://localhost:3200/health/deep | python3 -m json.tool | grep -A5 '"mongodb"'  # "status": "up", no failover block
 ```
 
 If Atlas came back mid-session and you need failover off without a full
@@ -540,6 +546,42 @@ decisions already made while the ledger was wrong — only for the ledger
 value going forward.
 
 ---
+
+### 2026-09-08 — what the ledger measures changed (read this before the steps above)
+
+The first CRITICAL alert (28% day / 45% week, 2026-09-08T08:19Z) was **not a
+bookkeeping fault**. The two numbers measured different things by design:
+`session_tokens.py delta` attributes tokens to ONE runner fire, so
+`tok-<day|week>` only ever held **runner** spend, while the drift check summed
+**every** transcript in the profile — and interactive claude-tech sessions draw
+on the same Team pool. The "drift" was the size of the blind spot the router
+and the API-credit reserve had.
+
+**Model since 2026-09-08 (PR #442):** `tok-<day|week>` is the **pool** ledger.
+
+- `session_tokens.py reconcile <cfg> <ledger>` raises `tok-<day>`/`tok-<week>` to
+  the transcript-derived pool total for the Sydney window, **minus**
+  `apicredit-tok-<key>` (the API-key lane is billed to API credit, not the pool;
+  `pace_add_apicredit_tokens` writes that ledger after each metered run).
+  **Monotonic** — it never lowers a ledger — and idempotent. Audit sidecar:
+  `tok-<key>.reconcile.json` (recordedBefore / transcriptTotal /
+  apicreditExcluded / poolActual / added).
+- It runs (a) in `cli_task_runner.sh` right before every `pace_fire_decision`
+  (`pace_reconcile_pool`, skip with `RUNNER_RECONCILE_POOL=off`), (b) at the top
+  of `pool_capacity_snapshot.sh` (skip with `POOL_RECONCILE=off`), and (c)
+  `pool_capacity_drift_check.sh` refreshes the snapshot before comparing unless a
+  fixture `POOL_CAPACITY_OUT` is supplied or `POOL_CAPACITY_DRIFT_REFRESH=off`.
+- **What DRIFT means now:** the ledger could not be brought up to what the
+  transcripts show (unreadable transcripts, wrong `CLAUDE_CONFIG_DIR`, a failed
+  ledger write) — or the ledger sits **above** the transcripts (pruned
+  transcript files, or a double-charge bug in `pace_add_tokens`). Both are real
+  faults; neither is "interactive work happened today".
+- Runner-only attribution is unchanged for per-task cost (`session_tokens.py
+  delta` around each fire) — only the pool totals gained the interactive share.
+
+Tests: `scripts/tests/test_session_tokens_reconcile.sh` (raise / monotonic /
+idempotent / API-key exclusion / clamp / missing dir) alongside
+`test_pool_capacity_drift_check.sh`.
 
 ## 7. `myai` MCP "Failed to reconnect" in Claude sessions → empty `GATEWAY_LOCAL_TOKEN`
 

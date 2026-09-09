@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # myai_down.sh — the `myai down` Day-3 wrapper: stop the self-contained stack cleanly.
 #
-# Wraps scripts/betac_up.sh's `down` action so `myai down` tears the whole myAI
+# Wraps scripts/betac_up.sh's `down` action so `myai down` tears the myAI APP
 # surface (gateway + dashboard + mongo, and any optional agentFlow/connect
 # profiles) down in one call. The host launchd CLI runner is left alone — it is a
 # subscription-window worker, not part of the Docker stack.
+#
+# ALSO left alone, by design: the `ci`-profile `gh-runner` service. `down` without
+# `--profile ci` does not stop profiled services, so the self-hosted GitHub Actions
+# runner survives a dev-stack teardown (it is CI infra, not app infra — stopping it
+# would silently queue every workflow). Use scripts/runner_selfhosted.sh down for
+# that. Because gh-runner is the only service on the project's default network, a
+# `down` while it runs prints "Network <project>_default Resource is still in use"
+# — cosmetic, exit code is still 0.
 #
 # Usage:
 #   myai down                 # stop the stack (data volume preserved)

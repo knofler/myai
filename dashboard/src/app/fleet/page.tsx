@@ -12,10 +12,11 @@ import { hasTeamFleetConsole, type TenantPlan } from '@/lib/billing';
 import { planLabel } from '@/lib/hosted-brain';
 import { latestRunPerMachine, type FleetRunSummary } from '@/lib/team-fleet';
 import { timeAgo, fmtSydney } from '@/lib/format';
-import { Badge } from '@/components/ui/badge';
 import { StatCard, EmptyState, Card } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
 import AutoRefresh from '@/components/auto-refresh';
+import { RecommendationChip, ActionStatus } from '@/components/fleet-status-chips';
+import { dbUnreachableHint } from '@/lib/db-hint';
 
 export const dynamic = 'force-dynamic';
 
@@ -82,67 +83,6 @@ function RunStatusPill({ status }: { status?: string }) {
     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/15 border border-amber-500/40 text-xs font-medium text-amber-300">
       <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
       running
-    </span>
-  );
-}
-
-/* ── Recommendation chip ───────────────────────────────────── */
-
-const RECOMMENDATION: Record<string, string> = {
-  ship: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
-  merge: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
-  review: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
-  fix: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
-  'wrap-up': 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-  attention: 'bg-red-500/15 text-red-400 border-red-500/30',
-  idle: 'bg-zinc-600/20 text-[rgb(var(--text-secondary))] border-zinc-600/30',
-};
-
-function RecommendationChip({ value }: { value?: string }) {
-  if (!value) return <Badge className={RECOMMENDATION.idle}>idle</Badge>;
-  return <Badge className={RECOMMENDATION[value] ?? RECOMMENDATION.idle}>{value}</Badge>;
-}
-
-/* ── Action status dot ─────────────────────────────────────── */
-
-function ActionStatus({ status }: { status?: string }) {
-  const s = (status ?? 'pending').toLowerCase();
-  if (s === 'in-progress') {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-blue-300">
-        <span className="w-2.5 h-2.5 rounded-full bg-blue-400 animate-pulse" />
-        in progress
-      </span>
-    );
-  }
-  if (s === 'done') {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
-        <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 flex items-center justify-center text-[8px] text-zinc-950 font-bold leading-none">✓</span>
-        done
-      </span>
-    );
-  }
-  if (s === 'failed') {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-red-400">
-        <span className="w-2.5 h-2.5 rounded-full bg-red-400 flex items-center justify-center text-[8px] text-zinc-950 font-bold leading-none">✕</span>
-        failed
-      </span>
-    );
-  }
-  if (s === 'skipped') {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-zinc-600">
-        <span className="w-2.5 h-2.5 rounded-full bg-zinc-700" />
-        skipped
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-[rgb(var(--text-muted))]">
-      <span className="w-2.5 h-2.5 rounded-full bg-zinc-600" />
-      pending
     </span>
   );
 }
@@ -304,7 +244,7 @@ export default async function FleetPage() {
 
       {dbError && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400 mb-6">
-          Database not reachable — the fleet console needs the gateway Mongo at :27200.
+          {dbUnreachableHint('the fleet console')}
         </div>
       )}
 

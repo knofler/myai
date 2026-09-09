@@ -24,7 +24,7 @@ export function ThemeToggle() {
     <button
       type="button"
       onClick={cycle}
-      className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+      className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] active:text-[var(--text-primary)] active:bg-[var(--bg-hover)] active:scale-[0.99] transition-[color,background-color,transform]"
       aria-label={t('ariaLabel', { label, resolved })}
       title={t('title', { label, resolved })}
     >

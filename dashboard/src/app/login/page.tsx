@@ -24,6 +24,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useTenant, MfaRequiredError } from '@/lib/tenant-context';
 import { ConsentCheckbox } from '@/components/consent-checkbox';
+import { RegionSelect } from '@/components/region-select';
+import type { TenantRegion } from '@/lib/residency';
 
 type Tab = 'login' | 'signup';
 
@@ -93,6 +95,10 @@ function LoginPageInner() {
   const [password, setPassword] = useState('');
   // signup-only
   const [name, setName] = useState('');
+  // ADR-024 Phase 2b — data-residency region, defaults to 'us' (the schema
+  // default). Meaningless on an invite join (the tenant already exists with
+  // its region pinned), so the form only shows it for a fresh-tenant signup.
+  const [region, setRegion] = useState<TenantRegion>('us');
   // secondary "connect a tool"
   const [showKey, setShowKey] = useState(false);
   const [apiKey, setApiKey] = useState('');
@@ -260,6 +266,7 @@ function LoginPageInner() {
         password,
         inviteToken: invite?.token,
         acceptTerms: agreed,
+        region: invite ? undefined : region,
       });
       // Invite joins get no show-once key (the tenant's key already exists) —
       // straight to the dashboard.
@@ -793,6 +800,7 @@ function LoginPageInner() {
               required
             />
           </label>
+          {!invite && <RegionSelect value={region} onChange={setRegion} />}
           <ConsentCheckbox checked={agreed} onChange={setAgreed} />
           <button
             type="submit"

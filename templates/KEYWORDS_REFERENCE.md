@@ -14,7 +14,7 @@ The keywords below are loaded on demand: when the user types one of them, Read t
 | `scaffold [thing]` | Generate boilerplate via relevant specialists: `scaffold api`, `scaffold page [name]`, `scaffold schema [name]`, `scaffold docker`, `scaffold tests`. |
 | `audit` | Dispatch `security-specialist` (OWASP) + `qa-specialist` (coverage) + `tech-lead` (standards) in parallel. |
 | `handoff` | Prepare full handoff: update STATE.md, write detailed AI_AGENT_HANDOFF.md, log session — ready for a different AI agent. |
-| `list` | **Audit all managed repos.** Read `config/managed_repos.txt` from the AI master repo, check each path for: AI/ folder exists, STATE.md exists, CLAUDE.md exists, GEMINI.md exists. Output a markdown table with columns: Project, Level (standalone/workspace root/sub-repo), AI/, STATE.md, CLAUDE.md, GEMINI.md. Bold workspace roots and standalones. |
+| `list` | **Audit all managed repos.** Enumerate the fleet via the ADR-021 resolver — `myai repos --paths` (DB roster preferred, master `config/managed_repos.txt` seed fallback) — and check each path for: AI/ folder exists, STATE.md exists, CLAUDE.md exists, GEMINI.md exists. Output a markdown table with columns: Project, Level (standalone/workspace root/sub-repo), AI/, STATE.md, CLAUDE.md, GEMINI.md. Bold workspace roots and standalones. |
 | `show urls` | Show all deployment URLs for this project: production (main branch) and preview (test branch). Check `.vercel/project.json` for Vercel project name, `render.yaml` for Render. Production: `https://{project}.vercel.app`. Preview: `https://{project}-git-test-{org}.vercel.app`. |
 
 ## Brain — git-versioned agent memory (`brain …`)

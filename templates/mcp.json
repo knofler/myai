@@ -2,7 +2,7 @@
   "mcpServers": {
     "myai": {
       "command": "bash",
-      "args": ["${CLAUDE_PROJECT_DIR}/AI/scripts/lib/mcp_myai_stdio.sh"]
+      "args": ["-c", "exec \"${CLAUDE_PROJECT_DIR:-$PWD}/AI/scripts/lib/mcp_myai_stdio.sh\""]
     },
     "context7": {
       "command": "npx",

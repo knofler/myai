@@ -36,6 +36,7 @@ import { bulkTaskOperations, BulkValidationError } from '../tasks/bulk-operation
 import { taskLogRelay, wrapBackpressureSafe } from '../tasks/task-log-relay.js';
 import type { TaskLogChunk } from '../tasks/task-log-relay.js';
 import { listRepoCards, upsertRepoCard } from '../repos/app-card-store.js';
+import { resolveRepoPaths } from '../repos/repo-registry.js';
 import type { RepoCardLevel } from '../repos/app-card-store.js';
 import { listPlanPage } from '../repos/plan-store.js';
 import { writeHandoff, readHandoff, listLatestHandoffs } from '../repos/handoff-store.js';
@@ -74,6 +75,7 @@ import { listFlags, upsertFlag, killFlag, setTenantOverride, deleteFlag, evaluat
 import { createApiKey, listApiKeys, rotateApiKey as rotateScopedApiKey, revokeApiKey, API_KEY_SCOPES } from './tenant-api-keys.js';
 import { rotateApiKey as rotateTenantBootstrapKey, provisionTenant } from './tenant-keys.js';
 import { rotateMasterKey } from './tenant-secrets.js';
+import { rotateLocalToken } from './local-token.js';
 import { suspendTenant, reactivateTenant } from './tenant-lifecycle.js';
 import { requestPasswordReset, resetPassword, lookupPasswordReset } from './password-reset.js';
 import { getWhoami } from './whoami.js';
@@ -1322,6 +1324,38 @@ export function createHttpServer() {
     }
   });
 
+  // ── GATEWAY_LOCAL_TOKEN self-rotation (LOCAL-TRUST only) ────────────────────
+  // Distinct from tenant-key/rotate above — this rotates the process-wide
+  // local-bridge credential itself (core/local-token.ts), not a tenant's key.
+  // Same zero-downtime grace-window pattern: the OLD token keeps authenticating
+  // (auth.ts resolveNoKey) until the returned previousExpiresAt. Gated by local
+  // trust (loopback or the CURRENT local token) so `myai rotate-keys local` or a
+  // scheduled job can call it directly — never expose this path to a
+  // non-local-trust caller. Only mutates the running process's in-memory config;
+  // the caller is responsible for persisting the returned token to .env so a
+  // restart doesn't revert it (see core/local-token.ts).
+  app.post('/api/auth/local-token/rotate', (req: Request, res: Response) => {
+    try {
+      if (!req.tenant?.local) {
+        throw new AuthError('local trust required', 403, 'FORBIDDEN');
+      }
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const graceMinutes = typeof b.graceMinutes === 'number' ? b.graceMinutes : undefined;
+      const result = rotateLocalToken(graceMinutes);
+      recordAuditEvent({
+        tenantId: 'system',
+        actor: { role: 'operator', via: 'local' },
+        action: 'localtoken.rotate',
+        target: 'gateway-local-token',
+        detail: { graceMinutes: result.graceMinutes, previousExpiresAt: result.previousExpiresAt },
+      });
+      res.json(result); // new token is show-once
+    } catch (err) {
+      const e = err instanceof AuthError ? err : new AuthError('local token rotate failed', 500, 'INTERNAL');
+      res.status(e.status).json({ error: e.message, code: e.code });
+    }
+  });
+
   // ── Master KMS key rotation (ADR-010 §3.7, envelope encryption, LOCAL-TRUST
   // only) ─────────────────────────────────────────────────────────────────
   // Re-wraps every tenant's DEK with the keyring's currently-active
@@ -2406,6 +2440,19 @@ export function createHttpServer() {
     });
     if (!handoff) return res.status(503).json({ error: 'DB not connected' });
     res.status(201).json(handoff);
+  });
+
+  // ADR-021 Phase 3 — the shared fleet-path resolver for host-side shell
+  // consumers (scripts/lib/repo_paths.sh, `myai repos --paths`). DB roster
+  // preferred, managed_repos.txt only the bootstrap seed. Paths are RAW
+  // (host-side, `~` unexpanded on seed rows) — the client expands `~`.
+  app.get('/api/repos/paths', async (req: Request, res: Response) => {
+    try {
+      const repos = await resolveRepoPaths(ctxFromReq(req).tenantId);
+      res.json({ count: repos.length, repos });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   app.get('/api/repos', (_req: Request, res: Response) => {

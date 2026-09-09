@@ -5,12 +5,14 @@ import { randomBytes } from 'node:crypto';
 import type { GatewayConfig } from './types.js';
 
 /**
- * The GATEWAY_LOCAL_TOKEN fallback baked into docker-compose.yml and
- * .mcp.json (`${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}`) — both files
- * ship in the npm package and the public mirror, so this value is PUBLIC
- * KNOWLEDGE, not a secret. loadConfig() refuses to treat it as a valid local
- * credential when tenancy.enforce=true (see below); it must never be
- * accepted as-is on a deployment reachable beyond loopback.
+ * The GATEWAY_LOCAL_TOKEN fallback docker-compose.yml, .mcp.json and the
+ * portable template (AI/docker-compose.myai.yml) used to ship
+ * (`${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}`) — all of them are in the
+ * npm package and the public mirror, so this value is PUBLIC KNOWLEDGE, not a
+ * secret. loadConfig() refuses to treat it as a valid local credential when
+ * tenancy.enforce=true (see below) — both as the CURRENT token and as the
+ * rotation-grace PREVIOUS token; it must never be accepted as-is on a
+ * deployment reachable beyond loopback.
  */
 export const KNOWN_DEFAULT_LOCAL_TOKEN = 'myai-local-bridge-dev';
 
@@ -303,6 +305,37 @@ export function loadConfig(configPath?: string): GatewayConfig {
         `SECURITY WARNING: GATEWAY_LOCAL_TOKEN is the published default ("${KNOWN_DEFAULT_LOCAL_TOKEN}") ` +
         '— this is public knowledge, not a secret. Run `myai rotate-keys local` to generate a real one ' +
         'before exposing this gateway beyond localhost.',
+      );
+    }
+  }
+  // Same refusal for the rotation-grace PREVIOUS slot: `myai rotate-keys local`
+  // persists the old value as GATEWAY_LOCAL_TOKEN_PREVIOUS with a grace expiry,
+  // so rotating AWAY from the published default would otherwise keep the public
+  // credential valid for the whole grace window (and across restarts inside it).
+  // A grace window exists so callers can pick up a new private token — a value
+  // anyone can read in the npm package gets none.
+  if (config.tenancy.previousLocalToken === KNOWN_DEFAULT_LOCAL_TOKEN) {
+    if (config.tenancy.enforce) {
+      // eslint-disable-next-line no-console
+      console.error(
+        '\n' + '='.repeat(78) + '\n' +
+        'SECURITY: GATEWAY_LOCAL_TOKEN_PREVIOUS is the published default value\n' +
+        `("${KNOWN_DEFAULT_LOCAL_TOKEN}") — this ships in the public npm package\n` +
+        'and mirror, so it is not a secret and gets NO rotation grace window.\n' +
+        'Refusing to honour it while tenancy.enforce=true; non-loopback callers\n' +
+        'still presenting it will get 401 immediately.\n' +
+        'Fix: remove GATEWAY_LOCAL_TOKEN_PREVIOUS and\n' +
+        'GATEWAY_LOCAL_TOKEN_PREVIOUS_EXPIRES_AT from .env.\n' +
+        '='.repeat(78) + '\n',
+      );
+      config.tenancy.previousLocalToken = undefined;
+      config.tenancy.previousLocalTokenExpiresAt = undefined;
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `SECURITY WARNING: GATEWAY_LOCAL_TOKEN_PREVIOUS is the published default ("${KNOWN_DEFAULT_LOCAL_TOKEN}") ` +
+        '— this is public knowledge, not a secret, and deserves no rotation grace. Remove it (and its ' +
+        '_EXPIRES_AT) from .env before exposing this gateway beyond localhost.',
       );
     }
   }

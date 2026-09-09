@@ -19,7 +19,10 @@
 #     maxCpuPct=<int>         per-task sustained CPU %  (overrides MAX_TASK_CPU_PCT)
 #     models="<m1> <m2> ..."  space-separated model chain (overrides CLI_MODELS)
 #     hookPre=<path>          script run best-effort in the isolated workspace
-#                             BEFORE the session (repo-relative or absolute)
+#                             BEFORE the session (absolute, or relative to the
+#                             ACTIVE workspace root — the per-task git worktree
+#                             under execution isolation, the shared checkout
+#                             otherwise; see tg_resolve_hook_path)
 #     hookPost=<path>         same, AFTER the session (always, success or failure)
 #
 # Blank lines / '#' comments ignored; unknown fields ignored (forward-compat).
@@ -82,6 +85,28 @@ tg_max_minutes() {
     local mm
     mm="$(tg_lookup_field "$1" maxMinutes "${3:-$(tg_resolve_file)}" 2>/dev/null)" || mm=""
     case "$mm" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$mm" ;; esac
+}
+
+# tg_resolve_hook_path <hook> <workdir> — print the absolute path a tenant
+# hookPre/hookPost script resolves to. Absolute hooks pass through untouched;
+# relative hooks resolve against <workdir> — the ACTIVE task workspace (the
+# per-task git worktree under execution isolation, the shared checkout
+# otherwise) — NEVER against the shared base checkout. Resolving relative
+# hooks against BASE_REPO ran the shared checkout's (possibly stale/divergent)
+# copy of the hook under worktree isolation, and a hook that derives paths
+# from its own location ($(dirname "$0")/…) then silently read/wrote the
+# WRONG checkout (Copilot nit on the runner-worktree/tenant-guardrails PR,
+# task-473f9d22). Pure string resolution — no filesystem access; existence/
+# executability is the caller's concern. rc 1 (empty output) when the hook is
+# empty, or when a relative hook has no workdir to resolve against.
+tg_resolve_hook_path() {
+    local hook="$1" workdir="${2:-}"
+    [ -n "$hook" ] || return 1
+    case "$hook" in
+        /*) printf '%s' "$hook" ;;
+        *)  [ -n "$workdir" ] || return 1
+            printf '%s/%s' "${workdir%/}" "$hook" ;;
+    esac
 }
 
 # tg_list_tenants [file] — print each tenant id that has a guardrail line, one per line.

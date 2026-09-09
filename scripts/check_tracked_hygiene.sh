@@ -60,6 +60,8 @@ DENY=(
   '^(AI/)?config/\.runner_[^/]+$'
   # host-side mongo-mirror schedule snapshot (scripts/mongo_mirror_status_snapshot.sh)
   '^(AI/)?state/mongo-mirror-status\.json$'
+  # machine-local supply-chain scan report (scripts/dependency_scan.sh)
+  '^(AI/)?state/dependency-scan-report\.json$'
   # env files — real secrets, never tracked (.example templates exempt below)
   '(^|/)\.env[^/]*$'
   '(^|/)[^/]+\.env$'
@@ -97,4 +99,29 @@ if [ -n "$offenders" ]; then
   exit 1
 fi
 echo "  PASS — no machine-local ledgers/state tracked ($scope)"
+
+# ── roster portability ────────────────────────────────────────────────────────
+# The fleet roster is eval-expanded (`eval echo "$line"` in
+# restore_git_metadata.sh / deploy_status.sh), so `~/` and `$HOME` resolve per
+# machine. An ABSOLUTE /Users/<someone>/ path does not: it silently points at
+# one Mac's home and reads as "no such dir" on every other machine.
+#
+# This is not hypothetical. A repo once sat in the roster as an absolute
+# /Users/<user-a>/... path — correct on the Mac whose home dir that was, dead on
+# another Mac whose home dir is /Users/<user-b>. The repo was present and
+# healthy the whole time; the fleet just could not see it. One character of
+# divergence between two machines' usernames cost a repo its fleet coverage.
+ROSTER="$REPO_ROOT/config/managed_repos.txt"
+if [ -f "$ROSTER" ]; then
+  abs="$(grep -nE '^[^#]*/Users/' "$ROSTER" || true)"
+  if [ -n "$abs" ]; then
+    echo "  FAIL — machine-specific absolute path(s) in config/managed_repos.txt:"
+    printf '%s\n' "$abs" | sed 's/^/    ✗ /'
+    echo "  FIX — use a portable prefix so BOTH Macs resolve it:"
+    echo "        <dropbox-root>/...   (a relative path, never an absolute home path)"
+    exit 1
+  fi
+  echo "  PASS — fleet roster paths are machine-portable"
+fi
+
 exit 0

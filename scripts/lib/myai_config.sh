@@ -127,6 +127,22 @@ _myai_is_code_remote() {
   return 1
 }
 
+# _myai_is_hosted_brain_remote <candidate_url> — 0 (true) when the URL matches
+# the ADR-017 hosted-brain remote shape (.../brain/<tenantId>.git, optionally
+# with an embedded x-access-token credential — see runtime's hosted-brain.ts
+# hostedRemoteUrl()), i.e. an already-managed remote from brain_host_provision
+# rather than a self-managed one (GitHub, self-hosted git, etc). Best-effort
+# string match, not a network call — a self-hosted remote that coincidentally
+# ends in /brain/<x>.git is treated as "already hosted" (a missed upsell nudge,
+# never a false claim about a paying customer's own remote) — the safe side to
+# err on. Used by the ADR-039 onboarding-upsell nudge in myai_setup.sh.
+_myai_is_hosted_brain_remote() {
+  case "$1" in
+    */brain/*.git) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ── the first-run bootstrap ──────────────────────────────────────────────────
 
 # myai_brain_bootstrap [code_repo_dir]

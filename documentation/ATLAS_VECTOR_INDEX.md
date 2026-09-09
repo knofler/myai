@@ -91,3 +91,17 @@ docker logs myai-gateway --since 5m | grep -i "falling back"   # expect empty
   path outright if Atlas Search ever misbehaves (`detectVectorBackend`).
 - Provisioned live on the production cluster (cluster0…/myai) on 2026-07-26;
   verified READY with self-hit score 1.0 and tenant-filtered hits.
+
+**Re-verified 2026-09-01 (task-8b8fef53):** fleet re-dispatched this as
+"provision the Atlas `$vectorSearch` index properly (tenantId as filter
+field + 384 dims) or default `VECTOR_BACKEND=local`" — it's a stale duplicate
+of task-b875cf92, shipped 2026-07-26 (this doc, `runtime/src/memory/
+atlas-search-index.ts`, boot-time self-heal in `core/index.ts`, the
+`atlas-index-health-alerter`, and `scripts/atlas_vector_index.sh`). Both
+requested outcomes are already true simultaneously: the index is correctly
+provisioned (`tenantId` registered as a filter field, 384 dims, cosine) AND
+`VECTOR_BACKEND` keeps the local-ANN belt-and-suspenders fallback for any
+empty-Atlas-result window (`detectVectorBackend`, PR #390). Re-ran the full
+suite in Docker (`node:22`, no host npm): `atlas-search-index.test.ts` (13),
+`vector-index.test.ts` (9), `vector-store.test.ts` (17),
+`atlas-index-health-alerter.test.ts` (17) — 56/56 green. No code change made.

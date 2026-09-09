@@ -14,12 +14,13 @@
 // ADR-015 board (commit c1e690e) already shipped three weeks earlier, so
 // rather than a competing v0-only page, its remaining fields extend this one.
 
-import { connectDB, Task, RepoCard, Tenant } from '@/lib/db';
+import { connectDB, Task, RepoCard, Tenant, FleetRun } from '@/lib/db';
 import { getActiveTenant, tenantFilter } from '@/lib/tenant';
 import { getRunnerLiveness } from '@/lib/runner-health';
 import { PageHeader } from '@/components/page-header';
 import { Card, StatCard, EmptyState } from '@/components/ui/card';
 import { LevelDot } from '@/components/ui/badge';
+import { RecommendationChip, ActionStatus } from '@/components/fleet-status-chips';
 import { timeAgo, formatDuration } from '@/lib/format';
 import AutoRefresh from '@/components/auto-refresh';
 import {
@@ -48,6 +49,20 @@ interface RepoCardDoc {
   commitsAhead?: number;
 }
 
+// Fan-out batch runs (ADR-015 §3, plan/MULTI_REPO_ORCHESTRATION_PHASE3_SPEC.md
+// §"Surface it on /projects"). handleFanout (api/projects/route.ts) writes one
+// FleetRun per dispatch (type:'task-fanout', runId = batchId); task-store.ts
+// keeps repos[].actionStatus live as the batch's tasks transition. This is a
+// read-only rollup of the tenant's last 10 — /fleet's own queries explicitly
+// exclude this type, so it never competes with the morning-resume-all console.
+interface BatchRunDoc {
+  runId: string;
+  status?: 'running' | 'completed' | 'aborted';
+  startedAt?: string | Date;
+  repos: Array<{ repo: string; recommendation?: string; actionStatus?: string }>;
+  summary?: { total?: number; needsAction?: number; shipped?: number; failed?: number };
+}
+
 /** Fleet-wide runner-liveness badge — green "alive Nm ago" / red "down". */
 function RunnerBadge({ liveness }: { liveness: Awaited<ReturnType<typeof getRunnerLiveness>> }) {
   if (!liveness.alive) {
@@ -71,7 +86,7 @@ export default async function ProjectsPage() {
   const tenantId = await getActiveTenant();
   const tf = tenantFilter(tenantId);
 
-  const [cards, statusAgg, pendingDocs, tenantDoc, rawTasks, liveness] = await Promise.all([
+  const [cards, statusAgg, pendingDocs, tenantDoc, rawTasks, liveness, recentBatches] = await Promise.all([
     RepoCard.find(tf).select('repoName group lastStatusLevel lastStatus updatedAt commitsAhead').lean() as unknown as Promise<RepoCardDoc[]>,
     Task.aggregate([
       { $match: tf },
@@ -85,6 +100,7 @@ export default async function ProjectsPage() {
     // cap; see plan/MULTI_REPO_ORCHESTRATION_UI_SPEC.md §"Aggregation caveat").
     Task.find(tf).select('repo status assignedAgent startedAt').limit(500).lean() as unknown as Promise<FleetTaskLike[]>,
     getRunnerLiveness(),
+    FleetRun.find({ ...tf, type: 'task-fanout' }).select('runId status startedAt repos summary').sort({ startedAt: -1 }).limit(10).lean() as unknown as Promise<BatchRunDoc[]>,
   ]);
 
   // Fold the (repo, status) aggregation into per-repo count maps.
@@ -215,6 +231,39 @@ export default async function ProjectsPage() {
 
           {/* Bulk levers — fan-out + reprioritize */}
           <ProjectsConsole repos={consoleRepos} pendingTasks={pendingTasks} />
+
+          {/* Recent fan-out batches (ADR-015 §3) — "how is my batch doing"
+              without opening a tab per repo. Empty until the composer above
+              is used at least once. */}
+          {recentBatches.length > 0 && (
+            <Card title="Recent batches" meta={`last ${recentBatches.length}`}>
+              <div className="p-4 space-y-4">
+                {recentBatches.map((run) => (
+                  <div key={run.runId} className="border border-[rgb(var(--border-subtle))] rounded-md p-3">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="font-mono text-xs text-[rgb(var(--text-secondary))]">{run.runId}</span>
+                      <span className="text-[11px] text-[rgb(var(--text-muted))]">
+                        {run.summary?.shipped ?? 0}/{run.summary?.total ?? run.repos.length} done
+                        {!!run.summary?.failed && <span className="text-red-400"> · {run.summary.failed} failed</span>}
+                        <span className="ml-2">· {timeAgo(run.startedAt)}</span>
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5">
+                      {run.repos.map((r) => (
+                        <div key={r.repo} className="flex items-center justify-between gap-2 text-xs">
+                          <a href={`/work?repo=${encodeURIComponent(r.repo)}`} className="font-mono text-[rgb(var(--text-primary))] hover:text-teal-300 truncate">{r.repo}</a>
+                          <span className="flex items-center gap-2 shrink-0">
+                            <RecommendationChip value={r.recommendation} />
+                            <ActionStatus status={r.actionStatus} />
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
         </div>
       )}
     </div>

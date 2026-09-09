@@ -42,6 +42,18 @@ day="$(TZ=Australia/Sydney date +%Y%m%d)"    # == pace_day()
 
 read_int() { local v; v="$(cat "$1" 2>/dev/null | tr -cd '0-9')"; echo "${v:-0}"; }
 
+# Reconcile the claude-tech pool ledger from the profile's transcripts FIRST
+# (2026-09-08, "Pool-capacity drift: CRITICAL"): tok-<day|week> used to hold only
+# runner-attributed spend, so interactive sessions on the same Team pool were
+# invisible to every consumer of this snapshot. session_tokens.py reconcile raises
+# each ledger to the transcript-derived pool total (API-key lane excluded) and never
+# lowers it. Best-effort: a failure here leaves the ledger as-is and the drift check
+# will say so. Skip with POOL_RECONCILE=off (tests feed a fixture ledger).
+if [ "${POOL_RECONCILE:-on}" = "on" ] && [ -f "$SCRIPT_DIR/lib/session_tokens.py" ]; then
+  "${PYTHON_BIN:-python3}" "$SCRIPT_DIR/lib/session_tokens.py" reconcile \
+    "${CLAUDE_CONFIG_DIR:-$HOME/.claude-tech}" "$LEDGER" >/dev/null 2>&1 || true
+fi
+
 spent_week="$(read_int "$LEDGER/tok-$week")"
 spent_day="$(read_int "$LEDGER/tok-$day")"
 

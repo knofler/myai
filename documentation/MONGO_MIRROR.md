@@ -84,6 +84,25 @@ Platform routing (mirrors the CLI runner's launchd pattern,
 
 Reinstalling is idempotent (rewrites the job in place with the new cadence).
 
+**Re-verified 2026-09-01 (task-67e5df37):** fleet re-dispatched this as
+"schedule `mongo_mirror.sh` periodically instead of manual-only invocation" —
+it's a stale duplicate of task-b4c58215, shipped 2026-07-24 in `2a2813c2`
+(`scripts/setup_mongo_mirror_schedule.sh` + the `--install-schedule` /
+`--schedule-status` / `--uninstall-schedule` passthrough above + the `myai
+doctor` last-run check). Re-ran both suites: `test_mongo_mirror_schedule.sh`
+(32/32) and `test_mongo_mirror.sh` (21/21), all green. No code change made.
+
+**Re-verified 2026-09-04 (task-d97ce85b):** fleet re-dispatched this a third
+time as "schedule `scripts/mongo_mirror.sh` periodically (launchd/cron)
+instead of manual-only invocation" — still the same stale duplicate of
+task-b4c58215. Confirmed `scripts/setup_mongo_mirror_schedule.sh` (installer),
+the `--install-schedule` / `--schedule-status` / `--uninstall-schedule`
+passthrough in `scripts/mongo_mirror.sh`, and the `myai doctor` "mongo mirror
+schedule" warn-only check (`runtime/tests/unit/cli-dispatch.test.ts`, doctor
+in-process handler) are all present. Re-ran both bash suites again:
+`test_mongo_mirror_schedule.sh` (32/32) and `test_mongo_mirror.sh` (21/21),
+all green. No code change made.
+
 **Observability:** every non-dry mirror run records its outcome
 (epoch/rc/direction/db/collections) in `~/.myai/mongo-mirror.last`.
 `myai doctor` surfaces this as the warn-only **`mongo mirror schedule`** check:
@@ -207,6 +226,25 @@ restarts while Atlas/network is down and still serves memory/registry reads).
 A mid-session Atlas drop still surfaces as query errors — a live re-connect
 swap would need connection-pool juggling that isn't worth the split-brain
 risk today.
+
+**Re-verified 2026-09-03 (task-0b6db26f):** fleet re-dispatched this as
+"RELIABILITY: read-side local-first DB failover (MYAI_DB_FAILOVER=local) when
+Atlas is unreachable" — a stale duplicate of task-605e90b6, already shipped
+2026-07-24 in `9e5c7349`. Confirmed `runtime/src/shared/db-failover.ts` +
+its `connectDB()`/`health.ts`/dashboard/`mcp/tools.ts` wiring are all still
+present on this branch's HEAD. Ran the targeted suites fresh in an ephemeral
+`node:22` container (Docker-only policy): `db-failover.test.ts` (21),
+`health-db-failover.test.ts` (2), `health-mongo-boot.test.ts` (2),
+`mcp-tools.test.ts` (104) — 129/129 passing; `tsc --noEmit` on `runtime/`
+clean. No code change made. Found and removed the stale seed line for this
+exact task in `config/runner_backlog.jsonl` (was line 103) causing repeat
+dispatch; verified the remaining 469 JSON entries still parse and re-ran the
+backlog/topup regression suites fresh — `test_archive_runner_backlog.sh`
+13/13, `test_backlog_dupe_check.sh` 13/13,
+`test_queue_topup_malformed_and_selfheal.sh` 7/7,
+`test_queue_topup_planner_gate.sh` 7/7, `test_queue_topup_report.sh` 10/10 —
+50/50 passing. Recorded here so a future duplicate dispatch of this task
+finds the answer without re-deriving it.
 
 ## Failover drill (Atlas resilience task, on the pattern of ADR-036 §5)
 

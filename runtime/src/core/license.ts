@@ -17,10 +17,13 @@
  *
  *  2. AIR-GAPPED MODE — `AIR_GAPPED=true` is a hard guarantee that the
  *     process makes no outbound network calls beyond the LLM provider the
- *     operator explicitly configured. `assertOutboundAllowed()` is the one
- *     guard every phone-home-capable call site (error reporting, update
- *     checks, telemetry) MUST call before reaching the network — see
- *     monitoring/sentry.ts's initSentry() for the reference call site.
+ *     operator explicitly configured. Every phone-home-capable call site
+ *     (error reporting, update checks, telemetry) MUST consult this module
+ *     (`assertOutboundAllowed()` / `isAirGapped()`) before reaching the
+ *     network. Guarded call sites today: monitoring/sentry.ts (initSentry —
+ *     the reference implementation), tracing/otlp-export.ts (span export),
+ *     memory/embeddings.ts (OpenAI embeddings + HuggingFace model download).
+ *     selfhost/test.sh carries a drift guard asserting each stays wired.
  *     Independent of licensing: an unlicensed community install can (and by
  *     default does, since no phone-home exists in this codebase today) run
  *     fully air-gapped, and a licensed enterprise install can still choose

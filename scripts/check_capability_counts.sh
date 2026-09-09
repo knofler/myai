@@ -27,9 +27,11 @@
 #     "All 8 agents"), never capability totals
 #
 # Hermetic: python3 only — no node/Docker/gateway/network (node on the host
-# is banned in this repo anyway). Runs in scripts/tests/run_all.sh (via
-# test_check_capability_counts.sh) and as publish_guard.sh step 0, so a
-# release cannot ship stale counts.
+# is banned in this repo anyway). Wired in four places: scripts/tests/run_all.sh
+# (via test_check_capability_counts.sh, fixture-rooted), publish_guard.sh step 0
+# (release gate), script-unit-tests.yml's always-run `capability-counts` job and
+# local-ci.sh's capability-count gate (both PR-time, task-70ef2d84) — so drift
+# is caught on the PR that introduces it, not weeks later at the next release.
 #
 # Usage: scripts/check_capability_counts.sh [--fix] [--root DIR]
 #   --fix    rewrite the stale numbers in place (then review + commit the diff)

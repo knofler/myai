@@ -8,6 +8,10 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# ADR-021 Phase 3: roster via the shared resolver (gateway DB roster preferred,
+# managed_repos.txt bootstrap-seed fallback). TRACKING_FILE kept only as the
+# seed-file pointer for the no-resolver error message.
+. "$SCRIPT_DIR/lib/repo_paths.sh" 2>/dev/null || true
 TRACKING_FILE="$REPO_DIR/config/managed_repos.txt"
 
 # Colors
@@ -255,11 +259,12 @@ check_master() {
             ((repo_fail++))
         fi
     done
+    # ADR-021 Phase 3: the txt is an optional bootstrap seed (DB roster is the
+    # authority), so a missing file is informational — not a health failure.
     if [ -f "$repo_path/config/managed_repos.txt" ]; then
-        pass "config/managed_repos.txt exists"
+        pass "config/managed_repos.txt exists (bootstrap seed)"
     else
-        fail "config/managed_repos.txt missing"
-        ((repo_fail++))
+        warn "config/managed_repos.txt missing (optional seed — DB roster is authority, ADR-021)"
     fi
 
     # Check git
@@ -522,9 +527,9 @@ if [ -n "$1" ]; then
     check_repo "$1"
     [ $? -eq 0 ] && ((REPOS_HEALTHY++))
 else
-    # Check all managed repos
-    if [ ! -f "$TRACKING_FILE" ]; then
-        echo -e "${RED}Error: $TRACKING_FILE not found.${NC}"
+    # Check all managed repos — resolver (DB-preferred) with seed-file fallback
+    if ! declare -F repo_paths >/dev/null 2>&1 && [ ! -f "$TRACKING_FILE" ]; then
+        echo -e "${RED}Error: no fleet roster (scripts/lib/repo_paths.sh and $TRACKING_FILE both missing).${NC}"
         exit 1
     fi
 
@@ -536,8 +541,7 @@ else
 
     echo -e "\n${YELLOW}── Managed Repositories ──${NC}"
     while IFS= read -r repo_path || [ -n "$repo_path" ]; do
-        [[ -z "$repo_path" ]] || [[ "$repo_path" == \#* ]] && continue
-        repo_path="${repo_path/#\~/$HOME}"
+        [ -n "$repo_path" ] || continue
         ((TOTAL_REPOS++))
         if [ ! -d "$repo_path" ]; then
             echo ""
@@ -547,7 +551,14 @@ else
         fi
         check_repo "$repo_path"
         [ $? -eq 0 ] && ((REPOS_HEALTHY++))
-    done < "$TRACKING_FILE"
+    done < <(
+        if declare -F repo_paths >/dev/null 2>&1; then
+            repo_paths
+        else
+            # legacy seed-file parse (resolver lib missing)
+            grep -vE '^\s*(#|$)' "$TRACKING_FILE" | sed "s|^~/|$HOME/|"
+        fi
+    )
 fi
 
 # ─── Summary ───

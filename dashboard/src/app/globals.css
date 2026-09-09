@@ -1,5 +1,24 @@
 @import "tailwindcss";
 
+/* ── Mobile nav type / tap-target scale (DASHBOARD_MOBILE_APP_UX.md P1) ──
+   Touch-surface minimums: labels >=15px, captions/hints >=12px, interactive
+   rows >=44px (Apple HIG) / 48dp (Material). Tailwind v4 CSS-first tokens —
+   consume via `text-nav-*` / `min-h-tap`, never hand-tune a `text-[Npx]`
+   class on a touch surface again. */
+@theme {
+  --font-size-nav-label: 0.9375rem;   /* 15px */
+  --font-size-nav-label--line-height: 1.25rem;
+  --font-size-nav-group: 0.75rem;     /* 12px — was 11px */
+  --font-size-nav-group--line-height: 1rem;
+  --font-size-nav-hint: 0.75rem;      /* 12px — was 10px */
+  --font-size-nav-hint--line-height: 1rem;
+  --font-size-nav-caption: 0.75rem;   /* 12px — was 10px */
+  --font-size-nav-caption--line-height: 1rem;
+  --font-size-nav-icon: 1.25rem;      /* 20px optical glyph size */
+  --font-size-nav-icon--line-height: 1.25rem;
+  --spacing-tap: 2.75rem;             /* 44px min interactive-row height */
+}
+
 /* ──────────────────────────────────────────────────────────────
    myAI — dark zinc base + refined BLUE-GREEN accent (teal→emerald).
    Accents are applied ONLY to interactive surfaces (buttons, active
@@ -32,6 +51,24 @@
   --text-secondary: 161 161 170; /* zinc-400 */
   --text-muted: 113 113 122;     /* zinc-500 */
   --accent-text: 153 246 228;    /* teal-200 — active nav label on gel-brand */
+
+  /* ── DASHBOARD_REDESIGN_2026-09 · "Mission Control" token set ─────────────
+     The shell + primitives consume ONLY these tokens (never a literal colour).
+     Shipped behind NEXT_PUBLIC_UI_V2 in B1; the flag was removed in B6 and this
+     is now the one and only shell. The legacy tokens above are still consumed
+     by not-yet-retrofitted page content, so they stay. Space-separated RGB
+     triples → consume via `rgb(var(--token))` / `rgb(var(--token) / <alpha>)`,
+     matching this file's established idiom. */
+  --bg-canvas: 2 6 23;        /* slate-950 — the app canvas */
+  --bg-raised: 30 41 59;      /* slate-800 — raised surfaces (menus, popovers) */
+  --border-strong: 51 65 85;  /* slate-700 — emphasised 1px borders */
+  --accent: 20 184 166;       /* teal-500 — the single interactive accent */
+  --accent-fg: 4 47 46;       /* teal-950 — text/glyphs on an accent fill */
+  --ok: 16 185 129;           /* emerald-500 */
+  --warn: 245 158 11;         /* amber-500 */
+  --err: 239 68 68;           /* red-500 */
+  --info: 6 182 212;          /* cyan-500 */
+  --radius: 10px;             /* base corner radius (1px borders over shadows) */
 }
 
 :root.light {
@@ -43,6 +80,18 @@
   --text-secondary: 71 85 105;   /* slate-600 */
   --text-muted: 100 116 139;     /* slate-500 */
   --accent-text: 15 118 110;     /* teal-700 — enough contrast on the light gel-brand tint */
+
+  /* v2 token set — light swap. Accents/semantics move a shade darker so text
+     and glyphs clear WCAG-AA on white/slate-50 surfaces. */
+  --bg-canvas: 248 250 252;   /* slate-50 */
+  --bg-raised: 255 255 255;   /* white */
+  --border-strong: 203 213 225; /* slate-300 */
+  --accent: 13 148 136;       /* teal-600 */
+  --accent-fg: 255 255 255;
+  --ok: 5 150 105;            /* emerald-600 */
+  --warn: 217 119 6;          /* amber-600 */
+  --err: 220 38 38;           /* red-600 */
+  --info: 8 145 178;          /* cyan-600 */
 }
 
 /* Brand identity colour — the myAI wordmark + page H1 headings.
@@ -119,10 +168,21 @@
 body {
   background-color: rgb(var(--bg-page));
   color: rgb(var(--text-primary));
+}
+/* The ambient gradient used to live on body with background-attachment: fixed.
+   On mobile Chrome/Safari that forces a full-page repaint of two large radial
+   gradients on every scroll frame — the documented cause of "the page is stuck
+   / won't scroll" on phones. A fixed, non-interactive pseudo-element gives the
+   same look with zero scroll cost. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
   background-image:
     radial-gradient(1100px 600px at 12% -8%, rgba(20, 184, 166, 0.07), transparent 60%),
     radial-gradient(900px 500px at 100% 0%, rgba(6, 182, 212, 0.05), transparent 55%);
-  background-attachment: fixed;
 }
 
 /* ── Gel skin ──────────────────────────────────────────────────
@@ -167,6 +227,52 @@ body {
 
 /* Never let anything force the page wider than the viewport on phones. */
 html, body { max-width: 100%; overflow-x: hidden; }
+
+/* Momentum-scroll containment (P4) — without this, scrolling an overlay
+   (mobile drawer, "More" sheet, detail panel) to its end lets the gesture
+   continue into the page behind it, so the drawer and the page rubber-band
+   together as one surface. `overscroll-contain` stops the scroll chain at
+   each surface's own boundary. */
+/* ROOT CAUSE of "the page is stuck / won't scroll" (verified 2026-09-07 with a
+   real wheel in Chromium): body also has overflow-x: hidden above, which makes
+   body its own scroll container — one with nothing to scroll. `contain` on that
+   container cut the wheel/touch scroll chain body → viewport, so wheel and
+   touch did nothing while keyboard/programmatic scroll (which target the
+   viewport directly) still worked. Only the viewport (html) may contain. */
+html { overscroll-behavior-y: contain; }
+
+/* SAME BUG, ONE LEVEL DOWN (reproduced 2026-09-08 with a real wheel at 1280,
+   900 and 390 px wide): the shell's <main> carried overflow-y-auto +
+   overscroll-contain but nothing bounds its height (body is min-h-screen, the
+   column is flex-1), so <main> was a scroll container with nothing to scroll
+   that swallowed every wheel/touch over the content — the page only moved when
+   the pointer was over the sidebar or the margins. <main> must NOT be a
+   scroll container: the document (html) is the one scroller. Only surfaces
+   with a real bounded height (sidebar nav, sheets, listboxes) may be
+   overflow-y-auto + overscroll-contain. Guard: dashboard/e2e/scroll.spec.ts. */
+
+/* Sidebar nav scrollbar — the nav has more links than fit below ~1300px tall,
+   so it needs a scrollbar, but not the default 15px chrome one. Thin, track-
+   less, and only visible while the pointer is over the nav. */
+.nav-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: stable;
+}
+.nav-scroll:hover,
+.nav-scroll:focus-within {
+  scrollbar-color: rgb(var(--border-strong)) transparent;
+}
+.nav-scroll::-webkit-scrollbar { width: 6px; }
+.nav-scroll::-webkit-scrollbar-track { background: transparent; }
+.nav-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+}
+.nav-scroll:hover::-webkit-scrollbar-thumb,
+.nav-scroll:focus-within::-webkit-scrollbar-thumb {
+  background: rgb(var(--border-strong));
+}
 
 /* ── Responsive card-table ─────────────────────────────────────
    Below md, ANY <table class="card-table"> collapses into stacked
@@ -260,6 +366,16 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .panel-enter { animation-name: panel-in-right; }
 }
 .backdrop-enter { animation: backdrop-in 0.18s ease-out; }
+
+/* WCAG 2.3.3 (AAA) / 2.2.2 best practice — drawers (task-cost-drawer,
+   task-artifacts-drawer) still open/close instantly, only the slide/fade
+   motion is removed for users who've asked the OS for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .panel-enter,
+  .backdrop-enter {
+    animation: none;
+  }
+}
 
 /* Touch press feedback for tappable cards — hover styles are inert on touch
    screens, so give fingers a scale response. */

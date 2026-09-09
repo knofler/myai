@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bootstrap } from '../core/index.js';
+import { upsertEnvVars } from '../shared/env-file.js';
 
 /**
  * Locate the framework's init_connect.sh. It ships with the master repo at
@@ -185,6 +186,99 @@ connect
       console.error(`Failed to run init_connect.sh: ${err.message}`);
       process.exit(1);
     });
+  });
+
+// `myai rotate-keys …` — self-rotation for the gateway local-bridge token and
+// a tenant's bootstrap API key, both with a dual-valid grace window: the OLD
+// credential keeps authenticating until the grace cutoff (core/auth.ts), so
+// rotating never 401s an in-flight caller still holding it. Both subcommands
+// call the gateway over loopback (http://localhost:<port>), which is
+// local-trust — no token needed for the rotate call itself.
+const rotateKeys = program.command('rotate-keys').description('Rotate gateway credentials with a zero-downtime grace window');
+
+interface LocalTokenRotateResponse {
+  token?: string;
+  previousToken?: string;
+  previousExpiresAt?: number;
+  graceMinutes?: number;
+  error?: string;
+}
+
+rotateKeys
+  .command('local')
+  .description('Rotate GATEWAY_LOCAL_TOKEN — the OLD token keeps authenticating until the grace window elapses')
+  .option('-p, --port <number>', 'Gateway HTTP port', '3200')
+  .option('-g, --grace-minutes <number>', 'Minutes the old token stays valid (0 = immediate cutover)')
+  .option('--env-file <path>', 'Persist the rotation into this .env file (GATEWAY_LOCAL_TOKEN + _PREVIOUS + _PREVIOUS_EXPIRES_AT) so a restart does not revert it')
+  .action(async (opts: { port: string; graceMinutes?: string; envFile?: string }) => {
+    try {
+      const body: Record<string, unknown> = {};
+      if (opts.graceMinutes !== undefined) body.graceMinutes = Number(opts.graceMinutes);
+      const res = await fetch(`http://localhost:${opts.port}/api/auth/local-token/rotate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json() as LocalTokenRotateResponse;
+      if (!res.ok || !data.token) {
+        console.error(`Rotate failed: ${data.error ?? res.statusText}`);
+        process.exit(1);
+      }
+      console.log('\nmyAI — Local token rotated');
+      console.log('═'.repeat(40));
+      console.log(`  New token:    ${data.token}`);
+      console.log(`  Grace window: ${data.graceMinutes} min`);
+      if (data.previousExpiresAt) {
+        console.log(`  Old token valid until: ${new Date(data.previousExpiresAt).toISOString()}`);
+      }
+      if (opts.envFile) {
+        upsertEnvVars(opts.envFile, {
+          GATEWAY_LOCAL_TOKEN: data.token,
+          GATEWAY_LOCAL_TOKEN_PREVIOUS: data.previousToken,
+          GATEWAY_LOCAL_TOKEN_PREVIOUS_EXPIRES_AT: data.previousExpiresAt ? String(data.previousExpiresAt) : undefined,
+        });
+        console.log(`  Persisted to: ${opts.envFile}`);
+      } else {
+        console.log('  Not persisted — pass --env-file <path> so a restart keeps this rotation.');
+      }
+      console.log('');
+    } catch {
+      console.error('Gateway not running on port', opts.port);
+      process.exit(1);
+    }
+  });
+
+rotateKeys
+  .command('tenant')
+  .description("Rotate a tenant's bootstrap API key — the OLD key keeps authenticating until the grace window elapses")
+  .argument('<tenantId>', 'Tenant ID to rotate')
+  .option('-p, --port <number>', 'Gateway HTTP port', '3200')
+  .option('-e, --env <live|test>', 'Key environment', 'live')
+  .option('-g, --grace-minutes <number>', 'Minutes the old key stays valid (0 = immediate cutover)')
+  .action(async (tenantId: string, opts: { port: string; env: string; graceMinutes?: string }) => {
+    try {
+      const body: Record<string, unknown> = { tenantId, env: opts.env === 'test' ? 'test' : 'live' };
+      if (opts.graceMinutes !== undefined) body.graceMinutes = Number(opts.graceMinutes);
+      const res = await fetch(`http://localhost:${opts.port}/api/auth/tenant-key/rotate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json() as { tenantId?: string; rawKey?: string; error?: string };
+      if (!res.ok || !data.rawKey) {
+        console.error(`Rotate failed: ${data.error ?? res.statusText}`);
+        process.exit(1);
+      }
+      console.log('\nmyAI — Tenant key rotated');
+      console.log('═'.repeat(40));
+      console.log(`  Tenant:  ${data.tenantId}`);
+      console.log(`  New key: ${data.rawKey}`);
+      console.log('  (show-once — store it now; the old key stays valid for the grace window)');
+      console.log('');
+    } catch {
+      console.error('Gateway not running on port', opts.port);
+      process.exit(1);
+    }
   });
 
 function formatUptime(seconds: number): string {

@@ -206,6 +206,8 @@ values):
 |---|---|---|
 | `AGENTIC_MAX_ITERS` | `24` | Max tool-call round-trips per run before the agent gives up (`openai_agent.py --max-iters`). Raise for tasks needing many read/write/test cycles; lower to fail fast and cheap. |
 | `AGENTIC_CMD_TIMEOUT_SEC` | `300` | Wall-clock timeout (seconds) for each individual `run_command` call inside the loop. Raise if your test suite legitimately takes longer than 5 minutes. |
+| `AGENTIC_QUALITY_FILE` | `$AGENTIC_LEDGER_DIR/outcomes.log` | Path to the per-provider quality ledger (see "Reading the per-provider quality ledger" below). Machine-local, never git — override if you want it outside the default ledger dir. |
+| `AGENTIC_QUALITY_WINDOW` | `20` | How many of the most recent recorded attempts per provider count toward the rolling pass-rate (`agentic_quality_pass_rate`/`agentic_quality_rollup`). Raise for a smoother/slower-moving rate, lower to react faster to a recent run of failures. |
 
 ## Deny-list — what's blocked, and how to extend it safely
 
@@ -384,7 +386,8 @@ python3 scripts/tests/test_openai_agent.py    # tool loop, deny-list, key scrubb
 Every env var `agentic_fallback.sh` reads is documented above:
 `AGENTIC_FALLBACK`, `AGENTIC_FALLBACK_MODELS`,
 `AGENTIC_FALLBACK_DAILY_USD_CAP`, `AGENTIC_MAX_ITERS`,
-`AGENTIC_CMD_TIMEOUT_SEC`, `AGENTIC_LEDGER_DIR`, `DEEPSEEK_BASE_URL`,
+`AGENTIC_CMD_TIMEOUT_SEC`, `AGENTIC_LEDGER_DIR`, `AGENTIC_QUALITY_FILE`,
+`AGENTIC_QUALITY_WINDOW`, `DEEPSEEK_BASE_URL`,
 `MOONSHOT_BASE_URL`, `AGENTIC_ENV_FILE` (test-only override of the `.env`
 path, not needed in normal operation). Every knob `openai_agent.py` reads
 is documented above: `AGENTIC_PRICE_IN_PER_M`, `AGENTIC_PRICE_OUT_PER_M`,

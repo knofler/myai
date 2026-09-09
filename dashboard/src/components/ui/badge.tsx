@@ -36,6 +36,36 @@ export function TaskStatusBadge({ status }: { status: string }) {
   return <Badge className={TASK_STATUS[status]}>{status}</Badge>;
 }
 
+/* ── Gateway session status (active | closed | other) ──────── */
+// Was a page-level colour map inlined in views/sessions.tsx; centralised here
+// so /memory (Sessions & RAG) and any other session surface share one source.
+
+const SESSION_STATUS: Record<string, string> = {
+  active: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  closed: 'bg-zinc-700/40 text-[rgb(var(--text-muted))] border-zinc-600/50',
+};
+
+export function SessionStatusBadge({ status }: { status: string }) {
+  return <Badge className={SESSION_STATUS[status] ?? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'}>{status}</Badge>;
+}
+
+/* ── Stripe invoice status (paid | open | draft | void | …) ── */
+// Was plain capitalised text in the /billing invoice table; centralised so the
+// self-serve billing surface reads its status colour from the one badge system.
+
+const INVOICE_STATUS: Record<string, string> = {
+  paid: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  open: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  draft: 'bg-zinc-700/40 text-[rgb(var(--text-muted))] border-zinc-600/50',
+  uncollectible: 'bg-red-500/15 text-red-400 border-red-500/30',
+  void: 'bg-zinc-600/20 text-[rgb(var(--text-secondary))] border-zinc-600/30',
+};
+
+export function InvoiceStatusBadge({ status }: { status: string }) {
+  const key = (status ?? '').toLowerCase();
+  return <Badge className={INVOICE_STATUS[key] ?? 'bg-zinc-700/40 text-[rgb(var(--text-secondary))] border-zinc-600/50'}>{key || '—'}</Badge>;
+}
+
 /* ── Model ─────────────────────────────────────────────────── */
 
 const MODEL: Record<string, string> = {

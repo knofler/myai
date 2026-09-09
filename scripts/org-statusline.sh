@@ -177,6 +177,23 @@ def main():
             out += " " + pc + str(p) + "%" + RESET
         except Exception:
             pass
+    # myAI badge — is the myAI gateway/brain plugged into this session?
+    # The brain boot hook (hooks/session/23-brain-status.sh) writes
+    # ~/.myai/statusline-badge.json {sha, score, ts} on every session start.
+    # Fresh (<3h) → green "🧠 myAI <sha8> <score>"; stale/missing → dim "myAI off".
+    try:
+        import time as _t
+        _bp = os.path.expanduser("~/.myai/statusline-badge.json")
+        _bj = json.load(open(_bp))
+        _age = _t.time() - float(_bj.get("ts") or 0)
+        if _age < 3 * 3600 and _bj.get("sha"):
+            _sc = _bj.get("score")
+            _sc_s = (" " + str(int(_sc))) if isinstance(_sc, (int, float)) else ""
+            out += " " + DIM + "·" + RESET + " " + "\033[38;5;208m" + "🧠 myAI " + str(_bj["sha"])[:8] + _sc_s + RESET
+        else:
+            out += " " + DIM + "· 🧠 myAI off" + RESET
+    except Exception:
+        out += " " + DIM + "· 🧠 myAI off" + RESET
     if repo:
         out += "  " + BLUE + BOLD + "📁 " + repo + RESET
 

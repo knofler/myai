@@ -4,12 +4,13 @@
 // code↔memory provenance recorded on HEAD. Sources everything from the gateway
 // `brain_explore` tool in one pass — never checks out, merges, or writes.
 
-import { StatCard, Card, EmptyState, THead } from '@/components/ui/card';
+import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { DataTable } from '@/components/ui/data-table';
 import { GATEWAY_URL } from '@/lib/gateway';
 import {
-  fetchBrainExplore, fetchBrainHealth, fetchBanditStats, formatBrainStamp,
-  type BrainAtomMeta, type BrainHealth, type BrainSection, type BanditStats,
+  fetchBrainExplore, fetchBrainHealth, fetchBanditStats, fetchRouterTrainReadiness, formatBrainStamp,
+  type BrainAtomMeta, type BrainHealth, type BrainSection, type BanditStats, type RouterTrainReadiness,
 } from '@/lib/brain';
 import {
   fetchHostedBrainInfo,
@@ -144,38 +145,122 @@ export function RetrievalStrategyCard({ stats }: { stats: BanditStats }) {
   }
 
   return (
-    <Card
+    <DataTable
       title="Retrieval strategy"
       meta={`${stats.totalPulls} recorded pull${stats.totalPulls !== 1 ? 's' : ''} across ${stats.contexts.length} context${stats.contexts.length !== 1 ? 's' : ''}`}
-      accent="blue"
+      searchable={false}
+      defaultSort="pulls"
+      defaultDesc
+      columns={[
+        { label: 'Context', mobile: 'title' },
+        { label: 'Favored config', mobile: 'badge' },
+        { label: 'Mean reward', align: 'right', sortKey: 'reward', mobile: 'meta' },
+        { label: 'Pulls', align: 'right', sortKey: 'pulls', mobile: 'meta' },
+      ]}
+      rows={stats.contexts.map((c) => {
+        const favoredMean = c.arms.find(
+          (a) => c.favoredArm && a.k === c.favoredArm.k && a.rerankOn === c.favoredArm.rerank_on,
+        )?.meanReward;
+        return {
+          id: c.context,
+          search: c.context.toLowerCase(),
+          sort: { reward: favoredMean ?? -1, pulls: c.pullsTotal },
+          cells: [
+            <span key="ctx" className="font-mono text-xs text-[rgb(var(--text-primary))]">{c.context}</span>,
+            <Badge key="arm" className={KIND_BADGE.session}>{formatArm(c.favoredArm)}</Badge>,
+            <span key="rw" className="font-mono text-[rgb(var(--text-secondary))]">{favoredMean === undefined ? '—' : favoredMean.toFixed(3)}</span>,
+            <span key="pl" className="font-mono text-[rgb(var(--text-secondary))]">{c.pullsTotal}</span>,
+          ],
+        };
+      })}
+    />
+  );
+}
+
+// ── Router-training readiness (BRAIN B-7.1, task-7fdc970b) ──────────────────
+// scripts/brain_router_train_ready.py gates LoRA router training on >=500
+// labeled traces — but checking progress meant running that script by hand.
+// This card surfaces the gateway's read-only report (brain_router_train_readiness):
+// traces banked vs the floor, ingestion rate, and ETA at the current rate.
+
+function formatEta(readiness: RouterTrainReadiness): string {
+  if (readiness.ready) return 'floor met';
+  if (readiness.etaDays === null) return 'unknown — no recent ingestion';
+  const days = Math.ceil(readiness.etaDays);
+  const when = readiness.estimatedReadyAt ? ` (~${new Date(readiness.estimatedReadyAt).toLocaleDateString()})` : '';
+  return `~${days} day${days !== 1 ? 's' : ''}${when}`;
+}
+
+export function RouterTrainReadinessCard({ readiness }: { readiness: RouterTrainReadiness }) {
+  if (!readiness.available) {
+    return (
+      <Card title="Router training readiness" meta="B-7.1 LoRA gate">
+        <EmptyState>
+          No trace store yet. Labeled traces bank in <code>route_eval</code> as{' '}
+          <code>brain_route.py</code> dispatches resolve a clear top-1; readiness is
+          reported by <code>brain_router_train_ready.py</code>.
+        </EmptyState>
+      </Card>
+    );
+  }
+
+  const pct = Math.min(100, Math.round((readiness.traceCount / readiness.minTracesRequired) * 100));
+  return (
+    <Card
+      title="Router training readiness"
+      meta={readiness.ready ? 'trace floor met — training stays manual' : `${readiness.tracesRemaining} traces to go`}
+      accent={readiness.ready ? 'emerald' : 'blue'}
     >
-      <table className="card-table w-full text-sm">
-        <THead cols={[
-          { label: 'Context' },
-          { label: 'Favored config' },
-          { label: 'Mean reward', align: 'right' },
-          { label: 'Pulls', align: 'right' },
-        ]} />
-        <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
-          {stats.contexts.map((c) => {
-            const favoredMean = c.arms.find(
-              (a) => c.favoredArm && a.k === c.favoredArm.k && a.rerankOn === c.favoredArm.rerank_on,
-            )?.meanReward;
-            return (
-              <tr key={c.context} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
-                <td className="px-4 py-2.5 font-mono text-xs text-[rgb(var(--text-primary))]">{c.context}</td>
-                <td className="px-4 py-2.5 text-[rgb(var(--text-primary))]">
-                  <Badge className={KIND_BADGE.session}>{formatArm(c.favoredArm)}</Badge>
-                </td>
-                <td className="px-4 py-2.5 text-right font-mono text-[rgb(var(--text-secondary))]">
-                  {favoredMean === undefined ? '—' : favoredMean.toFixed(3)}
-                </td>
-                <td className="px-4 py-2.5 text-right font-mono text-[rgb(var(--text-secondary))]">{c.pullsTotal}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div className="p-4 space-y-4">
+        <div>
+          <div className="flex items-baseline justify-between mb-1.5 text-sm">
+            <span className="text-[rgb(var(--text-secondary))]">Labeled traces banked</span>
+            <span className="font-mono text-[rgb(var(--text-primary))]">
+              {readiness.traceCount}
+              <span className="text-[rgb(var(--text-muted))]"> / {readiness.minTracesRequired}</span>
+              <span className="text-[rgb(var(--text-muted))]"> · {pct}%</span>
+            </span>
+          </div>
+          <div
+            className="h-2.5 bg-[rgb(var(--bg-page))] rounded-full overflow-hidden"
+            role="progressbar"
+            aria-valuenow={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Labeled router-training traces banked toward the training floor"
+          >
+            <div
+              className={`h-full rounded-full transition-all ${readiness.ready ? 'bg-emerald-500' : 'bg-blue-500'}`}
+              style={{ width: `${Math.max(pct, 2)}%` }}
+            />
+          </div>
+        </div>
+
+        <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+          <div>
+            <dt className="text-[rgb(var(--text-muted))]">Live (route_eval)</dt>
+            <dd className="text-[rgb(var(--text-primary))] font-mono">{readiness.sources.liveRouteEvalLabeled}</dd>
+          </div>
+          <div>
+            <dt className="text-[rgb(var(--text-muted))]">Harvested (spike)</dt>
+            <dd className="text-[rgb(var(--text-primary))] font-mono">{readiness.sources.harvestedSpikeLabeled}</dd>
+          </div>
+          <div>
+            <dt className="text-[rgb(var(--text-muted))]">Ingestion ({readiness.ingestion.windowDays}d)</dt>
+            <dd className="text-[rgb(var(--text-primary))] font-mono">
+              {readiness.ingestion.recentLabeled} (~{readiness.ingestion.perDay.toFixed(1)}/day)
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[rgb(var(--text-muted))]">ETA to floor</dt>
+            <dd className={`font-mono ${readiness.ready ? 'text-emerald-400' : 'text-[rgb(var(--text-primary))]'}`}>
+              {formatEta(readiness)}
+            </dd>
+          </div>
+        </dl>
+
+        <p className="text-xs text-[rgb(var(--text-muted))]">{readiness.trainingStatus}</p>
+      </div>
     </Card>
   );
 }
@@ -386,11 +471,12 @@ const TAB_SECTIONS: Record<string, BrainSection[]> = {
 };
 
 export default async function BrainView({ tab }: { tab: string }) {
-  const [brain, hosted, health, bandit] = await Promise.all([
+  const [brain, hosted, health, bandit, routerReadiness] = await Promise.all([
     fetchBrainExplore(TAB_SECTIONS[tab] ?? []),
     fetchHostedBrainInfo(),
     tab === 'overview' ? fetchBrainHealth() : Promise.resolve(null),
     tab === 'overview' ? fetchBanditStats() : Promise.resolve(null),
+    tab === 'overview' ? fetchRouterTrainReadiness() : Promise.resolve(null),
   ]);
   if (!brain) return <GatewayDown />;
   if (!brain.initialized) return <NotInitialized />;
@@ -429,6 +515,7 @@ export default async function BrainView({ tab }: { tab: string }) {
         <>
           {health && <HealthCard health={health} />}
           {bandit && <RetrievalStrategyCard stats={bandit} />}
+          {routerReadiness && <RouterTrainReadinessCard readiness={routerReadiness} />}
           {hosted && (
             <HostedBrainCard
               info={hosted}
@@ -449,32 +536,31 @@ export default async function BrainView({ tab }: { tab: string }) {
 function OverviewTab({ brain }: { brain: NonNullable<Awaited<ReturnType<typeof fetchBrainExplore>>> }) {
   return (
     <>
-      <Card title="Namespaces" meta={`${brain.namespaces.length} repo${brain.namespaces.length !== 1 ? 's' : ''}`}>
-        {brain.namespaces.length === 0 ? (
-          <EmptyState>No repo namespaces yet.</EmptyState>
-        ) : (
-          <table className="card-table w-full text-sm">
-            <THead cols={[
-              { label: 'Namespace' },
-              { label: 'Sessions', align: 'right' },
-              { label: 'Handoffs', align: 'right' },
-              { label: 'Compiled', align: 'right' },
-            ]} />
-            <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
-              {brain.namespaces.map((n) => (
-                <tr key={n.name} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
-                  <td className="px-4 py-2.5 font-mono text-xs text-[rgb(var(--text-primary))]">{n.name}</td>
-                  <td className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono">{n.sessions}</td>
-                  <td className="px-4 py-2.5 text-right text-[rgb(var(--text-primary))] font-mono">{n.handoffs}</td>
-                  <td className="px-4 py-2.5 text-right text-xs text-[rgb(var(--text-muted))]">
-                    {[n.hasBrief && 'brief', n.hasWorking && 'working'].filter(Boolean).join(' · ') || '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
+      <DataTable
+        title="Namespaces"
+        meta={`${brain.namespaces.length} repo${brain.namespaces.length !== 1 ? 's' : ''}`}
+        defaultSort="sessions"
+        defaultDesc
+        columns={[
+          { label: 'Namespace', mobile: 'title' },
+          { label: 'Sessions', align: 'right', sortKey: 'sessions', mobile: 'meta' },
+          { label: 'Handoffs', align: 'right', sortKey: 'handoffs', mobile: 'meta' },
+          { label: 'Compiled', align: 'right', mobile: 'detail' },
+        ]}
+        searchPlaceholder="Search namespace…"
+        emptyText="No repo namespaces yet."
+        rows={brain.namespaces.map((n) => ({
+          id: n.name,
+          search: n.name.toLowerCase(),
+          sort: { sessions: n.sessions, handoffs: n.handoffs },
+          cells: [
+            <span key="n" className="font-mono text-xs text-[rgb(var(--text-primary))]">{n.name}</span>,
+            <span key="s" className="text-[rgb(var(--text-primary))] font-mono">{n.sessions}</span>,
+            <span key="h" className="text-[rgb(var(--text-primary))] font-mono">{n.handoffs}</span>,
+            <span key="c" className="text-xs text-[rgb(var(--text-muted))]">{[n.hasBrief && 'brief', n.hasWorking && 'working'].filter(Boolean).join(' · ') || '—'}</span>,
+          ],
+        }))}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card title="Branches" meta={`${brain.branches.sessions.length + brain.branches.ideas.length} open`}>
@@ -530,49 +616,45 @@ function OverviewTab({ brain }: { brain: NonNullable<Awaited<ReturnType<typeof f
 
 function AtomsTab({ atoms, truncated }: { atoms: BrainAtomMeta[]; truncated: boolean }) {
   return (
-    <Card
+    <DataTable
       title="Atoms"
       meta={`${atoms.length} shown, newest first${truncated ? ' (capped)' : ''}`}
-    >
-      {atoms.length === 0 ? (
-        <EmptyState>No atoms written yet. Sessions, handoffs and memory facts appear here as they&apos;re committed.</EmptyState>
-      ) : (
-        <table className="card-table w-full text-sm">
-          <THead cols={[
-            { label: 'Kind' },
-            { label: 'Repo' },
-            { label: 'Slug' },
-            { label: 'Provenance' },
-            { label: 'Host' },
-            { label: 'Written', align: 'right' },
-          ]} />
-          <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
-            {atoms.map((a) => (
-              <tr key={a.path} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors align-top">
-                <td className="px-4 py-2.5"><KindBadge kind={a.kind} /></td>
-                <td className="px-4 py-2.5 font-mono text-xs text-[rgb(var(--text-secondary))]">{a.repo || <span className="text-zinc-600">(cross-repo)</span>}</td>
-                <td className="px-4 py-2.5 text-[rgb(var(--text-primary))]">
-                  {a.slug}
-                  <span className="block font-mono text-[10px] text-zinc-600">{a.sha8}</span>
-                </td>
-                <td className="px-4 py-2.5 text-xs">
-                  {a.code ? (
-                    <span className="font-mono text-[11px] text-orange-400/90">
-                      {a.code.branch ?? ''}{a.code.sha ? `@${a.code.sha.slice(0, 7)}` : ''}
-                      {a.code.commits.length ? ` · ${a.code.commits.length} commit${a.code.commits.length !== 1 ? 's' : ''}` : ''}
-                    </span>
-                  ) : (
-                    <span className="text-zinc-600">—</span>
-                  )}
-                </td>
-                <td className="px-4 py-2.5 font-mono text-[11px] text-[rgb(var(--text-muted))]">{a.host || '—'}</td>
-                <td className="px-4 py-2.5 text-right text-[11px] text-[rgb(var(--text-muted))] whitespace-nowrap">{formatBrainStamp(a.written)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </Card>
+      defaultSort="written"
+      defaultDesc
+      columns={[
+        { label: 'Kind', mobile: 'badge' },
+        { label: 'Repo', mobile: 'meta' },
+        { label: 'Slug', mobile: 'title' },
+        { label: 'Provenance', mobile: 'detail' },
+        { label: 'Host', mobile: 'detail' },
+        { label: 'Written', align: 'right', sortKey: 'written', mobile: 'meta' },
+      ]}
+      searchPlaceholder="Search kind, repo, slug…"
+      emptyText="No atoms written yet. Sessions, handoffs and memory facts appear here as they're committed."
+      rows={atoms.map((a) => ({
+        id: a.path,
+        search: `${a.kind} ${a.repo ?? ''} ${a.slug} ${a.host ?? ''}`.toLowerCase(),
+        sort: { written: a.written ?? '' },
+        cells: [
+          <KindBadge key="k" kind={a.kind} />,
+          <span key="r" className="font-mono text-xs text-[rgb(var(--text-secondary))]">{a.repo || <span className="text-zinc-600">(cross-repo)</span>}</span>,
+          <span key="s" className="text-[rgb(var(--text-primary))]">
+            {a.slug}
+            <span className="block font-mono text-[10px] text-zinc-600">{a.sha8}</span>
+          </span>,
+          a.code ? (
+            <span key="p" className="font-mono text-[11px] text-orange-400/90">
+              {a.code.branch ?? ''}{a.code.sha ? `@${a.code.sha.slice(0, 7)}` : ''}
+              {a.code.commits.length ? ` · ${a.code.commits.length} commit${a.code.commits.length !== 1 ? 's' : ''}` : ''}
+            </span>
+          ) : (
+            <span key="p" className="text-zinc-600">—</span>
+          ),
+          <span key="h" className="font-mono text-[11px] text-[rgb(var(--text-muted))]">{a.host || '—'}</span>,
+          <span key="w" className="text-[11px] text-[rgb(var(--text-muted))] whitespace-nowrap">{formatBrainStamp(a.written)}</span>,
+        ],
+      }))}
+    />
   );
 }
 

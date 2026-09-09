@@ -47,11 +47,11 @@ RESULT=$(mongosh "$MONGO_URI" --quiet --eval '
 if echo "$RESULT" | jq . &>/dev/null; then
   DB=$(echo "$RESULT" | jq -r '.database')
   COLLS=$(echo "$RESULT" | jq -r '.collections')
-  echo "Atlas: Connected to '$DB' ($COLLS collections)"
-  echo "$RESULT" | jq -r '.counts | to_entries[] | "  \(.key): \(.value) docs"' 2>/dev/null | head -10
+  # One line only — the per-collection doc-count dump is boot noise (TOKEN
+  # task-2a431e9b). Detail lives behind `myai doctor` (Atlas check).
+  echo "Atlas: Connected to '$DB' ($COLLS collections) — 'myai doctor' for per-collection counts"
 else
-  echo "ATLAS CONNECTION FAILED:"
-  echo "$RESULT" | tail -3
+  echo "ATLAS CONNECTION FAILED — 'myai doctor' for detail"
 fi
 
 exit 0

@@ -16,6 +16,7 @@
 // data-testid so scripts/capture_demo_gif.mjs can drive it deterministically.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import {
   canSkip,
   shouldAutoAdvance,
@@ -86,6 +87,7 @@ function markSeen() {
 
 export function ProductTour() {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
   const [i, setI] = useState(0);
   // The exit is briefly withheld on the opening slide so the value lands first;
   // `skipReady` flips true after the reveal delay (or immediately from slide 2).
@@ -108,11 +110,15 @@ export function ProductTour() {
     } catch {
       seen = '';
     }
-    if (!seen) reset();
+    // Never auto-open over the sign-in forms: the tour is a full-viewport
+    // pointer-events layer, so on /login and /operator-login it sat on top of
+    // the form until dismissed (seen 2026-09-07). Replay via the event still works.
+    const onAuthRoute = /^\/(login|operator-login)(\/|$)/.test(pathname ?? '');
+    if (!seen && !onAuthRoute) reset();
     const replay = () => reset();
     window.addEventListener(TOUR_START_EVENT, replay);
     return () => window.removeEventListener(TOUR_START_EVENT, replay);
-  }, [reset]);
+  }, [reset, pathname]);
 
   const close = useCallback(() => {
     setOpen(false);

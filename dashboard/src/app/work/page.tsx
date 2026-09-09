@@ -26,6 +26,8 @@ import { readSchedulePolicy } from '@/lib/schedule-policy';
 import { readUserBlockers } from '@/lib/user-blockers';
 import { readPoolCapacity, type PoolCapacity } from '@/lib/pool-capacity';
 import { PoolCapacityPanel } from '@/components/pool-capacity-panel';
+import { fetchRecentRoutingDecisions } from '@/lib/routing-decisions';
+import { RoutingDecisionsCard } from '@/components/routing-decisions-card';
 import { TaskDeferPanel } from '@/components/task-defer-panel';
 import { RecurringToggle } from '@/components/recurring-toggle';
 
@@ -298,10 +300,11 @@ function SchedulePolicyPanel({ priorityRepos, ignoreRepos }: { priorityRepos: st
 }
 
 async function SchedulesTab({ tenantId, repo }: { tenantId: string; repo?: string }) {
-  const [schedules, policy, capacity] = await Promise.all([
+  const [schedules, policy, capacity, routingDecisions] = await Promise.all([
     Schedule.find({ ...tenantFilter(tenantId), ...repoFilter(repo) }).sort({ enabled: -1, nextRun: 1 }).lean() as unknown as Promise<ScheduleDoc[]>,
     readSchedulePolicy(),
     readPoolCapacity(),
+    fetchRecentRoutingDecisions(),
   ]);
   const rows: DataRow[] = schedules.map((s) => ({
     id: s.scheduleId,
@@ -324,6 +327,7 @@ async function SchedulesTab({ tenantId, repo }: { tenantId: string; repo?: strin
   return (
     <div className="space-y-4">
       <PoolCapacityPanel capacity={capacity} />
+      <RoutingDecisionsCard decisions={routingDecisions} />
       <SchedulePolicyPanel priorityRepos={policy.priorityRepos} ignoreRepos={policy.ignoreRepos} />
       <DataTable
         title="Scheduled runs"

@@ -184,7 +184,7 @@ export function TenantSwitcher() {
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="gel-surface flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-left hover:border-zinc-700 transition-colors"
+        className="gel-surface flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-left hover:border-zinc-700 active:border-zinc-700 active:scale-[0.99] transition-[border-color,transform]"
       >
         <span className="gel-brand flex items-center justify-center w-7 h-7 rounded-md text-[11px] font-bold text-teal-200 shrink-0">
           {initials(current.name)}

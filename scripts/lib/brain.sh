@@ -70,6 +70,53 @@ _brain_sha8() {
 
 _brain_utc() { date -u +%Y%m%dT%H%M%SZ; }
 
+# brain_repo_name [dir] — the canonical, WORKTREE-STABLE repo identity used for
+# brain namespacing. A directory basename is NOT the repo: the runner checks
+# each task out into a worktree named <repo>-task-<uuid>, and deriving the
+# namespace from that basename minted one throwaway brain namespace per task
+# (661 of them, ~10MB, before this was fixed). The same flaw split THIS repo's
+# memory in two — interactive sessions wrote to `ai` (dir basename "AI") while
+# the runner wrote to `ai-management`, so `brain_delta` returned half the
+# history and every session booted from a partial memory.
+#
+# Resolution order, first hit wins:
+#   1. the origin remote's basename — authoritative, and identical from every
+#      worktree, machine and checkout directory
+#   2. the MAIN repo directory via --git-common-dir (a worktree's common dir
+#      points at the main repo's .git, so this survives worktrees too)
+#   3. --show-toplevel basename, then the passed directory's basename
+# Prints the RAW name (callers slugify as needed). Never fails: falls through
+# to the basename so a non-git dir still yields something usable.
+brain_repo_name() {
+  local d="${1:-$PWD}" name="" url="" common="" top=""
+
+  url="$(git -C "$d" remote get-url origin 2>/dev/null)"
+  if [ -n "$url" ]; then
+    name="${url%/}"; name="${name##*/}"; name="${name%.git}"
+  fi
+
+  if [ -z "$name" ]; then
+    common="$(git -C "$d" rev-parse --git-common-dir 2>/dev/null)"
+    if [ -n "$common" ]; then
+      case "$common" in
+        /*) : ;;
+        *)  top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)"
+            [ -n "$top" ] && common="$top/$common" ;;
+      esac
+      name="$(basename "$(dirname "$common")" 2>/dev/null)"
+      [ "$name" = "/" ] || [ "$name" = "." ] && name=""
+    fi
+  fi
+
+  if [ -z "$name" ]; then
+    top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)"
+    [ -n "$top" ] && name="$(basename "$top" 2>/dev/null)"
+  fi
+
+  [ -n "$name" ] || name="$(basename "$d" 2>/dev/null)"
+  printf '%s\n' "$name"
+}
+
 # ── ADR-020 topic tag ────────────────────────────────────────────────────────
 #
 # Mirror of `BRAIN_TOPICS` in runtime/src/core/brain.ts — KEEP IN SYNC (the
@@ -160,9 +207,23 @@ brain_sync_push() {
   return 0
 }
 
+# _brain_ahead_behind <dir> — prints "<ahead> <behind>" of local main vs the
+# just-fetched origin/main (local-only, no network). 0 0 on any git failure.
+_brain_ahead_behind() {
+  local d="$1" out
+  out="$(git -C "$d" rev-list --left-right --count main...origin/main 2>/dev/null)" || { printf '0 0\n'; return; }
+  printf '%s\n' "${out:-0	0}" | tr '\t' ' '
+}
+
 # brain_sync_pull — bounded fetch + ff-only advance of local main. Never merges
-# or rebases: diverged/dirty → no-op (the next push-on-merge reconciles). No
-# remote → silent no-op. Always rc 0.
+# or rebases: diverged/dirty → no-op (the next `brain merge`'s reconcile
+# reconciles). No remote → silent no-op. Always rc 0.
+#
+# A no-op that leaves local main genuinely behind origin (diverged or dirty)
+# is now LOUD (stderr), not silent — task-1195b1a7: a clone that sat 15 ahead
+# / 455 behind origin/main for 7 weeks got zero indication anything was wrong
+# because this used to swallow the ff-only failure with `|| true` and no
+# message at all.
 brain_sync_pull() {
   local d; d="$(brain_dir)"
   brain_remote_url "$d" >/dev/null || return 0
@@ -170,15 +231,215 @@ brain_sync_pull() {
     echo "brain: fetch from origin failed (offline?) — reading local main" >&2
     return 0
   fi
-  local cur; cur="$(git -C "$d" rev-parse --abbrev-ref HEAD)"
+  local ab ahead behind
+  ab="$(_brain_ahead_behind "$d")"; ahead="${ab%% *}"; behind="${ab##* }"
+  local cur synced=0
+  cur="$(git -C "$d" rev-parse --abbrev-ref HEAD)"
   if [ "$cur" = "main" ]; then
     if [ -z "$(git -C "$d" status --porcelain)" ]; then
-      git -C "$d" merge -q --ff-only origin/main >/dev/null 2>&1 || true
+      git -C "$d" merge -q --ff-only origin/main >/dev/null 2>&1 && synced=1
+    else
+      echo "brain: local main has uncommitted changes — pull-on-boot skipped (dirty), ${behind} commit(s) behind origin/main" >&2
     fi
   else
     # main not checked out → ff-only ref update (git refuses non-ff without +).
-    git -C "$d" fetch -q . refs/remotes/origin/main:refs/heads/main >/dev/null 2>&1 || true
+    git -C "$d" fetch -q . refs/remotes/origin/main:refs/heads/main >/dev/null 2>&1 && synced=1
   fi
+  behind="${behind:-0}"; case "$behind" in ''|*[!0-9]*) behind=0 ;; esac
+  if [ "$synced" != 1 ] && [ "$behind" -gt 0 ]; then
+    echo "⚠️  brain: local main is ${behind} commit(s) BEHIND origin/main (ahead ${ahead}) — pull-on-boot could not fast-forward (diverged). This session may be missing recent work from other machines. Run 'myai brain merge' (or resolve by hand) to reconcile." >&2
+  fi
+  return 0
+}
+
+# ── boot convergence: the fork killer ────────────────────────────────────────
+#
+# brain_converge — leave local main and origin/main IDENTICAL at boot, with
+# ZERO model tokens. This is the counterpart `brain_sync_pull` never had.
+#
+# WHY THIS EXISTS (2026-08-29). Brain sync was ASYMMETRIC:
+#   * `brain_sync_push` IS wired into hooks — hooks/stop/05-brain-autoatom.sh
+#     and hooks/post-tool/06-handoff-staleness.sh — so every machine PUSHES
+#     routinely, unattended.
+#   * `brain_sync_pull` was called from exactly ONE place, brain_session_start
+#     (brain.sh), which interactive `agent mode` / `agent mode -min` never runs.
+# Push-without-pull GUARANTEES a fork: two Macs each append atoms, each push,
+# and whoever pushes second diverges. And because `brain_sync_pull` is ff-only
+# BY DESIGN and deliberately refuses to merge, a diverged brain only printed a
+# warning and handed the reconcile to the MODEL. That bill came due twice in
+# 24h — 77f9280f (work-desktop <- Rummans, 122/181 commits) and e138b210 (Rummans <-
+# origin, 20/126) — each costing an interactive session to re-derive the same
+# mechanical merge, and each fork ALSO breaking anchor resolution so the next
+# `-min` boot silently degraded to the blank-agent brief. Operator direction:
+# boot converges, a machine switch is cheap, nobody pays tokens to re-merge.
+#
+# THE SAFETY RULE that makes auto-merge sound. Brain atoms under sessions/ and
+# handoffs/ are APPEND-ONLY and immutable: two machines writing different atoms
+# merge cleanly, always. The ONLY files that ever conflict are the distiller
+# OUTPUTS — brief.md / working.md / rollup.md — which brain_distill RECOMPILES
+# from the atoms and which are therefore not a source of truth. So:
+#   * every conflicted path is a distiller output -> mechanically safe: resolve
+#     to origin, recompile from atoms, done. No judgement required.
+#   * ANYTHING else conflicts -> a real semantic conflict this function must
+#     NOT guess at: `merge --abort`, restore a pristine tree, escalate LOUD.
+# Both observed reconciles hit the safe case (11 and 6 conflicts, all outputs,
+# zero atoms) — which is exactly why automating it is correct rather than risky.
+#
+# Guarantees: never `reset --hard`, never `clean`, never force-push; a backup
+# ref before any merge; atomic lock so two sessions on one machine cannot race;
+# bounded network via _brain_net_git; always rc 0 (boot must never block).
+# BRAIN_CONVERGE_DRY=1 reports the plan and changes nothing.
+# Implementation. Assumes the caller holds the converge lock; brain_converge
+# (below) is the portable lock wrapper. Split in two deliberately: `trap ...
+# RETURN` is a BASH-ONLY construct and this lib is sourced from zsh too (the
+# operator's login shell), where it dies with "undefined signal: RETURN" and
+# would leak the lock on every early return. Explicit release it is.
+_brain_converge_locked() {
+  local d="$1"
+
+  if ! _brain_net_git "$d" fetch -q origin main >/dev/null 2>&1; then
+    echo "brain: offline — converge skipped (local main unchanged)" >&2
+    return 0
+  fi
+
+  local ab ahead behind
+  ab="$(_brain_ahead_behind "$d")"; ahead="${ab%% *}"; behind="${ab##* }"
+  case "$ahead"  in ''|*[!0-9]*) ahead=0  ;; esac
+  case "$behind" in ''|*[!0-9]*) behind=0 ;; esac
+
+  [ "$ahead" = 0 ] && [ "$behind" = 0 ] && return 0   # already converged: silent
+
+  if [ -n "${BRAIN_CONVERGE_DRY:-}" ]; then
+    echo "brain: converge DRY — ahead ${ahead}, behind ${behind}" >&2
+    return 0
+  fi
+
+  local cur; cur="$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+
+  # ── behind only: fast-forward, no merge commit, nothing to push ──
+  if [ "$ahead" = 0 ]; then
+    if [ "$cur" = "main" ]; then
+      if [ -n "$(git -C "$d" status --porcelain)" ]; then
+        echo "⚠️  brain: ${behind} behind but working tree DIRTY — converge skipped. Commit or stash in $d." >&2
+        return 0
+      fi
+      git -C "$d" merge -q --ff-only origin/main >/dev/null 2>&1 \
+        && echo "brain: converged +${behind} (fast-forward)" >&2
+    else
+      # main not checked out → ff-only ref update, leaves the session branch alone.
+      git -C "$d" fetch -q . refs/remotes/origin/main:refs/heads/main >/dev/null 2>&1 \
+        && echo "brain: converged +${behind} (ref fast-forward; on ${cur})" >&2
+    fi
+    return 0
+  fi
+
+  # ── ahead only: publish and we are done ──
+  if [ "$behind" = 0 ]; then
+    brain_sync_push >/dev/null 2>&1 \
+      && echo "brain: converged -${ahead} (pushed)" >&2
+    return 0
+  fi
+
+  # ── genuinely diverged: the case that used to cost a whole session ──
+  if [ "$cur" != "main" ]; then
+    echo "⚠️  brain: DIVERGED (ahead ${ahead}, behind ${behind}) while on '${cur}' — converge needs main checked out. Finish/merge the session branch, then rerun." >&2
+    return 0
+  fi
+  if [ -n "$(git -C "$d" status --porcelain)" ]; then
+    echo "⚠️  brain: DIVERGED (ahead ${ahead}, behind ${behind}) and working tree DIRTY — converge skipped. Commit or stash in $d." >&2
+    return 0
+  fi
+
+  local pre; pre="$(git -C "$d" rev-parse --short HEAD)"
+  git -C "$d" tag -f "backup/pre-converge-$pre" HEAD >/dev/null 2>&1
+  git -C "$d" branch -f "backup/local-$pre" HEAD >/dev/null 2>&1
+
+  if git -C "$d" merge --no-ff -m "brain(converge): auto-merge origin/main (ahead ${ahead}, behind ${behind})" origin/main >/dev/null 2>&1; then
+    brain_distill >/dev/null 2>&1 || true
+    brain_sync_push >/dev/null 2>&1
+    echo "brain: converged (clean auto-merge, ahead ${ahead} / behind ${behind}) → $(git -C "$d" rev-parse --short HEAD)" >&2
+    return 0
+  fi
+
+  # The merge stopped. Classify EVERY unmerged path before touching anything.
+  local conflicted unsafe
+  conflicted="$(git -C "$d" diff --name-only --diff-filter=U 2>/dev/null)"
+
+  # A merge that failed WITHOUT producing conflicts is not a conflict at all —
+  # it is an unknown git-level failure (bad ref, hook rejection, missing
+  # identity, index lock). Never dress that up as a successful converge:
+  # restore and escalate, same as a real conflict.
+  if [ -z "$conflicted" ]; then
+    git -C "$d" merge --abort >/dev/null 2>&1
+    local why; why="$(git -C "$d" merge --no-ff -m "probe" origin/main 2>&1 | head -3; git -C "$d" merge --abort >/dev/null 2>&1)"
+    echo "🔴 brain: DIVERGED and the auto-merge FAILED with no conflicts — auto-converge REFUSED, tree restored to ${pre}." >&2
+    [ -n "$why" ] && printf '    git said: %s\n' "$why" >&2
+    echo "    Reconcile by hand in $d, then 'myai brain distill'." >&2
+    return 0
+  fi
+
+  unsafe="$(printf '%s\n' "$conflicted" | grep -vE '(^|/)(brief|working|rollup)\.md$')"
+  if [ -n "$unsafe" ]; then
+    git -C "$d" merge --abort >/dev/null 2>&1
+    echo "🔴 brain: DIVERGED with REAL conflicts — auto-converge REFUSED, tree restored to ${pre}." >&2
+    echo "    Conflicting non-regenerable path(s):" >&2
+    printf '      %s\n' $unsafe >&2
+    echo "    Atoms are append-only and should never conflict — resolve by hand in $d, then 'myai brain distill'." >&2
+    return 0
+  fi
+
+  # Provably safe: every conflict is a recompiled distiller output.
+  local n f ns
+  n="$(printf '%s\n' "$conflicted" | grep -c .)"
+  for f in $conflicted; do
+    git -C "$d" checkout --theirs -- "$f" >/dev/null 2>&1
+    git -C "$d" add -- "$f" >/dev/null 2>&1
+  done
+  if [ -n "$(git -C "$d" diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+    git -C "$d" merge --abort >/dev/null 2>&1
+    echo "🔴 brain: converge could not stage its own resolution — tree restored to ${pre}." >&2
+    return 0
+  fi
+  git -C "$d" commit -q --no-verify -m "brain(converge): auto-merge origin/main — ${n} distiller output(s) recompiled
+
+Resolved to origin/main then recompiled from atoms by brain_distill.
+Regenerable outputs only; zero session-atom conflicts (asserted by
+brain_converge before resolving). Revert: backup/pre-converge-${pre}." >/dev/null 2>&1
+
+  # Recompile only the namespaces whose outputs were contested.
+  ns="$(printf '%s\n' "$conflicted" | sed -n 's|^repos/\([^/]*\)/.*|\1|p' | sort -u | tr '\n' ' ')"
+  # shellcheck disable=SC2086
+  brain_distill $ns >/dev/null 2>&1 || true
+  brain_sync_push >/dev/null 2>&1
+  echo "brain: converged (auto-resolved ${n} distiller output(s) in: ${ns% }) → $(git -C "$d" rev-parse --short HEAD)" >&2
+  return 0
+}
+
+# Portable lock wrapper. Always rc 0 — boot must never block on the brain.
+brain_converge() {
+  local d; d="$(brain_dir)"
+  brain_is_repo "$d" || return 0
+  brain_remote_url "$d" >/dev/null || return 0
+
+  local lock; lock="$(brain_home)/.converge.lock"
+  if ! mkdir "$lock" 2>/dev/null; then
+    # Reap a lock left behind by a killed session (>300s), else defer.
+    local now mt age
+    now="$(date +%s)"
+    mt="$(stat -c %Y "$lock" 2>/dev/null || stat -f %m "$lock" 2>/dev/null)"
+    case "$mt" in ''|*[!0-9]*) mt="$now" ;; esac
+    age=$(( now - mt ))
+    if [ "$age" -gt 300 ]; then
+      rmdir "$lock" 2>/dev/null
+      mkdir "$lock" 2>/dev/null || { echo "brain: converge lock busy — skipped" >&2; return 0; }
+    else
+      echo "brain: converge already running (lock ${age}s old) — skipped" >&2
+      return 0
+    fi
+  fi
+
+  _brain_converge_locked "$d"
+  rmdir "$lock" 2>/dev/null
   return 0
 }
 
@@ -429,7 +690,8 @@ brain_capture_code() {
     echo "brain_capture_code: $cd is not a git repo" >&2
     return 1
   fi
-  BRAIN_CODE_REPO="$(basename "$(git -C "$cd" rev-parse --show-toplevel)")"
+  # canonical name, not the worktree basename (see brain_repo_name)
+  BRAIN_CODE_REPO="$(brain_repo_name "$cd")"
   BRAIN_CODE_BRANCH="$(git -C "$cd" rev-parse --abbrev-ref HEAD)"
   BRAIN_CODE_SHA="$(git -C "$cd" rev-parse HEAD)"
   export BRAIN_CODE_REPO BRAIN_CODE_BRANCH BRAIN_CODE_SHA
@@ -542,6 +804,58 @@ brain_session_start() {
   printf '%s\n' "$branch"
 }
 
+# BRAIN-2: stamp <ns>'s delta anchor to <sha> in $MYAI_HOME/brain-last-anchor.json.
+# Mirror of writeLastAnchor() in runtime/src/core/distill.ts, writing the SAME
+# file with the SAME slug keys — so whichever implementation performs a merge,
+# a later `brain_delta({ repo })` that omits `since` resolves the anchor.
+# Why this exists: the anchor used to be stamped ONLY by the gateway's
+# handleBrainMerge (runtime/src/mcp/tools.ts), but every merge that actually
+# happens on this fleet goes through brain_session_merge below — the runner
+# (cli_task_runner.sh), boot_sync.sh and the myai_brain.sh CLI all source this
+# lib. Result: 0 of 34 namespaces ever had an anchor and every `agent mode -min`
+# boot silently degraded to the stale blank-agent brief.
+# Pure shell on purpose: this lib is sourced by the runner and the session hooks,
+# which must not acquire a python3/jq dependency.
+_brain_write_last_anchor() {
+  local ns sha home f tmp
+  ns="$(_brain_slugify "$1")"
+  sha="$2"
+  [ -n "$ns" ] && [ -n "$sha" ] || return 0
+  home="$(brain_home)"
+  f="$home/brain-last-anchor.json"
+  mkdir -p "$home" 2>/dev/null || return 0
+  tmp="$f.$$"
+  {
+    printf '{\n'
+    # Existing pairs in file order, minus the key being replaced; the new pair
+    # goes last so it is the only one without a trailing comma.
+    if [ -f "$f" ]; then
+      sed -n 's/^[[:space:]]*"\([^"]*\)"[[:space:]]*:[[:space:]]*"\([^"]*\)".*$/\1 \2/p' "$f" \
+        | while read -r k v; do
+            [ "$k" = "$ns" ] && continue
+            printf '  "%s": "%s",\n' "$k" "$v"
+          done
+    fi
+    printf '  "%s": "%s"\n}\n' "$ns" "$sha"
+  } >"$tmp" 2>/dev/null
+  # Swap in only a fully rendered file; on any failure leave the previous
+  # anchors untouched and drop the temp (best-effort by contract).
+  if [ -s "$tmp" ] && mv -f "$tmp" "$f" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+
+# brain_last_anchor <ns> — the stored delta anchor for <ns>, empty when absent.
+brain_last_anchor() {
+  local ns f
+  ns="$(_brain_slugify "$1")"
+  f="$(brain_home)/brain-last-anchor.json"
+  [ -f "$f" ] || return 0
+  sed -n "s/^[[:space:]]*\"$ns\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*$/\1/p" "$f" | head -1
+}
+
 # brain_session_merge [branch] — merge a session (or idea) branch into main
 # (--no-ff so the session boundary survives in history) and delete it.
 # Append-only atoms make this conflict-free by construction; if a conflict
@@ -564,6 +878,12 @@ brain_session_merge() {
     git -C "$d" checkout -q "$branch"
     return 1
   fi
+  # BRAIN-2: which namespaces did this merge actually bring atoms into? Read it
+  # from the merge commit itself (HEAD^1 is the pre-merge main) BEFORE the
+  # distiller adds its own commit on top and moves HEAD.
+  local touched
+  touched="$(git -C "$d" diff --name-only 'HEAD^1' HEAD -- repos 2>/dev/null \
+    | awk -F/ 'NF>2 && $1=="repos" {print $2}' | sort -u)"
   # idea/ branches are long-lived parallel thought — keep them after a merge.
   case "$branch" in
     session/*) git -C "$d" branch -q -D "$branch" ;;
@@ -573,6 +893,19 @@ brain_session_merge() {
   brain_distill || true
   # Push-on-merge: mirror the new main to origin (bounded, non-fatal).
   brain_sync_push
+  # BRAIN-2: stamp the anchor to where main actually ended up (after distill and
+  # after any reconcile inside brain_sync_push), for each namespace this merge
+  # touched. Best-effort by contract — must never fail the merge it decorates.
+  local anchor ns
+  anchor="$(git -C "$d" rev-parse HEAD 2>/dev/null || true)"
+  if [ -n "$anchor" ] && [ -n "$touched" ]; then
+    while IFS= read -r ns; do
+      [ -n "$ns" ] || continue
+      _brain_write_last_anchor "$ns" "$anchor"
+    done <<EOF
+$touched
+EOF
+  fi
   echo "brain: merged $branch into main"
 }
 
@@ -641,16 +974,36 @@ _brain_apply_exclude() {
 _brain_distill_ns() {
   local ns="$1" d="$2" outdir="$3" exclude="${4:-}"
   mkdir -p "$outdir/repos/$ns"
-  local sess_all hand_all sess_count hand_count latest
+  local sess_all hand_all sess_count hand_count latest hf sf cand sess_newest_first
   sess_all="$(ls "$d/repos/$ns/sessions/" 2>/dev/null | grep '\.md$' | _brain_apply_exclude "$exclude")"
   hand_all="$(ls "$d/repos/$ns/handoffs/" 2>/dev/null | grep '\.md$' | _brain_apply_exclude "$exclude")"
   sess_count="$(printf '%s\n' "$sess_all" | grep -c . || true)"
   hand_count="$(printf '%s\n' "$hand_all" | grep -c . || true)"
-  latest="$(printf '%s\n' "$hand_all" | sort | tail -1)"
-  if [ -n "$latest" ]; then latest="$d/repos/$ns/handoffs/$latest"
-  else
-    latest="$(printf '%s\n' "$sess_all" | sort | tail -1)"
-    [ -n "$latest" ] && latest="$d/repos/$ns/sessions/$latest"
+  # Headline atom = the NEWEST hand-written atom across handoffs/ AND sessions/
+  # (a handoff atom wins only a same-second tie). The rule this replaces — any
+  # handoff atom beats every session atom — pinned the brief to whichever
+  # handoff atom was written last, because `wrap up` writes ONLY kind=session
+  # atoms: on ai-management the brief headlined a 3-wraps-old ACTION block
+  # (2026-09-09) while brain_delta reported upToDate, so every returning
+  # `agent mode -min` boot read a superseded handoff. session-auto atoms
+  # (hooks/stop/05-brain-autoatom.sh checkpoints) never headline. Mirrors
+  # headlineAtom() in runtime/src/core/distill.ts — BOTH distillers must agree
+  # or the shell merge path and the gateway merge path compile different briefs.
+  hf="$(printf '%s\n' "$hand_all" | grep . | sort | tail -1)"
+  sf=""
+  sess_newest_first="$(printf '%s\n' "$sess_all" | grep . | sort -r)"
+  for cand in $sess_newest_first; do
+    grep -q '^kind: session-auto$' "$d/repos/$ns/sessions/$cand" 2>/dev/null && continue
+    sf="$cand"; break
+  done
+  latest=""
+  if [ -n "$hf" ] && { [ -z "$sf" ] || [[ "${hf:0:16}" > "${sf:0:16}" ]] || [ "${hf:0:16}" = "${sf:0:16}" ]; }; then
+    latest="$d/repos/$ns/handoffs/$hf"
+  elif [ -n "$sf" ]; then
+    latest="$d/repos/$ns/sessions/$sf"
+  elif [ -n "$sess_all" ]; then
+    # Only session-auto atoms exist: better a mechanical headline than an empty brief.
+    latest="$d/repos/$ns/sessions/$(printf '%s\n' "$sess_all" | grep . | sort | tail -1)"
   fi
 
   # brief.md — ~150-token boot brief: counts line + latest handoff, flattened.

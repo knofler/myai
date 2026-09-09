@@ -24,6 +24,13 @@ else
 fi
 CONFIG="$AIDIR/config/session-limits.json"
 
+# Per-machine-scoped path (task-d4c32377, 2026-08-31) — must match the suffix
+# hooks/pre-tool/15-token-budget-guard.sh uses to read this same cache back.
+# See scripts/lib/local_state.sh.
+local_state_path() { printf '%s' "$1"; }  # fallback if lib below is missing
+LOCAL_STATE_LIB="$AIDIR/scripts/lib/local_state.sh"
+[ -f "$LOCAL_STATE_LIB" ] && . "$LOCAL_STATE_LIB"
+
 [ "$(jq -r '.token_budget.enabled // false' "$CONFIG" 2>/dev/null)" = "true" ] || exit 0
 [ "$(jq -r '.token_budget.rolling_window.enabled // false' "$CONFIG" 2>/dev/null)" = "true" ] || exit 0
 
@@ -43,7 +50,7 @@ pct=0
 
 # Prime the pre-tool guard's cache so it doesn't recompute immediately.
 NOW=$(date +%s)
-cat > "$AIDIR/state/.token-rolling-cache" <<EOF
+cat > "$(local_state_path "$AIDIR/state/.token-rolling-cache")" <<EOF
 computed_epoch=$NOW
 rolling_output=$roll_out
 rolling_warned=0

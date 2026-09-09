@@ -20,8 +20,8 @@ if echo "$COMMAND" | grep -qE 'aws\s+cloudformation\s+(create-stack|update-stack
     echo "Validating CloudFormation template: $TEMPLATE"
     VALIDATE=$(aws cloudformation validate-template --template-body "file://$TEMPLATE" 2>&1)
     if [ $? -ne 0 ]; then
-      echo "BLOCKED: CloudFormation template validation FAILED:"
-      echo "$VALIDATE" | tail -5
+      echo "BLOCKED: CloudFormation template validation FAILED:" >&2
+      echo "$VALIDATE" | tail -5 >&2
       exit 2
     fi
     echo "CloudFormation template valid"
@@ -51,8 +51,8 @@ if echo "$COMMAND" | grep -qE 'az\s+deployment\s+(group|sub)\s+create'; then
         echo "Validating Bicep template: $TEMPLATE"
         VALIDATE=$(az bicep build --file "$TEMPLATE" 2>&1)
         if [ $? -ne 0 ]; then
-          echo "BLOCKED: Bicep template validation FAILED:"
-          echo "$VALIDATE" | tail -5
+          echo "BLOCKED: Bicep template validation FAILED:" >&2
+          echo "$VALIDATE" | tail -5 >&2
           exit 2
         fi
         echo "Bicep template valid"

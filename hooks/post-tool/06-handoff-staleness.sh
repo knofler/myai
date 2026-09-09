@@ -51,14 +51,22 @@ else
 fi
 CONFIG="$AIDIR/config/session-limits.json"
 HANDOFF="$AIDIR/state/AI_AGENT_HANDOFF.md"
-METRICS="$AIDIR/state/.session-metrics"
-STATE="$AIDIR/state/.autosave-metrics"
 LIB="$AIDIR/scripts/lib/autosave.sh"
 
 [ -f "$HANDOFF" ] || exit 0
 [ -f "$LIB" ] || exit 0
 # shellcheck source=../../scripts/lib/autosave.sh
 . "$LIB"
+
+# Per-machine-scoped paths (task-d4c32377, 2026-08-31): STATE (.autosave-metrics)
+# is rewritten by write_state() below on EVERY PostToolUse call — the hottest
+# write path in the framework and the dominant source of the recurring
+# Dropbox conflicted-copy pileup. See scripts/lib/local_state.sh.
+local_state_path() { printf '%s' "$1"; }  # fallback if lib below is missing
+LOCAL_STATE_LIB="$AIDIR/scripts/lib/local_state.sh"
+[ -f "$LOCAL_STATE_LIB" ] && . "$LOCAL_STATE_LIB"
+METRICS="$(local_state_path "$AIDIR/state/.session-metrics")"
+STATE="$(local_state_path "$AIDIR/state/.autosave-metrics")"
 
 # Gate: autosave enforcement on?
 [ "$(jq -r '.autosave.enabled // false' "$CONFIG" 2>/dev/null)" = "true" ] || exit 0
@@ -169,7 +177,8 @@ if [ "$verdict" = "OVERDUE_EMIT" ]; then
       bdir="$(brain_dir 2>/dev/null)"
       brain_is_repo "$bdir" 2>/dev/null || exit 0
 
-      repo=$(basename "$ROOT")
+      # canonical, worktree-stable (see brain_repo_name in scripts/lib/brain.sh)
+      repo=$(brain_repo_name "$ROOT")
       branch=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
       session_safe="$(printf '%s' "${SESSION:-unknown}" | tr -c 'A-Za-z0-9_.-' '-')"
       [ -n "$session_safe" ] || exit 0

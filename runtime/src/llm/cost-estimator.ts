@@ -1,6 +1,16 @@
 // Pure function: token counts × per-million-token rates → USD cost per LLM call.
 // Pricing table sourced from documentation/COST_AWARE_ROUTING.md (verified 2026-05-03).
 // Update the table when provider rates change.
+//
+// 2026-09-09 refresh (mirrors scripts/lib/openai_agent.py PRICES_PER_M, whose
+// 45-day staleness gate caught the drift): DeepSeek retired `deepseek-chat` /
+// `deepseek-reasoner` on 2026-07-24 — both alias V4-Flash, list price
+// $0.14/M in (cache miss), $0.28/M out (SECONDARY-SOURCED via OpenRouter's
+// models API + three Sep-2026 price trackers; api-docs.deepseek.com was
+// unreachable from the operator network that day). Kimi K2.6 is $0.95/M in,
+// $4.00/M out (VERIFIED platform.kimi.ai/docs/pricing/chat-k26; was 0.20/2.00
+// here — a 2x under-estimate on output). kimi-k2 / moonshot-v1-* are delisted;
+// kimi-k2 keeps its last published 0.60/2.50 for historical attribution.
 
 export interface PricingEntry {
   inputPerMillion: number;
@@ -14,10 +24,10 @@ const PRICING: Record<string, PricingEntry> = {
   // ── DeepSeek ─────────────────────────────────────
   'deepseek-v3': { inputPerMillion: 0.27, outputPerMillion: 1.10 },
   'deepseek-v3.2': { inputPerMillion: 0.27, outputPerMillion: 1.10 },
-  'deepseek-v4-flash': { inputPerMillion: 0.27, outputPerMillion: 1.10 },
-  'deepseek-chat': { inputPerMillion: 0.27, outputPerMillion: 1.10 },
+  'deepseek-v4-flash': { inputPerMillion: 0.14, outputPerMillion: 0.28 },
+  'deepseek-chat': { inputPerMillion: 0.14, outputPerMillion: 0.28 }, // retired alias → V4-Flash
   'deepseek-r1': { inputPerMillion: 0.55, outputPerMillion: 2.19 },
-  'deepseek-reasoner': { inputPerMillion: 0.55, outputPerMillion: 2.19 },
+  'deepseek-reasoner': { inputPerMillion: 0.14, outputPerMillion: 0.28 }, // retired alias → V4-Flash thinking
 
   // ── Anthropic Claude ─────────────────────────────
   // Haiku family
@@ -41,8 +51,8 @@ const PRICING: Record<string, PricingEntry> = {
   'moonshot-v1-8k': { inputPerMillion: 0.20, outputPerMillion: 2.00 },
   'moonshot-v1-32k': { inputPerMillion: 0.50, outputPerMillion: 5.00 },
   'moonshot-v1-128k': { inputPerMillion: 2.00, outputPerMillion: 20.00 },
-  'kimi-k2': { inputPerMillion: 0.20, outputPerMillion: 2.00 },
-  'kimi-k2.6': { inputPerMillion: 0.20, outputPerMillion: 2.00 },
+  'kimi-k2': { inputPerMillion: 0.60, outputPerMillion: 2.50 }, // delisted — last published rate
+  'kimi-k2.6': { inputPerMillion: 0.95, outputPerMillion: 4.00 },
   // OpenRouter-hosted free K2 slug (Kimi lane via OPENROUTER_API_KEY, no paid
   // Moonshot key). Free tier bills $0; a paid OpenRouter slug needs its own entry.
   'moonshotai/kimi-k2:free': { inputPerMillion: 0, outputPerMillion: 0 },

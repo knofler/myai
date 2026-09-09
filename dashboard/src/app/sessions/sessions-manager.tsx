@@ -5,6 +5,8 @@
 // other device at once. A password reset revokes everything server-side —
 // this page just gives visibility + a manual kill switch.
 import { useCallback, useEffect, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
+import { DataTable, type DataRow } from '@/components/ui/data-table';
 
 interface SessionView {
   sessionId: string;
@@ -32,13 +34,6 @@ function deviceLabel(ua?: string): string {
   if (/windows/i.test(ua)) return 'Windows PC';
   if (/linux/i.test(ua)) return 'Linux';
   return ua.length > 60 ? `${ua.slice(0, 60)}…` : ua;
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return <th className="text-left font-medium text-[rgb(var(--text-primary))] px-3 py-2 border-b border-[rgb(var(--border-subtle))] whitespace-nowrap">{children}</th>;
-}
-function Td({ children }: { children: React.ReactNode }) {
-  return <td className="px-3 py-2 border-b border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] align-top">{children}</td>;
 }
 
 export default function SessionsManager() {
@@ -110,6 +105,29 @@ export default function SessionsManager() {
 
   const otherCount = sessions.filter((s) => !s.current).length;
 
+  const rows: DataRow[] = sessions.map((s) => ({
+    id: s.sessionId,
+    search: `${deviceLabel(s.userAgent)} ${s.ip ?? ''}`.toLowerCase(),
+    sort: { lastSeen: s.lastSeenAt ? new Date(s.lastSeenAt).getTime() : 0 },
+    cells: [
+      <span key="d" className="text-[rgb(var(--text-primary))]">
+        {deviceLabel(s.userAgent)}
+        {s.current && (
+          <Badge className="ml-2 bg-emerald-500/15 text-emerald-400 border-emerald-500/30 uppercase text-[10px]">this device</Badge>
+        )}
+      </span>,
+      <code key="ip" className="font-mono text-xs text-[rgb(var(--text-primary))]">{s.ip || '—'}</code>,
+      <span key="ls" className="text-[rgb(var(--text-secondary))]">{fmt(s.lastSeenAt)}</span>,
+      <span key="si" className="text-[rgb(var(--text-secondary))]">{fmt(s.createdAt)}</span>,
+      <button
+        key="rv"
+        onClick={() => void revoke(s)}
+        disabled={busy}
+        className="rounded border border-red-800 px-2 py-1 text-xs text-red-300 hover:bg-red-950/40 disabled:opacity-50"
+      >Revoke</button>,
+    ],
+  }));
+
   return (
     <div className="space-y-6">
       {error && (
@@ -125,43 +143,21 @@ export default function SessionsManager() {
         >Sign out all other devices</button>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
-        <table className="w-full text-sm">
-          <thead>
-            <tr>
-              <Th>Device</Th><Th>IP</Th><Th>Last seen</Th><Th>Signed in</Th><Th>Actions</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><Td>Loading…</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td></tr>
-            ) : sessions.length === 0 && !error ? (
-              <tr><Td>No active sessions.</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td></tr>
-            ) : (
-              sessions.map((s) => (
-                <tr key={s.sessionId}>
-                  <Td>
-                    <span className="text-[rgb(var(--text-primary))]">{deviceLabel(s.userAgent)}</span>
-                    {s.current && (
-                      <span className="ml-2 rounded bg-emerald-950/40 px-1.5 py-0.5 text-[10px] uppercase text-emerald-400">this device</span>
-                    )}
-                  </Td>
-                  <Td><code className="font-mono text-xs text-[rgb(var(--text-primary))]">{s.ip || '—'}</code></Td>
-                  <Td>{fmt(s.lastSeenAt)}</Td>
-                  <Td>{fmt(s.createdAt)}</Td>
-                  <Td>
-                    <button
-                      onClick={() => void revoke(s)}
-                      disabled={busy}
-                      className="rounded border border-red-800 px-2 py-1 text-xs text-red-300 hover:bg-red-950/40 disabled:opacity-50"
-                    >Revoke</button>
-                  </Td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        title="Active sessions"
+        searchable={false}
+        defaultSort="lastSeen"
+        defaultDesc
+        columns={[
+          { label: 'Device', mobile: 'title' },
+          { label: 'IP', mobile: 'meta' },
+          { label: 'Last seen', sortKey: 'lastSeen', mobile: 'meta' },
+          { label: 'Signed in', mobile: 'detail' },
+          { label: 'Actions', mobile: 'badge' },
+        ]}
+        rows={loading ? [] : rows}
+        emptyText={loading ? 'Loading…' : 'No active sessions.'}
+      />
     </div>
   );
 }

@@ -13,6 +13,7 @@ import { TabBar, resolveTab } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/page-header';
 import AutoRefresh from '@/components/auto-refresh';
 import RepoHealth from './repo-health';
+import { dbUnreachableHint } from '@/lib/db-hint';
 
 export const dynamic = 'force-dynamic';
 
@@ -116,7 +117,7 @@ async function DirectoryTab({ tenantId }: { tenantId: string }) {
     <div className="space-y-6">
       {dbError && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
-          Database not reachable — the directory needs the gateway Mongo at :27200.
+          {dbUnreachableHint('the directory')}
         </div>
       )}
 

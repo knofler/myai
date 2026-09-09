@@ -108,6 +108,56 @@ Unit-tested in `runtime/tests/unit/uptime.test.ts`.
 
 ---
 
+## 4. Distributed tracing (gateway → runner → agent)
+
+Every autonomous task produces one distributed trace spanning the three
+processes that touch it, so a slow or failed run is diagnosable end-to-end:
+
+| Span | Service | Brackets |
+|---|---|---|
+| `gateway.queue_wait` | gateway | task created → claim attempt (the "why was it slow" span — queue stall dominates most slow tasks). |
+| `gateway.task_claim` | gateway | the `tasks_claim` MCP call (`task-store.ts` `claimTask`) — root of the chain. |
+| `runner.dispatch` | runner | claim → CLI fire (`scripts/cli_task_runner.sh` `record_span`). |
+| `agent.session` | agent | the headless `claude -p` run itself (ok/error from the CLI exit code). |
+| `gateway.task_update` / `gateway.task_fail` | gateway | status flips as the run progresses. |
+
+- Module: `runtime/src/tracing/tracer.ts`. The three processes share no memory,
+  so **traceId/spanId are derived deterministically** (sha1) from the taskId and
+  span name — the bash runner and the gateway compute identical W3C Trace
+  Context IDs without ever exchanging them. The runner just reports
+  `{name, service, startMs, endMs, status}` via the `traces_record` MCP tool.
+- Viewer: `GET /traces` (self-contained HTML timeline, no build step);
+  JSON: `GET /api/traces`, `GET /api/traces/:traceId`; MCP: `traces_list`.
+- Store: in-memory ring buffer (last 2000 spans) — the default backend for the
+  self-hosted single-process shape. Restart = empty viewer, by design.
+
+### Optional OTLP export (real OTel backends)
+
+Setting the **standard** OTel env vars streams every recorded span to an OTLP
+collector (Jaeger, Tempo, Honeycomb, Grafana Cloud) in addition to the ring
+buffer — batched, best-effort, zero new dependencies
+(`runtime/src/tracing/otlp-export.ts`):
+
+| Variable | Purpose |
+|---|---|
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Full traces URL, used verbatim. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Base collector URL — `/v1/traces` is appended. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `k=v,k2=v2` auth headers (e.g. `x-honeycomb-team=…`). |
+
+Neither endpoint var set → export is a no-op. A down collector drops the batch
+after a debug log — tracing never breaks the call it observes.
+
+**`AIR_GAPPED=true` hard-disables OTLP export even when an endpoint is
+configured** (one warn at first suppression) — span export is telemetry, which
+the self-hosted air-gapped promise (`runtime/src/core/license.ts`,
+`selfhost/README.md`) forbids. The ring buffer and `/traces` viewer keep
+working; only the outbound POST is suppressed.
+
+Unit-tested in `runtime/tests/unit/tracer.test.ts` and
+`runtime/tests/unit/otlp-export.test.ts`.
+
+---
+
 ## Deploy notes
 
 The gateway changes (Sentry init, uptime tracking, `/api/status/uptime`) take

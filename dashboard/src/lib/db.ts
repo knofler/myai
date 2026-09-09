@@ -591,7 +591,10 @@ const connectorSchema = new mongoose.Schema({
 // (runtime/src/shared/db.ts). One row per context block served by
 // context_boot / brain_delta / memory_context; `tokens` is the estimated
 // cold-start re-teaching cost the operator avoided, `baselineTokens` the
-// measured legacy file-read boot cost at serve time (B7 today-vs-brain).
+// measured legacy file-read boot cost at serve time (B7 today-vs-brain),
+// `durationMs` the measured wall-clock time to assemble+serve this context
+// block (time-to-context — the brain side of the today-vs-brain latency
+// comparison rendered on /analytics).
 // Written by the gateway only.
 const continuityMetricSchema = new mongoose.Schema({
   tenantId: String,
@@ -599,6 +602,7 @@ const continuityMetricSchema = new mongoose.Schema({
   tool: { type: String, enum: ['context_boot', 'memory_context', 'brain_delta'] },
   tokens: Number,
   baselineTokens: Number,
+  durationMs: Number,
   userId: String,      // M2 Team tier — tenant member the boot was served to (per-user savings view + share card)
   sessionId: String,
   createdAt: Date,

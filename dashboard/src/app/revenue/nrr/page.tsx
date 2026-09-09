@@ -19,6 +19,7 @@ import { Card, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
 import AutoRefresh from '@/components/auto-refresh';
 import Link from 'next/link';
+import { dbUnreachableHint } from '@/lib/db-hint';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,7 +55,7 @@ export default async function NrrCohortPage() {
       <div className="max-w-7xl mx-auto">
         <PageHeader title="NRR cohorts" subtitle="Expansion vs contraction vs churn, per signup-month cohort." />
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
-          Database not reachable — NRR cohorts need the gateway Mongo at :27200.
+          {dbUnreachableHint('NRR cohorts')}
         </div>
       </div>
     );

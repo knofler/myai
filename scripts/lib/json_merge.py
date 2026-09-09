@@ -21,6 +21,23 @@ callsites with ONE merge policy:
               When identities collide, the pair deep-merges (master precedence),
               so a repo-local "timeout" on a framework hook entry survives while
               the framework command itself stays canonical.
+              Same-identity items pair up POSITIONALLY (1st occurrence in master
+              with 1st occurrence in target, 2nd with 2nd, ...) rather than every
+              occurrence colliding on one shared match. A settings.json can
+              legitimately carry more than one hook GROUP for the same matcher
+              (e.g. templates/settings.kernel.json has two separate "Bash"
+              PreToolUse groups) — without positional pairing, a second group
+              sharing an already-seen matcher gets merged against the FIRST
+              group with that matcher instead of its own counterpart, splicing
+              one group's hook list into the other and duplicating entries on
+              every re-merge (found via test_myai_init_settings_merge.sh: a
+              genuinely no-op re-init was duplicating the 3 safety-hook
+              commands). Positional pairing keeps same-identity groups distinct
+              1:1 as long as master and target agree on ordering — which they
+              do for every framework-authored group; only genuinely-extra
+              target occurrences (beyond master's count for that identity)
+              fall through to the "target-only" append path, so a repo-added
+              duplicate matcher group still survives untouched.
   * scalars — master wins.
 
   * IDEMPOTENT WRITE — the target file is rewritten ONLY when the merged result
@@ -64,18 +81,20 @@ def merge(master, target):
             out[k] = merge(v, target[k]) if k in target else v
         return out
     if isinstance(master, list) and isinstance(target, list):
+        # Queue same-identity target items so repeated identities (e.g. two
+        # hook groups that both use matcher "Bash") pair up positionally with
+        # master's occurrences instead of every occurrence colliding on one
+        # shared match (see module docstring).
         by_id = {}
         for it in target:
-            by_id.setdefault(identity(it), it)  # first occurrence wins
-        seen = set()
+            by_id.setdefault(identity(it), []).append(it)
         out = []
         for it in master:
             key = identity(it)
-            seen.add(key)
-            out.append(merge(it, by_id[key]) if key in by_id else it)
-        for it in target:
-            if identity(it) not in seen:
-                out.append(it)
+            queue = by_id.get(key)
+            out.append(merge(it, queue.pop(0)) if queue else it)
+        for queue in by_id.values():
+            out.extend(queue)  # genuinely target-only occurrences survive
         return out
     return master
 

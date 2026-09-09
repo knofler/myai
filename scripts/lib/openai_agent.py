@@ -123,9 +123,22 @@ SYSTEM_PROMPT = (
 # Unknown model ids fall back to the most expensive known row (fail-safe: the
 # budget gate overestimates rather than under-counts).
 PRICES_PER_M = {
-    "deepseek-chat": (0.28, 0.42),
-    "deepseek-reasoner": (0.28, 0.42),
-    "kimi-k2.6": (0.60, 2.50),
+    # DeepSeek — `deepseek-chat` / `deepseek-reasoner` were RETIRED 2026-07-24
+    # and alias to V4-Flash (non-thinking / thinking). V4-Flash list price on
+    # 2026-09-09: $0.14/M input (cache miss), $0.28/M output. SECONDARY-SOURCED:
+    # api-docs.deepseek.com reset every connection from this network on
+    # 2026-09-09, so these rows come from OpenRouter's models API plus three
+    # Sep-2026 price trackers that agree — re-verify against the vendor page
+    # when it is reachable.
+    "deepseek-chat": (0.14, 0.28),
+    "deepseek-reasoner": (0.14, 0.28),
+    "deepseek-v4-flash": (0.14, 0.28),
+    # Moonshot/Kimi — VERIFIED 2026-09-09 on platform.kimi.ai/docs/pricing/chat-k26:
+    # kimi-k2.6 $0.95/M input (cache miss; $0.16 cache hit), $4.00/M output —
+    # up from the 0.60/2.50 recorded 2026-07-25. kimi-k2 and moonshot-v1-8k are
+    # no longer listed on the vendor pricing page; kept at their last published
+    # rates for historical cost attribution only.
+    "kimi-k2.6": (0.95, 4.00),
     "kimi-k2": (0.60, 2.50),
     "moonshot-v1-8k": (0.20, 2.00),
 }
@@ -139,7 +152,7 @@ FALLBACK_PRICE = (0.60, 2.50)
 # warns once the table is older than PRICING_MAX_AGE_DAYS, so the
 # AGENTIC_FALLBACK_DAILY_USD_CAP enforcement doesn't silently run on stale
 # rates. Bump PRICING_LAST_CHECKED whenever PRICES_PER_M is verified/updated.
-PRICING_LAST_CHECKED = "2026-07-25"
+PRICING_LAST_CHECKED = "2026-09-09"
 PRICING_MAX_AGE_DAYS = int(os.environ.get("AGENTIC_PRICING_MAX_AGE_DAYS", "45"))
 
 

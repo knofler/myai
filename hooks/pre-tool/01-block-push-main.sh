@@ -52,7 +52,7 @@ if [[ -n "$RANGE_FILES" ]]; then
   if [[ "$NONDOC" == 0 ]]; then exit 0; fi   # docs-safe → allow direct to main
 fi
 
-echo "BLOCKED: Direct push to main/master is not allowed for code."
-echo "Docs/AI_RULES/plans/state may push direct to main; code must go via a PR."
-echo "Push code to 'test' and open a (batched) PR."
+echo "BLOCKED: Direct push to main/master is not allowed for code." >&2
+echo "Docs/AI_RULES/plans/state may push direct to main; code must go via a PR." >&2
+echo "Push code to 'test' and open a (batched) PR." >&2
 exit 2

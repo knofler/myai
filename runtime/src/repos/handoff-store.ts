@@ -97,6 +97,12 @@ export interface ReadHandoffResult {
  * Read the most recent handoff for a repo. When `historyLimit` > 0, also returns
  * up to that many recent entries (newest first, including the latest).
  */
+/** The spellings under which one repo's handoffs may be stored: as given, and slugified. */
+export function repoKeys(repo: string): string[] {
+  const slug = repo.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug && slug !== repo ? [repo, slug] : [repo];
+}
+
 export async function readHandoff(
   tenantId: string,
   repo: string,
@@ -110,12 +116,17 @@ export async function readHandoff(
   const historyLimit = Math.max(0, opts.historyLimit ?? 0);
   const fetchN = Math.max(1, historyLimit);
 
-  const docs = await scopedFind(HandoffModel, tenantId, { repo })
+  // Brain namespaces are slugified (`ai-management`) while tasks/handoff_read
+  // callers use the git name (`ai_management`); brain_merge mirrors under the
+  // namespace, so a read must accept either spelling of the same repo.
+  const keys = repoKeys(repo);
+  const repoFilter = keys.length === 1 ? { repo } : { repo: { $in: keys } };
+  const docs = await scopedFind(HandoffModel, tenantId, repoFilter)
     .sort({ createdAt: -1 })
     .limit(fetchN)
     .lean<IHandoff[]>();
 
-  const total = await scopedCountDocuments(HandoffModel, tenantId, { repo });
+  const total = await scopedCountDocuments(HandoffModel, tenantId, repoFilter);
   const views = docs.map(toView);
 
   return {

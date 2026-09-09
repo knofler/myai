@@ -20,7 +20,7 @@ const nextConfig: NextConfig = {
   // keeps working via a redirect into its new home.
   async redirects() {
     return [
-      { source: '/schedule', destination: '/work', permanent: false },
+      { source: '/schedule', destination: '/work?tab=schedules', permanent: false },
       { source: '/tasks', destination: '/work', permanent: false },
       { source: '/plan', destination: '/work?tab=plans', permanent: false },
       { source: '/orchestration', destination: '/work?tab=orchestration', permanent: false },

@@ -214,7 +214,9 @@ fi
 command -v gh >/dev/null 2>&1 || { log "[$REPO_NAME] gh CLI not available — cannot open/merge PRs. Skipping (a human 'ship it' session can still do this)."; exit 0; }
 
 # ── find or open the test->main PR ──────────────────────────────────────
-PR_NUM="$(cd "$HOST_PATH" && gh pr list --base main --head test --state open --json number --jq '.[0].number' 2>/dev/null)"
+# --limit 1: GitHub allows only ONE open PR per head->base pair, and we read
+# .[0] regardless — pin the request so it can never ride gh's silent 30-cap.
+PR_NUM="$(cd "$HOST_PATH" && gh pr list --limit 1 --base main --head test --state open --json number --jq '.[0].number' 2>/dev/null)"
 if [ -z "$PR_NUM" ] || [ "$PR_NUM" = "null" ]; then
     LOG_SUMMARY="$(git -C "$HOST_PATH" log --format='- %s' origin/main..origin/test 2>/dev/null | head -20)"
     # BODY built with printf (each dynamic value passed as its own %s argument,

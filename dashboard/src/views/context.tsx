@@ -6,8 +6,9 @@
 // (import into the corpus). Read-only for the layers; the export/import happen
 // through the /api/context/* routes.
 
-import { StatCard, Card, EmptyState } from '@/components/ui/card';
+import { StatCard, Card } from '@/components/ui/card';
 import { SourceBadge } from '@/components/ui/badge';
+import { DataTable } from '@/components/ui/data-table';
 import { connectDB, Vector, Session } from '@/lib/db';
 import { getActiveTenant, tenantFilter } from '@/lib/tenant';
 import { fetchBrainExplore } from '@/lib/brain';
@@ -116,60 +117,60 @@ export default async function ContextView() {
       </div>
 
       {/* Coverage — one row per layer. */}
-      <Card title="Coverage" meta={summary.brainUnavailable ? 'brain layer unreachable' : undefined}>
-        {!summary.hasContext ? (
-          <EmptyState>
+      <DataTable
+        title="Coverage"
+        meta={summary.brainUnavailable ? 'brain layer unreachable' : undefined}
+        searchable={false}
+        columns={[
+          { label: 'Layer', mobile: 'title' },
+          { label: 'Items', align: 'right', sortKey: 'count', mobile: 'meta' },
+          { label: 'Detail', mobile: 'meta' },
+        ]}
+        rows={
+          summary.hasContext
+            ? summary.coverage.map((row) => ({
+                id: row.layer,
+                search: `${row.layer} ${row.detail}`.toLowerCase(),
+                sort: { count: row.count },
+                cells: [
+                  <span key="l" className="text-[rgb(var(--text-primary))]">{row.layer}</span>,
+                  <span key="c" className="font-mono text-[rgb(var(--text-primary))]">{numFmt.format(row.count)}</span>,
+                  <span key="d" className="text-xs text-[rgb(var(--text-muted))]">{row.detail}</span>,
+                ],
+              }))
+            : []
+        }
+        emptyText={
+          <>
             No context yet. Run <code className="text-[rgb(var(--text-secondary))]">agent mode</code> and{' '}
             <code className="text-[rgb(var(--text-secondary))]">wrap up</code> a few sessions, or import a bundle below.
-          </EmptyState>
-        ) : (
-          <table className="card-table w-full text-sm">
-            <thead>
-              <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
-                <th className="px-4 py-2">Layer</th>
-                <th className="px-4 py-2 text-right">Items</th>
-                <th className="px-4 py-2">Detail</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
-              {summary.coverage.map((row) => (
-                <tr key={row.layer} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
-                  <td className="px-4 py-2.5 text-[rgb(var(--text-primary))]">{row.layer}</td>
-                  <td className="px-4 py-2.5 text-right font-mono text-[rgb(var(--text-primary))]">{numFmt.format(row.count)}</td>
-                  <td className="px-4 py-2.5 text-xs text-[rgb(var(--text-muted))]">{row.detail}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
+          </>
+        }
+      />
 
       {/* Vectors by source — the corpus makeup. */}
       {totalVectors > 0 && (
-        <Card title="Vectors by source">
-          <table className="card-table w-full text-sm">
-            <thead>
-              <tr className="border-b border-[rgb(var(--border-subtle))] text-left text-xs text-[rgb(var(--text-muted))] uppercase tracking-wider">
-                <th className="px-4 py-2">Source</th>
-                <th className="px-4 py-2 text-right">Count</th>
-                <th className="px-4 py-2 text-right">% of corpus</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[rgb(var(--border-subtle))]/50">
-              {layers.vectors.bySource.map((s) => (
-                <tr key={s.source} className="hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
-                  <td className="px-4 py-2">
-                    <SourceBadge source={s.source} />
-                  </td>
-                  <td className="px-4 py-2 text-right font-mono text-[rgb(var(--text-primary))]">{numFmt.format(s.count)}</td>
-                  <td className="px-4 py-2 text-right text-xs text-[rgb(var(--text-muted))] font-mono">
-                    {((s.count / totalVectors) * 100).toFixed(1)}%
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
+        <DataTable
+          title="Vectors by source"
+          searchable={false}
+          defaultSort="count"
+          defaultDesc
+          columns={[
+            { label: 'Source', mobile: 'badge' },
+            { label: 'Count', align: 'right', sortKey: 'count', mobile: 'meta' },
+            { label: '% of corpus', align: 'right', mobile: 'meta' },
+          ]}
+          rows={layers.vectors.bySource.map((s) => ({
+            id: s.source,
+            search: s.source.toLowerCase(),
+            sort: { count: s.count },
+            cells: [
+              <SourceBadge key="s" source={s.source} />,
+              <span key="c" className="font-mono text-[rgb(var(--text-primary))]">{numFmt.format(s.count)}</span>,
+              <span key="p" className="text-xs text-[rgb(var(--text-muted))] font-mono">{((s.count / totalVectors) * 100).toFixed(1)}%</span>,
+            ],
+          }))}
+        />
       )}
 
       {/* Port controls — download (bundle) + upload (import). */}

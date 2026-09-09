@@ -63,10 +63,10 @@ export interface ProvisionOptions {
   name: string;
   plan?: TenantPlan;
   /**
-   * Data-residency region to pin this tenant to (ADR-023). Defaults to 'us'
-   * (matches the schema default) — the signup flow should surface this as an
-   * explicit "choose your data region" choice for sovereignty-sensitive
-   * customers rather than relying on the silent default.
+   * Data-residency region to pin this tenant to (ADR-024). Defaults to 'us'
+   * (matches the schema default). Wired to the dashboard signup flow's
+   * "choose your data region" step (core/user-auth.ts signup()) for
+   * sovereignty-sensitive customers, rather than relying on the silent default.
    */
   region?: TenantRegion;
   ownerEmail?: string;

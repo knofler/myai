@@ -246,6 +246,17 @@ export interface BrainStatus {
   stashes?: string[];
   /** sha8s of pinned atoms (pins/ registry on main — see pinAtom). */
   pins?: string[];
+  /**
+   * Sync state vs origin/main as of this call's bounded pull-on-boot attempt
+   * (task-1195b1a7). Absent when the brain has no remote configured.
+   */
+  sync?: {
+    ahead: number;
+    behind: number;
+    diverged: boolean;
+    /** Present only when local main is stale and worth flagging to the user. */
+    warning?: string;
+  };
 }
 
 const SESSION_BRANCH = /^session\//;
@@ -333,6 +344,44 @@ export interface BrainSyncResult {
   synced: boolean;
   /** Why the sync didn't happen — absent when synced. */
   reason?: 'no-brain' | 'no-remote' | 'offline' | 'dirty' | 'diverged';
+  /**
+   * Commits local main has that origin/main doesn't, and vice versa — computed
+   * from the just-fetched refs (local git op, no extra network). Present only
+   * when the fetch itself succeeded (absent on 'no-brain'/'no-remote'/'offline').
+   * A clone that is simultaneously ahead and behind is DIVERGED: ff-only can
+   * never reconcile it (task-1195b1a7 — this is what let a 7-week-stale clone
+   * silently keep serving brain_delta with zero warning).
+   */
+  ahead?: number;
+  behind?: number;
+}
+
+/** Local (no-network) ahead/behind count between two refs. 0/0 on any git failure. */
+function aheadBehind(dir: string, local: string, remote: string): { ahead: number; behind: number } {
+  const res = spawnSync('git', ['-C', dir, 'rev-list', '--left-right', '--count', `${local}...${remote}`], { encoding: 'utf8' });
+  if (res.status !== 0) return { ahead: 0, behind: 0 };
+  const [a, b] = res.stdout.trim().split(/\s+/).map((n) => parseInt(n, 10));
+  return { ahead: Number.isFinite(a) ? a : 0, behind: Number.isFinite(b) ? b : 0 };
+}
+
+/**
+ * Human-readable loud warning for a `BrainSyncResult` that left local main
+ * stale, or undefined when there's nothing worth surfacing (synced, offline,
+ * no-brain/no-remote — those are expected/non-fatal per BRAIN_OFFLINE.md).
+ * Shared by every boot-ish caller (brainStatus, brainDelta, sessionStart,
+ * readBrainBrief) so "stale and nobody said anything" can't recur — the
+ * pull-on-boot code correctly DETECTED divergence/staleness all along, it
+ * just never told anyone (task-1195b1a7 root cause).
+ */
+export function brainSyncWarning(sync: BrainSyncResult): string | undefined {
+  if (sync.synced) return undefined;
+  if (sync.reason !== 'diverged' && sync.reason !== 'dirty') return undefined;
+  const behind = sync.behind ?? 0;
+  if (behind <= 0) return undefined;
+  const aheadPart = sync.ahead ? `, ahead ${sync.ahead}` : '';
+  return `brain: local main is ${behind} commit(s) BEHIND origin/main${aheadPart} (${sync.reason}) — ` +
+    `pull-on-boot could not fast-forward. This boot may be missing recent sessions from other ` +
+    `machines. Run 'myai brain merge' (or resolve the ${sync.reason} state by hand) to reconcile.`;
 }
 
 /** Push main to origin. Never throws — offline is a reported no-op. */
@@ -347,23 +396,27 @@ export function brainSyncPush(env: NodeJS.ProcessEnv = process.env): BrainSyncRe
 
 /**
  * Bounded fetch + ff-only advance of local main. Never merges or rebases:
- * diverged/dirty → no-op (the next push-on-merge reconciles). Never throws.
+ * diverged/dirty → no-op (the next `brain_merge`'s reconcileMain reconciles).
+ * Never throws. Unlike the pre-task-1195b1a7 version, a no-op ALWAYS carries
+ * `ahead`/`behind` counts so the caller can decide whether to warn instead of
+ * silently trusting a main that may be months stale.
  */
 export function brainSyncPull(env: NodeJS.ProcessEnv = process.env): BrainSyncResult {
   const dir = resolveBrainDir(env);
   if (!isBrainRepo(dir)) return { synced: false, reason: 'no-brain' };
   if (!brainRemoteUrl(dir)) return { synced: false, reason: 'no-remote' };
   if (!netGitOk(dir, 'fetch', '-q', 'origin', 'main')) return { synced: false, reason: 'offline' };
+  const { ahead, behind } = aheadBehind(dir, 'main', 'origin/main');
   if (git(dir, 'rev-parse', '--abbrev-ref', 'HEAD') === 'main') {
-    if (git(dir, 'status', '--porcelain') !== '') return { synced: false, reason: 'dirty' };
+    if (git(dir, 'status', '--porcelain') !== '') return { synced: false, reason: 'dirty', ahead, behind };
     return gitOk(dir, 'merge', '-q', '--ff-only', 'origin/main')
-      ? { synced: true }
-      : { synced: false, reason: 'diverged' };
+      ? { synced: true, ahead: 0, behind: 0 }
+      : { synced: false, reason: 'diverged', ahead, behind };
   }
   // main not checked out → ff-only ref update (git refuses non-ff without +).
   return gitOk(dir, 'fetch', '-q', '.', 'refs/remotes/origin/main:refs/heads/main')
-    ? { synced: true }
-    : { synced: false, reason: 'diverged' };
+    ? { synced: true, ahead: 0, behind: 0 }
+    : { synced: false, reason: 'diverged', ahead, behind };
 }
 
 // ── code provenance helpers (BRAIN B5, contract shared with brain.sh) ────────
@@ -697,7 +750,11 @@ export function sessionStart(profile = 'cli', env: NodeJS.ProcessEnv = process.e
   const dir = resolveBrainDir(env);
   if (!isBrainRepo(dir)) throw new Error(`brain: no brain repo at ${dir} — run 'myai brain init'`);
   // Pull-on-boot: catch up main from origin before branching (bounded, non-fatal).
-  brainSyncPull(env);
+  // A diverged/stale local main can't fast-forward here — warn loudly to
+  // stderr instead of silently branching off a possibly months-stale main
+  // (task-1195b1a7: this used to be a silent no-op).
+  const pullWarning = brainSyncWarning(brainSyncPull(env));
+  if (pullWarning) console.error(`⚠️  ${pullWarning}`);
   const day = utcStamp().slice(0, 8);
   const branch = `session/${day}-${brainHost(env)}-${slugify(profile) || 'cli'}`;
   if (gitOk(dir, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`)) {
@@ -776,6 +833,11 @@ export function brainStatus(env: NodeJS.ProcessEnv = process.env): BrainStatus {
   const branches = git(dir, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/session/*', 'refs/heads/idea/*')
     .split('\n')
     .filter(Boolean);
+  // Pull-on-boot (bounded, non-fatal) so the status this call reports reflects
+  // origin as of right now, not whatever main happened to be at last boot —
+  // and so a diverged/stale clone gets a `sync.warning` instead of quietly
+  // reporting a clean-looking status (task-1195b1a7).
+  const pull = brainRemoteUrl(dir) ? brainSyncPull(env) : undefined;
   return {
     dir,
     initialized: true,
@@ -786,6 +848,14 @@ export function brainStatus(env: NodeJS.ProcessEnv = process.env): BrainStatus {
     branches,
     stashes: listStashes(env).map((s) => s.slug),
     pins: listPins(env).map((p) => p.sha8),
+    ...(pull ? {
+      sync: {
+        ahead: pull.ahead ?? 0,
+        behind: pull.behind ?? 0,
+        diverged: pull.reason === 'diverged',
+        warning: brainSyncWarning(pull),
+      },
+    } : {}),
   };
 }
 

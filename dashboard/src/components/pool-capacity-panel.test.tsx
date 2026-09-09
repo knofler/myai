@@ -26,6 +26,26 @@ describe('PoolCapacityPanel', () => {
     expect(html).toBe('');
   });
 
+  it('renders a gauge for EVERY budgeted token pool, not just the first (plan L5 — claude-tech + fable)', () => {
+    const capacity: PoolCapacity = {
+      ...BASE_CAPACITY,
+      pools: [
+        { pool: 'claude-tech', weeklyBudgetTokens: 4_000_000, weeklySpentTokens: 1_000_000, weeklyRemainingTokens: 3_000_000, pctUsedWeekly: 25 },
+        { pool: 'fable', kind: 'paced-weekly-bucket', weeklyBudgetTokens: 2_000_000, weeklySpentTokens: 1_800_000, weeklyRemainingTokens: 200_000, pctUsedWeekly: 90 },
+        // Zero-budget pools (unconfigured codex/gemini placeholders) must not render a gauge.
+        { pool: 'codex', kind: 'unconfigured', weeklyBudgetTokens: 0, weeklySpentTokens: 0, weeklyRemainingTokens: 0, pctUsedWeekly: 0 },
+      ],
+    };
+    const html = renderToStaticMarkup(<PoolCapacityPanel capacity={capacity} />);
+    expect(html).toContain('claude-tech — week 2026-W31');
+    expect(html).toContain('3.0M tok left');
+    expect(html).toContain('25% of weekly budget used');
+    expect(html).toContain('fable — week 2026-W31');
+    expect(html).toContain('200k tok left');
+    expect(html).toContain('90% of weekly budget used');
+    expect(html).not.toContain('codex');
+  });
+
   it('renders per-provider pass-rate + sparkline when the agentic-fallback lane is enabled with quality data', () => {
     const capacity: PoolCapacity = {
       ...BASE_CAPACITY,

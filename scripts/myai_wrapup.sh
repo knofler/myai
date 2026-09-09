@@ -64,6 +64,9 @@ BRAIN_LIB_OK=0
 if [ -f "$LIBDIR/brain.sh" ] && . "$LIBDIR/brain.sh" 2>/dev/null; then BRAIN_LIB_OK=1; fi
 # shellcheck source=lib/gateway.sh
 . "$LIBDIR/gateway.sh" 2>/dev/null || GATEWAY_LOCAL_TOKEN="${GATEWAY_LOCAL_TOKEN:-myai-local-bridge-dev}"
+# safe gh list wrappers (never act on a silently-truncated 30-item page)
+# shellcheck source=lib/gh_list.sh
+. "$LIBDIR/gh_list.sh" 2>/dev/null || true
 GATEWAY_MCP="${GATEWAY_MCP:-http://localhost:3100/mcp}"
 
 cd "$ROOT" || exit 1
@@ -286,8 +289,20 @@ WRAPPED_TS="$(date -u '+%Y-%m-%d %H:%M UTC')"
 PRS="none"
 if command -v gh >/dev/null 2>&1 && [ "$REMOTE" != "none" ]; then
   TODAY_UTC="$(date -u '+%Y-%m-%d')"
-  PR_LIST="$(gh pr list --state merged --search "merged:>=$TODAY_UTC" --json number,title \
+  # --limit "$(gh_list_limit)" (default 1000) not gh's silent 30 — on a busy
+  # fleet day >30 PRs can merge; the banner must not drop the overflow.
+  MERGED_LIMIT="$(command -v gh_list_limit >/dev/null 2>&1 && gh_list_limit || echo 1000)"
+  PR_LIST="$(gh pr list --limit "$MERGED_LIMIT" \
+    --state merged --search "merged:>=$TODAY_UTC" --json number,title \
     --jq '.[] | "#\(.number) \(.title)"' 2>/dev/null)"
+  # Truncation tell (gh_list.sh contract): line-count == limit means the set is
+  # CAPPED and an unseen overflow may exist. Display-only, so mark the banner
+  # loudly (and warn on stderr via gh_list_guard) rather than abort the wrap-up.
+  MERGED_N="$(printf '%s\n' "$PR_LIST" | grep -c '^#' || true)"
+  if command -v gh_list_guard >/dev/null 2>&1 && ! gh_list_guard "$MERGED_N" "merged PRs today (banner)"; then
+    PR_LIST="$PR_LIST
+⚠ CAPPED at $MERGED_LIMIT — more merged PRs may exist (re-run with higher GH_LIST_LIMIT)"
+  fi
   [ -n "$PR_LIST" ] && PRS="$PR_LIST"
 fi
 
@@ -332,6 +347,15 @@ cat <<BANNER
 BANNER
 
 [ -n "$BRAIN_SHA" ] && echo "Brain: $BRAIN_SHA"
+
+# Boot-cost KPI (TOKEN task-2a431e9b): total bytes the harness injects every
+# session — CLAUDE.md + last boot's (capped) hook stdout. Emitted next to the
+# Brain anchor so the agent writes it into the handoff header, keeping the
+# "tokens a session needs to be useful" metric visible at every wrap-up.
+if [ -x "$SCRIPTS_DIR/boot_cost.sh" ]; then
+  BOOT_COST_LINE="$(BOOT_COST_ROOT="$ROOT" "$SCRIPTS_DIR/boot_cost.sh" 2>/dev/null)"
+  [ -n "$BOOT_COST_LINE" ] && echo "$BOOT_COST_LINE"
+fi
 
 echo ""
 echo "mechanical wrap-up summary: rotate=$STEP_ROTATE card=$STEP_CARD reindex=$STEP_REINDEX brain=$STEP_BRAIN"
