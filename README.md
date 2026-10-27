@@ -5,7 +5,7 @@
 [![npm version](https://img.shields.io/npm/v/ai-management.svg)](https://www.npmjs.com/package/ai-management)
 [![npm downloads](https://img.shields.io/npm/dm/ai-management.svg)](https://www.npmjs.com/package/ai-management)
 [![license](https://img.shields.io/npm/l/ai-management.svg)](https://www.npmjs.com/package/ai-management)
-[![docs](https://img.shields.io/badge/docs-knofler.github.io-blue.svg)](https://knofler.github.io/ai_management/)
+[![docs](https://img.shields.io/badge/docs-README-blue.svg)](https://github.com/knofler/myai#readme)
 
 **myAI** (`npm i -g ai-management`, CLI: `myai`) is a **self-owned, git-versioned AI memory layer** and a **multi-agent development framework** in one package. Plug any agent — Claude Code, Cursor, Gemini, Codex, opencode — into your **own portable brain** so it boots already knowing your projects, your decisions, and where you left off, instead of starting from a blank slate every session. It is **local-first** (runs in Docker on your machine), **MCP-native** (Model Context Protocol tools any agent can call), and ships an **autonomous runner**, **RAG semantic search**, a **live operations dashboard**, and **one-command app blueprints**. No SaaS account. No vendor lock-in. Your memory lives in a private git repo that you push, clone, and back up like any other.
 
@@ -59,6 +59,7 @@ Every AI coding session, your agent learns things — decisions made, gotchas hi
   - [📊 Dashboard](#-dashboard--your-live-operations-console)
   - [📱 Remote management](#-remote-management--drive-the-fleet-from-your-phone)
   - [🤖 Autonomous Runner](#-autonomous-runner--work-that-ships-while-you-sleep)
+  - [🌅 The `boot` routine](#-the-boot-routine--a-warm-machine-before-you-sit-down)
   - [🔌 MCP servers](#-mcp-servers--plug-in-tools)
   - [🧩 Claude Code plugin marketplace](#-claude-code-plugin-marketplace)
   - [🔎 RAG & memory search](#-rag--memory-search)
@@ -82,43 +83,58 @@ Every AI coding session, your agent learns things — decisions made, gotchas hi
 
 ## ⚡ Quickstart — download → running in 5 minutes
 
-> Self-hosted, single operator, your own Anthropic key. No SaaS account, no lock-in.
-> **Prerequisites:** Docker Desktop (running), Node 20+, git. Optionally the Claude CLI logged in (`claude`) instead of an API key.
+> Self-hosted, single user, your own model key. No SaaS account, no lock-in.
+> **Prerequisites:** Docker (running), Node 20+, git, and the coding agent you
+> already use (Claude Code, Cursor, Codex CLI, Gemini CLI, …).
 
 ```bash
-# 0. npm preflight — a root-owned npm prefix (Homebrew/OS-bundled Node) fails
-#    the next line with a raw EACCES. Check + redirect to ~/.local if needed:
+# 0. npm preflight: a root-owned npm prefix (Homebrew/OS-bundled Node) makes
+#    the next line fail with EACCES. Check, and redirect to ~/.local if needed:
 p="$(npm config get prefix)"; [ -w "$p" ] || { npm config set prefix "$HOME/.local"; export PATH="$HOME/.local/bin:$PATH"; }
 
 # 1. Install the CLI (one binary: `myai`, aliased `ai-manage`)
 npm i -g ai-management
 
-# 2. Preflight — checks docker, node, compose, ports, your key
+# 2. Preflight: Docker, Node, git, ports. Every WARN/FAIL prints a why: and a fix:
+#    No model key yet? The ANTHROPIC_API_KEY line then shows FAIL. That only
+#    affects model calls and the background task runner; `myai up` still starts.
 myai doctor
 
-# 3. Initialize the framework into a repo (this one, or any path)
-#    The guided wizard asks 3 things: API key · profile · scan dir.
-#    It writes them to AI/.env. Press Enter to skip any answer.
-myai init .
-
-# 4. Bring the self-contained stack up (gateway + dashboard + mongo)
-#    Waits for health, then prints the dashboard URL.
+# 3. Start the local stack (gateway + dashboard + database), bound to 127.0.0.1.
+#    First start generates its secrets into ~/.myai/standalone/.env.
 myai up
-#    → Dashboard   http://localhost:3210
-#    → Gateway MCP http://localhost:3100/mcp
+#    → Dashboard    http://localhost:3210
+#    → Gateway MCP  http://localhost:3100/mcp
 
-# 5. Register the repos you want to manage (RAG + directory)
-myai scan ~/code --register
+# 4. Connect a repo (any git repo you work in). Writes and commits a short
+#    CLAUDE.md, .claude/settings.json, .mcp.json and a .gitignore line.
+cd /path/to/your/repo
+myai init
 
-# 6. (optional) Generate a brand-new full-stack app from one sentence
-myai new-app ~/code/my-idea
+# 5. Connect your agent (claude | cursor | codex | gemini | …)
+myai plug                    # list every supported agent
+myai plug cursor --install   # e.g. Cursor; then restart the agent
+myai plug proof              # live round-trip check, no agent needed
 ```
 
-Open **http://localhost:3210/welcome** — with `MYAI_EDITION=independent` (the wizard's default profile) the page greets you with the local quickstart and one-tap links into the running dashboard. Queue a task from **Work → Queue**; the off-hours runner builds it and surfaces it in **Needs Review** for your `ship it`.
+Open your agent in the repo. On its first MCP handshake it calls `context_boot`
+and starts with your context. Per-agent setup:
+[`documentation/agents/`](./documentation/agents/README.md). If anything is off,
+`myai doctor` names the problem and the fix; the full list is in
+[`documentation/TROUBLESHOOTING.md`](./documentation/TROUBLESHOOTING.md).
 
-**Bring-your-own credentials.** Set `ANTHROPIC_API_KEY` during `myai init` (or any time in `AI/.env`), or skip it and let the runner use your logged-in Claude CLI. No keys ship in the package. Re-run `myai init . --no-wizard` for a non-interactive scaffold (CI/scripts).
+**Bring your own credentials.** No keys ship in the package. Model calls and the
+off-hours runner use `ANTHROPIC_API_KEY` from `~/.myai/standalone/.env`, or a
+signed-in agent CLI.
 
-**Tear down / scripted runs:** `myai down` (add `--volumes` to drop the mongo data). `myai init <path> --wizard` forces the wizard even when piped.
+**Secure by default.** Ports listen on `127.0.0.1` only, self-serve signup is
+off, and the JWT secret, database password and local gateway token are
+generated per machine. See [`SECURITY.md`](./SECURITY.md) before opening the
+stack to a LAN (`HOST_BIND=0.0.0.0`).
+
+**Stop / remove:** `myai down` stops the stack (`--volumes` also drops the
+database). `myai uninstall` lists what myAI installed; `myai uninstall --yes`
+removes it and keeps your brain.
 
 ---
 
@@ -219,6 +235,8 @@ Two tiers, so *any* agent connects:
 
 - **Cooperating (MCP) tier** — `claude | cursor | windsurf | codex | gemini | opencode`. These auto-boot on the `initialize` handshake + a `context_boot` recall round-trip, pointed at the local gateway with the local token. Merge, never clobber; idempotent.
 - **Wrap-it tier** — `ollama | chatgpt | print`. A context bundle is prepended for a blank agent that can't speak MCP.
+
+Step-by-step pages for [Claude Code](./documentation/agents/claude-code.md), [Cursor](./documentation/agents/cursor.md), [Codex CLI](./documentation/agents/codex-cli.md) and [Gemini CLI](./documentation/agents/gemini-cli.md).
 
 ### Why it matters
 
@@ -400,8 +418,8 @@ myai restore <arc>   # restore a backup archive                    → scripts/m
 | Path | Page |
 |------|------|
 | `/` | Status home — gateway health, counts, recent activity |
-| `/agents` | Browse all 62 agents |
-| `/skills` | Browse all 136 skills with trigger search |
+| `/agents` | Browse all 64 agents |
+| `/skills` | Browse all 137 skills with trigger search |
 | `/hooks` | Registered hooks + event bindings |
 | `/rules` | Governance rules (AI_RULES, routing, design) |
 | `/repos` | your managed repos — health grid by workspace |
@@ -435,8 +453,8 @@ The remote-fleet tooling lets you see who's live where and open phone-drivable s
 | Keyword | What it does |
 |---------|--------------|
 | `remote status` | Which repos have live claude sessions + profile (anti-duplication view). Runs `./AI/scripts/remote_fleet.sh status`. |
-| `remote start [all\|core\|repo…\|--last-start]` | Open a phone-drivable `claude-museum` session per repo (iTerm tab, duplicate-guarded, `--max` RAM cap; records what it launched). |
-| `remote stop [repo…\|--last-start]` | Kill museum sessions only — never interactive shells. |
+| `remote start [all\|core\|repo…\|--last-start]` | Open a phone-drivable `claude-<master-profile>` session per repo (iTerm tab, duplicate-guarded, `--max` RAM cap; records what it launched). |
+| `remote stop [repo…\|--last-start]` | Kill master-doorway sessions only — never interactive shells. |
 
 **Anchor rule:** the master-AI session is NEVER stopped — it's the phone's doorway to `remote start` the fleet back (override: `--include-anchor`). `stop --last-start` undoes only the last start's launches; `start --last-start` reopens exactly that recorded set (record never rewritten, so the pair toggles the same set). Repo set: `config/remote_fleet.txt`.
 
@@ -446,7 +464,7 @@ Telegram is wired too — `telegram setup` / `telegram start` connect a bot chan
 
 ## 🤖 Autonomous Runner — work that ships while you sleep
 
-There is **one standard way** to schedule autonomous work in any repo: create **tasks** in the gateway queue, which the **launchd CLI runner** (every few hours, free Fable window, `claude-tech`, subscription-billed, **0 API tokens**) works on a `test` branch and flips to **Needs Review** for your `ship it`. **Never** use gateway cron schedules or Claude Code cloud routines for per-repo work — they fragment the view and/or bill tokens.
+There is **one standard way** to schedule autonomous work in any repo: create **tasks** in the gateway queue, which the **launchd CLI runner** (every few hours, free Fable window, `claude-<runner-profile>`, subscription-billed, **0 API tokens**) works on a `test` branch and flips to **Needs Review** for your `ship it`. **Never** use gateway cron schedules or Claude Code cloud routines for per-repo work — they fragment the view and/or bill tokens.
 
 > **⏰ Off-hours policy:** autonomous runs fire only when you're not in interactive sessions — **weekdays 6pm–9am Sydney, and all weekend**. The runner no-ops during weekday 9am–6pm (override a one-off with `--force`). Plan fire times on `/plan` are clamped into this band (default 8pm Sydney). Tunable via `WORK_HOURS_START`/`WORK_HOURS_END`.
 
@@ -497,6 +515,74 @@ Full protocol reference: `documentation/KEYWORDS_REFERENCE.md` → **Scheduling*
 
 ---
 
+## 🌅 The `boot` routine — a warm machine before you sit down
+
+The Runner works the queue overnight. `boot` is its morning counterpart: at
+**08:00, Monday to Friday**, your work Mac reconciles itself, rebuilds the
+stack on the new code, verifies the whole platform, and then sits idle — so
+when you sit down at 09:00 the machine is already warm and waiting for
+instructions instead of spending your first twenty minutes syncing.
+
+```bash
+./scripts/setup_boot_schedule.sh              # install: 08:00 Mon–Fri (launchd)
+./scripts/setup_boot_schedule.sh --at 07:30   # a different time
+./scripts/setup_boot_schedule.sh --status     # agent state + last verdict
+./scripts/setup_boot_schedule.sh --run-now    # fire it once, right now
+./scripts/setup_boot_schedule.sh --uninstall
+
+./scripts/morning_boot.sh --dry-run           # what it would do
+./scripts/morning_boot.sh --force             # run here, ignore the host gate
+./scripts/morning_boot.sh --status            # read the last report
+```
+
+**What it does, in order.** Each phase is an existing guard — `boot` wires them
+together, it does not reimplement them:
+
+| # | Phase | Script | Proves |
+|---|-------|--------|--------|
+| 1 | Reconcile + fetch (code **and** brain) | `resync.sh` | repo fast-forwarded, brain converged |
+| 2 | Deterministic self-heal | `machine_selfheal.sh` | known machine faults repaired |
+| 3 | Dropbox conflict sweep — **resolves** the lossless classes | `dropbox_conflicts.sh --clean-safe` | identical / in-git-history / regenerated-snapshot / append-only-merged copies removed; only what needs a human is left, as a WARN |
+| 4 | **Gateway + dashboard rebuild and restart** | `docker compose build && up -d` | containers are running the new code |
+| 5 | Stack matches HEAD **by content** | `verify_local_stack.sh` | compiled markers present in the *running* container |
+| 6 | Gateway health + **MCP connected** | `/health`, `tools/list`, stdio bridge | the tool surface is actually usable |
+| 7 | Code check | `local-ci.sh --dry-run`, `tests/run_all.sh` | tsc + tests + build + shell suites |
+| 8 | Runner health | `runner_health.sh` | the queue worker is alive and not stalled |
+| 9 | **claude-<master-profile> doorway** — a session *waiting for instructions* | `remote_fleet.sh start AI` | the master repo's doorway anchor is live (checked via `remote_fleet.sh status`), labelled `<host> - AI`, phone-drivable |
+| 10 | **Ping — recorded** | `NOTIFY_STRICT=1 notify-telegram.sh` + macOS notification | you know it finished, and how it went; an unconfigured chat id is a WARN row, not silence |
+
+**One artifact, not a wall of logs.** Everything lands in
+`state/boot/BOOT_REPORT.<host>.md` (one per Mac) — a traffic-light verdict (`GREEN` / `AMBER` / `RED`)
+plus a phase table. The morning session reads *that file*; it does not re-run
+the checks. Full transcripts go to `~/.ai-cli-runner/boot/boot-<timestamp>.log`.
+
+**Four rules, each one paid for by a real incident:**
+
+1. **It never aborts on the first failure.** The value of an unattended run is
+   *one complete report*. A `set -e` exit in phase 2 would hide phases 3–8 and
+   leave you blind at 09:00. Every phase records `PASS` / `WARN` / `FAIL` and
+   the run carries on.
+2. **It is universal — every Mac, every day, its own agent.** Each Mac boots
+   its own local Docker stack; GitHub and the brain repo are the sync between
+   Macs, never Dropbox. `config/boot_machines.txt` holds `*:0-6` (a host line
+   overrides one Mac's days), so a new Mac boots with no edit. Because the
+   repo lives in Dropbox, every per-machine output is per-host by *name* —
+   no two Macs ever write the same file, so there is nothing to conflict.
+3. **The gateway is rebuilt unconditionally, never "if stale."** Staleness
+   *detection* is the thing that failed here: the old check was dead code for
+   weeks while the gateway happily served 8-day-old code behind a healthy
+   green line. A few unattended minutes deletes the entire class of bug.
+4. **Prove, don't assume.** Every mutating phase reads its result back, and a
+   phase that cannot be verified reports `WARN` — never `PASS`. "Built" is not
+   the same as "live", and `mtime` is not evidence.
+
+Unattended runs are pinned to the `claude-<runner-profile>` profile via
+`CLAUDE_CONFIG_DIR`, so a morning warm-up never bills against the interactive
+profile. launchd rather than cron because macOS TCC blocks cron from `$HOME`;
+if the Mac is asleep at 08:00, launchd fires the job on wake.
+
+---
+
 ## 🔌 MCP servers — plug in tools
 
 MCP (Model Context Protocol) servers extend Claude Code — and any MCP-capable agent — with specialised tools: library docs, browser automation, container management, component browsing, and more. Configs are auto-managed and propagated to all managed repos via `update_all.sh`.
@@ -504,19 +590,24 @@ MCP (Model Context Protocol) servers extend Claude Code — and any MCP-capable 
 ### Installed (No API Key Required)
 
 #### Base — All Projects
-These are installed in every managed repo via `templates/mcp.json` → `.mcp.json`.
+`myai init` writes these two (plus the `myai` bridge) via `templates/mcp.json` → `.mcp.json`. The opt-in servers below come from `templates/mcp-optional.json`: add them to a repo with `myai mcp add <name>...` (`--list` shows them), or list their names (or `all`) in `~/.myai/mcp-optional.conf` to include them in every new repo. An existing `.mcp.json` keeps every server it already has.
 
 | Server | Package | Purpose | Tools |
 |--------|---------|---------|-------|
 | **Context7** | `@upstash/context7-mcp` | Version-specific library docs in-context (Next.js, React, Mongoose, Tailwind, etc.) | `resolve`, `get-library-docs` |
+| **myai** | Local gateway (`localhost:3100`) | MCP interface to the myAI gateway (when Docker is running) | Varies by gateway version |
+
+#### Opt-in — `templates/mcp-optional.json`
+
+| Server | Package | Purpose | Tools |
+|--------|---------|---------|-------|
 | **shadcn/ui** | `@jpisnice/shadcn-ui-mcp-server` | Browse, search, install shadcn components directly from Claude Code | `browse`, `search`, `install` |
 | **Playwright** | `@playwright/mcp` | E2E browser testing — navigate pages, click elements, fill forms, assert content, take screenshots. Use for testing Vercel preview URLs before merging PRs | `navigate`, `click`, `fill`, `screenshot`, `expect`, +20 more |
 | **Dropbox** | `https://mcp.dropbox.com/mcp` (remote) | Read, search, create files in Dropbox — OAuth auto-handled | `list`, `search`, `read`, `create` |
 | **GitHub** | `@modelcontextprotocol/server-github` | Repo, issue, PR, branch, release management against the repo's `origin` remote. Needs `GITHUB_PERSONAL_ACCESS_TOKEN` env (one-time: `export GITHUB_PERSONAL_ACCESS_TOKEN=$(gh auth token)`) | `create_issue`, `create_pull_request`, `list_commits`, `search_repositories`, +20 more |
 | **Vercel** | `https://mcp.vercel.com` (remote) | Deployment status, env vars, log streaming — OAuth-scoped per Vercel account, sees all your projects | `list_deployments`, `get_deployment`, `list_env_vars`, `read_logs`, +more |
-| **myai** | Local gateway (`localhost:3100`) | MCP interface to the myAI gateway (when Docker is running) | Varies by gateway version |
 
-> **Back-compat note:** this server's `.mcp.json` key was renamed from `ai-framework` to `myai` (task-887c7fcb, 2026-07-24) to match the repo/package/CLI name. Existing installs pick up the new key on next `myai init`/`myai mcp sync` or a fresh `.mcp.json` propagation; if Claude Code shows the server as disconnected after pulling this change, restart Claude Code so it re-reads `.mcp.json`. Tool calls are unaffected — only the connection label changed, not `brain_*`/other tool names.
+> **Back-compat note:** the myai server's `.mcp.json` key was renamed from `ai-framework` to `myai` (task-887c7fcb, 2026-07-24) to match the repo/package/CLI name. Existing installs pick up the new key on next `myai init`/`myai mcp sync` or a fresh `.mcp.json` propagation; if Claude Code shows the server as disconnected after pulling this change, restart Claude Code so it re-reads `.mcp.json`. Tool calls are unaffected — only the connection label changed, not `brain_*`/other tool names.
 
 #### Conditional — Auto-Detected by `update_all.sh`
 These are merged into `.mcp.json` only when the project matches the detection condition.
@@ -554,7 +645,8 @@ Full details and setup instructions: `plan/MCP_SERVERS.md`
 ### How MCP Configs Are Managed
 
 ```
-templates/mcp.json          ← Base config (myai, Context7, shadcn, Playwright, Dropbox, GitHub, Vercel) → all repos
+templates/mcp.json          ← Base config (myai, Context7) → all repos
+templates/mcp-optional.json ← shadcn, Playwright, Dropbox, GitHub, Vercel → merged when named in ~/.myai/mcp-optional.conf
 templates/mcp-web.json      ← Chrome DevTools overlay → merged if Next.js/Vercel detected
 templates/mcp-docker.json   ← Docker overlay → merged if docker-compose.yml detected
 ```
@@ -868,7 +960,7 @@ Also available: `make preview` (set up the test→preview pipeline for a specifi
 
 > **Zero config. Zero boilerplate. Just describe what you want to build.**
 >
-> The Powerhouse Blueprint gives you the full engineering stack — 62 AI agents, 136 skills, CI/CD, database, error monitoring, design system — all pre-wired and ready. You don't pick agents, you don't configure tools, you don't set up pipelines. You just talk about your app.
+> The myAI Blueprint gives you the full engineering stack — 64 AI agents, 137 skills, CI/CD, database, error monitoring, design system — all pre-wired and ready. You don't pick agents, you don't configure tools, you don't set up pipelines. You just talk about your app.
 
 ### The 4 Steps
 
@@ -901,7 +993,7 @@ You don't need to know any of this — it just works. But here's what the bluepr
 
 | Layer | What you get | You configure |
 |-------|-------------|---------------|
-| **AI Brain** | 62 specialist agents, 136 skills, MCP servers, hooks, SONA pattern memory | Nothing — auto-routed by your prompt |
+| **AI Brain** | 64 specialist agents, 137 skills, MCP servers, hooks, SONA pattern memory | Nothing — auto-routed by your prompt |
 | **App Stack** | Next.js 15 (App Router) + TypeScript strict + Tailwind v4 + shadcn/ui | Nothing — ready to build on |
 | **Database** | MongoDB in Docker (local) + Atlas-ready for prod | Just swap `MONGODB_URI` for production |
 | **AI Integration** | `@anthropic-ai/sdk` with prompt caching, sample AI feature | Nothing — imported and ready |
@@ -927,18 +1019,17 @@ myai new-app ~/code/my-idea
 
 **GitHub Template (skip step 1+2):**
 ```bash
-gh repo create knofler/<name> --template knofler/todo-blueprint --private --clone
+gh repo create <owner>/<name> --template <owner>/todo-blueprint --private --clone
 cd <name> && cp .env.example .env.local && ./dev
 ```
 
 **Script with GitHub + Vercel flags:**
 ```bash
 ./scripts/init_blueprint.sh ~/path/to/<name> \
-    --gh-create knofler/<name> --gh-private --vercel
+    --gh-create <owner>/<name> --gh-private --vercel
 ```
 
-**Canonical reference:** [`plan/POWERHOUSE_BLUEPRINT.md`](./plan/POWERHOUSE_BLUEPRINT.md)
-**Template repo:** [`knofler/todo-blueprint`](https://github.com/knofler/todo-blueprint)
+**Template repo:** your own `<owner>/todo-blueprint` (mark it as a GitHub template repository)
 
 ---
 
@@ -1115,8 +1206,8 @@ When you run `./scripts/init_ai.sh [project]`, everything gets copied automatica
 │   ├── .claude/
 │   │   ├── agents/ → ../agents/   ← Symlink, Claude Code auto-discovers
 │   │   └── skills/ → ../skills/   ← Symlink, Claude Code auto-discovers
-│   ├── agents/                     ← 62 agent definitions
-│   ├── skills/                     ← 136 skill playbooks
+│   ├── agents/                     ← 64 agent definitions
+│   ├── skills/                     ← 137 skill playbooks
 │   ├── documentation/              ← AI_RULES, routing, guides
 │   ├── state/                      ← STATE.md, AI_AGENT_HANDOFF.md
 │   └── logs/                       ← claude_log.md, gemini.md, copilot.md
@@ -1349,7 +1440,7 @@ These work in **any project** that has the AI framework installed.
 | `ship it` | **Safe deploy via test branch.** Commit → push to `test` → CI passes → preview deploys → user tests → PR to `main` → AI reviews → merge → prod deploys → notify user → update state. **Does NOT run update_all** — that's master-repo only |
 | `agent mode -min` | **Lightweight session start (<1 min).** Pull + read handoff ACTION + STATE top block + schedule banner + report. Skips the full maintenance sweep |
 | `agent mode -resume` | **Join the last scheduled/headless runner session for this repo** and continue its work |
-| `remote status` / `remote start [repo…\|--last-start]` / `remote stop [repo…\|--last-start]` | **Fleet remote sessions.** Runs `./AI/scripts/remote_fleet.sh <action>` — see who's live where, open phone-drivable claude-museum sessions (duplicate-guarded), stop museum sessions only. Anchor rule: the master-AI doorway session is never stopped (override `--include-anchor`); `stop --last-start` undoes only the last start's launches; `start --last-start` reopens exactly that set (record never rewritten) |
+| `remote status` / `remote start [repo…\|--last-start]` / `remote stop [repo…\|--last-start]` | **Fleet remote sessions.** Runs `./AI/scripts/remote_fleet.sh <action>` — see who's live where, open phone-drivable claude-<master-profile> sessions (duplicate-guarded), stop master-doorway sessions only. Anchor rule: the master-AI doorway session is never stopped (override `--include-anchor`); `stop --last-start` undoes only the last start's launches; `start --last-start` reopens exactly that set (record never rewritten) |
 | `schedule plan` | **Mythos plan + 10-day schedule → ship → wrap.** Writes `AI/plan/MYTHOS_IMPROVEMENT_PLAN.md` + `AI/plan/schedule.json`, posts the 10-day schedule to dashboard `/plan` (via `push_schedule.sh`), queues tasks for the off-hours CLI runner, then auto-runs `ship it` + `wrap up -u`. Works from CLI or mobile (mobile commits the artifact; a CLI `agent mode -a` ingests it). |
 | `schedule <desc>` / `schedule list` | Queue one autonomous task for this repo / list the queue (`AI/scripts/schedule_task.sh`). |
 | `wrap up` / `wrap up -u` | **Session close.** Runs `schedule plan` **first**, then updates STATE.md + AI_AGENT_HANDOFF.md + log, traffic-light dashboard, WRAPPED-UP banner. **`-u` (urgent)** skips `schedule plan` for a fast close. |
@@ -1518,7 +1609,7 @@ JSON-RPC 2.0 over HTTP. This is the endpoint other LLMs (Claude Code in any repo
 - `tools/call` — invoke a tool (params: `{name, arguments}`)
 - `ping` — keepalive
 
-**168 MCP tools** (representative subset below — see [`runtime/src/mcp/tools.ts`](runtime/src/mcp/tools.ts) for the full set incl. `memory_reindex`, `schedules_*` incl. `schedules_seed`, `budgets_*`, `agents_invoke`, `skills_invoke`, `morning_sweep`, `evening_sweep`, `dispatch_cycle`, `fleet_overview`, `standing_agents_status`, `notifications_*`, `health_alerts_*`):
+**191 MCP tools** (representative subset below — see [`runtime/src/mcp/tools.ts`](runtime/src/mcp/tools.ts) for the full set incl. `memory_reindex`, `schedules_*` incl. `schedules_seed`, `budgets_*`, `agents_invoke`, `skills_invoke`, `morning_sweep`, `evening_sweep`, `dispatch_cycle`, `fleet_overview`, `standing_agents_status`, `notifications_*`, `health_alerts_*`):
 
 | Category | Tool | Purpose |
 |----------|------|---------|
@@ -1536,8 +1627,8 @@ JSON-RPC 2.0 over HTTP. This is the endpoint other LLMs (Claude Code in any repo
 | Repos | `repos_list` | Managed repos from `managed_repos.txt` with health flags |
 | Repos | `repos_status` | Git branch, uncommitted count, ahead/behind, file mtimes |
 | Repos | `repos_priority` | Ranked by open tasks + stale handoff + missing AI |
-| Inventory | `agents_list` | All 62 agents (filter by category) |
-| Inventory | `skills_list` | All 136 skills (filter by agent) |
+| Inventory | `agents_list` | All 64 agents (filter by category) |
+| Inventory | `skills_list` | All 137 skills (filter by agent) |
 
 **Quick try:**
 ```bash
@@ -1839,7 +1930,7 @@ Full documentation: `documentation/CLI_MOBILE_WORKFLOW.md`
 | `agent mode -min` | **Lightweight session start (<1 min).** Pull + read handoff ACTION + STATE top block + schedule banner + report. Skips the full maintenance sweep — use full `agent mode` before shipping or after a machine switch |
 | `agent mode -resume` | **Join the last scheduled/headless runner session for this repo** — read its log, cross-check the task queue + commits, report a JOIN summary, continue as that agent |
 | `agent mode -resume all` / `/fleet` | **Fleet Morning Console.** Sweep every managed repo's overnight work, show a decision table, drive ship/fix/merge/wrap-up per repo from this terminal — live on dashboard `/fleet` |
-| `remote status` / `remote start [all\|core\|repo…\|--last-start]` / `remote stop [repo…\|--last-start]` | **Fleet remote sessions (works in EVERY repo).** `status` = which repos have live claude sessions + profile (anti-duplication view). `start` = open a phone-drivable claude-museum session per repo (iTerm tab, duplicate-guarded, `--max` RAM cap; records what it launched). `stop` = kill museum sessions only, never interactive shells. **Anchor rule:** the master-AI session is NEVER stopped — it's the phone's doorway to `remote start` the fleet back (override: `--include-anchor`). **`stop --last-start`** = undo the last start: stops only the sessions that run launched, already-live ones untouched. **`start --last-start`** = reopen exactly that recorded set (duplicate-guarded; never rewrites the record, so the pair toggles the same set; no record = clean error). Repo set: `config/remote_fleet.txt` |
+| `remote status` / `remote start [all\|core\|repo…\|--last-start]` / `remote stop [repo…\|--last-start]` | **Fleet remote sessions (works in EVERY repo).** `status` = which repos have live claude sessions + profile (anti-duplication view). `start` = open a phone-drivable claude-<master-profile> session per repo (iTerm tab, duplicate-guarded, `--max` RAM cap; records what it launched). `stop` = kill master-doorway sessions only, never interactive shells. **Anchor rule:** the master-AI session is NEVER stopped — it's the phone's doorway to `remote start` the fleet back (override: `--include-anchor`). **`stop --last-start`** = undo the last start: stops only the sessions that run launched, already-live ones untouched. **`start --last-start`** = reopen exactly that recorded set (duplicate-guarded; never rewrites the record, so the pair toggles the same set; no record = clean error). Repo set: `config/remote_fleet.txt` |
 | `schedule plan` | **Mythos plan + 10-day schedule → ship → wrap.** Writes `plan/MYTHOS_IMPROVEMENT_PLAN.md` + `plan/schedule.json`, posts the 10-day schedule to dashboard `/plan`, queues tasks for the off-hours CLI runner, then auto-runs `ship it` + `wrap up -u`. See [Autonomous Runner](#-autonomous-runner--work-that-ships-while-you-sleep). |
 | `schedule <desc>` / `schedule list` | Queue one autonomous task for this repo / list the queue (`schedule_task.sh`). |
 | `wrap up` / `wrap up -u` | **Session close.** Runs `schedule plan` **first**, then session-close (state/handoff/log), rotate, App Directory card, traffic-light dashboard, `update_all` + README refresh, WRAPPED-UP banner. **`-u` (urgent)** skips `schedule plan`, `update_all`, and the README refresh. |
@@ -1887,9 +1978,9 @@ Every block ends with a `… N more — run "more <type>" to see all` hint.
 | Command | Action |
 |---------|--------|
 | `ai tools` | Show 5 of each category |
-| `more agents` | Dump all 62 agents grouped by category |
-| `more skills` | Dump all 136 skills |
-| `more mcp tools` or `more mcp` | Dump all 168 MCP tools with full input schemas |
+| `more agents` | Dump all 64 agents grouped by category |
+| `more skills` | Dump all 137 skills |
+| `more mcp tools` or `more mcp` | Dump all 191 MCP tools with full input schemas |
 | `more routes` | Dump all HTTP + WS + MCP + dashboard routes (same as the Gateway Routes section above) |
 | `ai tools help` or `help ai tools` | Print this usage block |
 
@@ -1993,7 +2084,7 @@ init all           # All 8 agents at once
 
 Each generated file contains the same core instructions:
 - Session start protocol (read state files)
-- 62 specialist agents and their domains
+- 64 specialist agents and their domains
 - Quick keywords (`hello`, `agent mode`, `ship it`, etc.)
 - State management rules (autonomous updates)
 - Critical project rules (Docker, pipeline relay, timeouts)
@@ -2012,13 +2103,13 @@ The core instructions are defined once inside the script — adding a new agent 
 
 ---
 
-## Powerhouse Workspace Integration
+## Work-Org Workspace Integration (operator-specific)
 
 The framework integrates with a portable, AI-agnostic knowledge base at `~/your-knowledge-base/` (the "central context layer" — survives Anthropic account / subscription / device / tool changes). 17 keywords route from this CLI to that folder via the auto-memory pointer:
 
 | Keyword | What it does |
 |---------|--------------|
-| `office mode` | Bootstrap the Powerhouse workspace — read INDEX/MASTER_MEMORY/HANDOFF, report status across all captured projects |
+| `office mode` | Bootstrap the work-org workspace — read INDEX/MASTER_MEMORY/HANDOFF, report status across all captured projects |
 | `office status` | Just the status snapshot (capture state per project) |
 | `who is <name>` | Look up `_master/people.md` + cross-project mention count |
 | `recall <topic>` | Full-text search across every captured `PROJECT_SUMMARY/*.md` |
@@ -2037,7 +2128,7 @@ Full reference: `~/your-knowledge-base/KEYWORDS.md`. Type any keyword from any C
 
 ## AgentFlow — local development with AI agents
 
-AgentFlow ([knofler/agentFlow](https://github.com/knofler/agentFlow)) is the AI-Driven Project Delivery Platform built on this framework. It lives in its own standalone repo and runs in Docker with support for both **cloud AI APIs** and **locally installed CLI tools** (Claude Code, Gemini CLI, GitHub Copilot, Aider).
+AgentFlow is the AI-Driven Project Delivery Platform built on this framework. It lives in its own standalone repo and runs in Docker with support for both **cloud AI APIs** and **locally installed CLI tools** (Claude Code, Gemini CLI, GitHub Copilot, Aider).
 
 ### Standard Start (Cloud AI only)
 
@@ -2116,7 +2207,7 @@ Each dropdown has two groups:
 
 ### Full Documentation
 
-See the [AgentFlow repo docs](https://github.com/knofler/agentFlow/blob/main/docs/AI_PROVIDERS.md) for complete provider setup, API endpoints, architecture, troubleshooting, and FAQ.
+See the AgentFlow repo's docs (`docs/AI_PROVIDERS.md`) for complete provider setup, API endpoints, architecture, troubleshooting, and FAQ.
 
 ---
 
@@ -2130,8 +2221,8 @@ See the [AgentFlow repo docs](https://github.com/knofler/agentFlow/blob/main/doc
 ├── .claude/
 │   ├── agents/ → ../agents/        # Symlink — Claude Code auto-discovers agents
 │   └── skills/ → ../skills/        # Symlink — Claude Code auto-discovers skills
-├── agents/                         # 62 agent definitions (all tools)
-├── skills/                         # 136 skill playbooks (skills/*/SKILL.md)
+├── agents/                         # 64 agent definitions (all tools)
+├── skills/                         # 137 skill playbooks (skills/*/SKILL.md)
 ├── state/
 │   ├── STATE.md                    # Current progress & blockers
 │   └── AI_AGENT_HANDOFF.md         # Instructions for the next agent
@@ -2193,7 +2284,7 @@ project-root/
 
 ## 📚 Docs, comparisons & hands-on guides
 
-The full **documentation site** is auto-built from `docs/` (zero-dependency generator, no framework) and deployed to GitHub Pages: **<https://knofler.github.io/ai_management/>**. Start there for the [Quickstart](./docs/quickstart.md), [Concepts](./docs/concepts.md), and the auto-generated CLI / MCP-tool references.
+The full **documentation site** is auto-built from `docs/` (zero-dependency generator, no framework) and deployed to GitHub Pages. Start there for the [Quickstart](./docs/quickstart.md), [Concepts](./docs/concepts.md), and the auto-generated CLI / MCP-tool references.
 
 | Guide | What it covers |
 |-------|----------------|

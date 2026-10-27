@@ -141,13 +141,32 @@ if reason is None:
     try:
         deadline = time.time() + TIMEOUT_S
         out_fd, err_fd = proc.stdout.fileno(), proc.stderr.fileno()
+        # A dead child's pipes stay level-triggered readable forever (POSIX
+        # EOF-on-closed-pipe semantics -- true on Linux AND macOS, this is not
+        # a Linux-only quirk): select() keeps reporting a closed fd in rlist
+        # on every call, os.read() just keeps returning b"". So "rlist" alone
+        # can never prove "nothing left to read" -- it never goes empty once
+        # the child has exited, and the loop below used to spin all the way
+        # to TIMEOUT_S (default 12s) on every scenario where the child dies
+        # without ever producing a response (bad command, wrapper missing,
+        # gateway 401, ...). Track per-fd EOF explicitly and stop selecting
+        # on a drained fd; once both are drained AND the process has exited,
+        # there is nothing left to wait for.
+        open_fds = {out_fd, err_fd}
         while time.time() < deadline and time.time() < hard_deadline:
             exited = proc.poll() is not None
-            rlist, _, _ = select.select([out_fd, err_fd], [], [], 0.5)
+            if not open_fds:
+                if exited:
+                    break
+                time.sleep(0.05)
+                continue
+            rlist, _, _ = select.select(list(open_fds), [], [], 0.5)
             if err_fd in rlist:
                 chunk = os.read(err_fd, 4096)
                 if chunk:
                     stderr_buf += chunk
+                else:
+                    open_fds.discard(err_fd)
             if out_fd in rlist:
                 chunk = os.read(out_fd, 4096)
                 if chunk:
@@ -164,10 +183,12 @@ if reason is None:
                         if isinstance(candidate, dict) and ("result" in candidate or "error" in candidate):
                             response = candidate
                             break
+                else:
+                    open_fds.discard(out_fd)
             if response is not None:
                 break
-            if exited and not rlist:
-                # process is gone and there was nothing left to read this tick
+            if exited and not open_fds:
+                # process is gone and both pipes are fully drained
                 break
     except TimeoutError:
         pass

@@ -25,7 +25,7 @@ export function RoutingDecisionsCard({ decisions }: { decisions: RoutingDecision
       ) : (
         <table className="card-table w-full text-sm">
           <thead>
-            <tr className="text-left text-[11px] text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
+            <tr className="text-left text-label text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
               <th className="px-4 py-2.5 font-medium">When</th>
               <th className="px-4 py-2.5 font-medium">Provider</th>
               <th className="px-4 py-2.5 font-medium">Model</th>

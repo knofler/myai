@@ -53,7 +53,7 @@ export function OnboardingChecklist({ steps }: { steps: OnboardingStep[] }) {
               <li key={s.id} className="flex items-start gap-3">
                 <span
                   aria-hidden
-                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold ${
+                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-label font-semibold ${
                     s.done
                       ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400'
                       : s.id === next?.id

@@ -15,6 +15,7 @@
 #
 # Thresholds (defaults — override via env):
 #   STATE_MAX_SESSIONS=3   keep this many session blocks in STATE.md
+#   STATE_MIN_SESSIONS=1   size-pressure floor — never rotate the newest block(s)
 #   STATE_MAX_BYTES=20000  rotate if STATE.md exceeds this size
 #   HANDOFF_MAX_BYTES=10000  rotate handoff archive section if exceeded
 #
@@ -45,7 +46,7 @@ if [ -f "$ROTATION_CONF" ]; then
         _v="${_v%%#*}"; _v="$(printf '%s' "$_v" | tr -d ' \t')"
         [ -z "$_v" ] && continue
         case "$_k" in
-            STATE_MAX_SESSIONS|STATE_MAX_BYTES|STATE_MAX_RECHECKS|HANDOFF_MAX_BYTES)
+            STATE_MAX_SESSIONS|STATE_MIN_SESSIONS|STATE_MAX_BYTES|STATE_MAX_RECHECKS|HANDOFF_MAX_BYTES)
                 # Only fill in what the environment did not already set.
                 eval ": \${$_k:=$_v}" 2>/dev/null
                 ;;
@@ -62,6 +63,13 @@ STATE_MAX_BYTES="${STATE_MAX_BYTES:-20000}"
 # trigger fires while session keep-N finds nothing to rotate (the size-only
 # dead-end this pass fixes).
 STATE_MAX_RECHECKS="${STATE_MAX_RECHECKS:-2}"
+# Under SIZE pressure (STATE.md still over STATE_MAX_BYTES after re-check
+# archival and count keep-N), keep rotating oldest session blocks below the
+# keep-N target, but never below this floor — the newest session always stays
+# hot. Everything rotated lives on in state/archive/, and the brain + handoff
+# are the primary continuity record, so bounding the hot file wins over
+# keeping extra sessions in it.
+STATE_MIN_SESSIONS="${STATE_MIN_SESSIONS:-1}"
 HANDOFF_MAX_BYTES="${HANDOFF_MAX_BYTES:-10000}"
 
 MODE="rotate"
@@ -77,7 +85,7 @@ report() {
     if [ -f "$path" ]; then
         local size_b sessions
         size_b=$(wc -c < "$path" | tr -d ' \n')
-        sessions=$(awk '/^### Session:/{c++} END{print c+0}' "$path" 2>/dev/null)
+        sessions=$(awk '/^###? Session:/{c++} END{print c+0}' "$path" 2>/dev/null)
         echo "  $label: ${size_b}B, ${sessions} session block(s) — $(basename "$path")"
     else
         echo "  $label: missing"
@@ -169,13 +177,88 @@ EOF
 # STATE.md rotation
 # ----------------------------------------------------------------------------
 # Find session block boundaries. A "session block" starts at a line matching
-# `^### Session:` and ends just before the next `^### Session:` or the next
-# top-level `^## ` heading (which is the state-section boundary like
-# "## 2. Architectural Decisions").
+# `^## Session:` (the current wrap-up format) or `^### Session:` (the older
+# pre-BRAIN-PRIMARY format still present in long-lived files) and ends just
+# before the next session header or the next top-level `^## ` heading (the
+# state-section boundary like "## 2. Architectural Decisions").
+#
+# Matching BOTH header depths is load-bearing: when wrap-up moved session
+# blocks from H3 to H2, an H3-only detector went blind to every new block —
+# the byte trigger fired, keep-N saw "3 sessions", and STATE.md grew to 86KB
+# with 6 invisible sessions in it (observed 2026-09-15, an office Mac).
+
+# Rotate the OLDEST dated session block out to its month archive.
+# Oldest = smallest YYYY-MM-DD parsed from the header; ties broken by the
+# LARGER line number (blocks are prepended newest-first, so within one day
+# the lower block is the older one). This is date-driven, not position-driven,
+# because real files are not strictly ordered — the newest block is sometimes
+# appended at EOF after the backlog section. Headers with no parseable date
+# are never selected (there is no month archive to file them under).
+# Returns 0 if a block was archived, 1 if no eligible block exists.
+rotate_oldest_session() {
+    local oldest_line="" oldest_key="" ln hdr d key
+    while IFS= read -r hit; do
+        ln="${hit%%:*}"
+        hdr="${hit#*:}"
+        d=$(printf '%s' "$hdr" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)
+        [ -n "$d" ] || continue
+        key="${d}.$(printf '%09d' $((999999999 - ln)))"
+        if [ -z "$oldest_key" ] || [ "$key" \< "$oldest_key" ]; then
+            oldest_key="$key"
+            oldest_line="$ln"
+        fi
+    done < <(grep -nE '^###? Session:' "$STATE")
+    [ -n "$oldest_line" ] || return 1
+
+    # End of block = (next session header OR next ^## heading) - 1, else EOF.
+    # `^## ` already matches an H2 `## Session:` header, so the alternation
+    # only needs to add the H3 session form.
+    local end_line
+    end_line=$(awk -v start="$oldest_line" \
+        'NR > start && (/^## / || /^### Session:/) { print NR; exit }' "$STATE")
+    if [ -n "$end_line" ]; then
+        end_line=$((end_line - 1))
+    else
+        end_line=$(wc -l < "$STATE" | tr -d ' ')
+    fi
+
+    local rotated header yyyy_mm archive_file tmp
+    rotated=$(sed -n "${oldest_line},${end_line}p" "$STATE")
+    header=$(printf '%s\n' "$rotated" | head -1)
+    yyyy_mm=$(printf '%s' "$header" | grep -oE '[0-9]{4}-[0-9]{2}' | head -1)
+    archive_file="$ARCHIVE_DIR/${yyyy_mm}.md"
+
+    # Append to month archive (create with header if new)
+    if [ ! -f "$archive_file" ]; then
+        cat > "$archive_file" <<EOF
+# Session Archive: $yyyy_mm
+
+> Rotated out of state/STATE.md by scripts/rotate_state.sh.
+> Searchable via grep. Linked from state/STATE.md "Archive" pointer section.
+
+---
+
+EOF
+    fi
+    printf '%s\n\n' "$rotated" >> "$archive_file"
+
+    # Remove rotated lines from STATE.md
+    tmp=$(mktemp)
+    sed "${oldest_line},${end_line}d" "$STATE" > "$tmp"
+    mv "$tmp" "$STATE"
+
+    # Archive pointer table — best-effort: warn if this month has no row.
+    if ! grep -q "archive/${yyyy_mm}.md" "$STATE"; then
+        echo "  WARNING: Archive pointer for $yyyy_mm not found in STATE.md — please add manually."
+    fi
+
+    echo "  Rotated session '$header' → $archive_file"
+    return 0
+}
 
 if [ -f "$STATE" ]; then
     STATE_BYTES=$(wc -c < "$STATE" | tr -d ' ')
-    STATE_SESSIONS=$(awk '/^### Session:/{c++} END{print c+0}' "$STATE")
+    STATE_SESSIONS=$(awk '/^###? Session:/{c++} END{print c+0}' "$STATE")
 
     NEEDS_ROTATE="no"
     if [ "$MODE" = "force" ]; then NEEDS_ROTATE="yes"; fi
@@ -190,84 +273,41 @@ if [ -f "$STATE" ]; then
         # size-only dead-end that previously left the file oversized forever.
         archive_rechecks "$STATE_MAX_RECHECKS" || true
 
-        # Pass 2: rotate the oldest surplus `### Session:` block. Recompute the
-        # header line numbers AFTER re-check archival, which edits the file.
-        # (bash 3.2 compatible — no mapfile)
-        SESSION_LINES=()
-        while IFS= read -r line; do
-            SESSION_LINES+=("$line")
-        done < <(grep -n "^### Session:" "$STATE" | cut -d: -f1)
-
-        if [ "${#SESSION_LINES[@]}" -le "$STATE_MAX_SESSIONS" ]; then
-            echo "  (no surplus session blocks to rotate; re-check archival bounds the size trigger)"
-        else
-            # Block to rotate = the (MAX+1)-th session. Index 0-based, so MAX_SESSIONS itself.
-            ROTATE_START_LINE="${SESSION_LINES[$STATE_MAX_SESSIONS]}"
-
-            # End of block = (line of next session OR line of next ^## heading) - 1.
-            NEXT_LINE=""
-            if [ $((STATE_MAX_SESSIONS + 1)) -lt "${#SESSION_LINES[@]}" ]; then
-                NEXT_LINE="${SESSION_LINES[$((STATE_MAX_SESSIONS + 1))]}"
-            fi
-            # Find first ^## heading at or after ROTATE_START_LINE (state-sections boundary)
-            SECTION_LINE=$(awk -v start="$ROTATE_START_LINE" 'NR > start && /^## / { print NR; exit }' "$STATE")
-
-            ROTATE_END_LINE=""
-            if [ -n "$NEXT_LINE" ] && [ -n "$SECTION_LINE" ]; then
-                ROTATE_END_LINE=$(( NEXT_LINE < SECTION_LINE ? NEXT_LINE : SECTION_LINE ))
-            elif [ -n "$NEXT_LINE" ]; then
-                ROTATE_END_LINE="$NEXT_LINE"
-            elif [ -n "$SECTION_LINE" ]; then
-                ROTATE_END_LINE="$SECTION_LINE"
+        # Pass 2: rotate oldest session blocks (recomputed AFTER re-check
+        # archival, which edits the file) until BOTH triggers clear:
+        #   - count trigger: keep at most STATE_MAX_SESSIONS blocks
+        #   - size trigger:  while still over STATE_MAX_BYTES, keep rotating
+        #     below keep-N, down to (but never past) STATE_MIN_SESSIONS
+        # --force rotates at least one block even when under both thresholds.
+        # The loop (rather than one block per invocation) is what makes a
+        # badly overgrown file converge in a single run instead of shedding
+        # one block per boot.
+        ROTATED_COUNT=0
+        while :; do
+            CUR_SESSIONS=$(awk '/^###? Session:/{c++} END{print c+0}' "$STATE")
+            CUR_BYTES=$(wc -c < "$STATE" | tr -d ' ')
+            if [ "$MODE" = "force" ] && [ "$ROTATED_COUNT" -eq 0 ] && [ "$CUR_SESSIONS" -gt "$STATE_MIN_SESSIONS" ]; then
+                : # force: unconditionally rotate the first (oldest) block
+            elif [ "$CUR_SESSIONS" -gt "$STATE_MAX_SESSIONS" ]; then
+                : # count trigger
+            elif [ "$CUR_BYTES" -gt "$STATE_MAX_BYTES" ] && [ "$CUR_SESSIONS" -gt "$STATE_MIN_SESSIONS" ]; then
+                : # size trigger — rotate below keep-N, floor STATE_MIN_SESSIONS
             else
-                ROTATE_END_LINE=$(wc -l < "$STATE")
-                ROTATE_END_LINE=$((ROTATE_END_LINE + 1))
+                break
             fi
-            ROTATE_END_LINE=$((ROTATE_END_LINE - 1))
+            rotate_oldest_session || break
+            ROTATED_COUNT=$((ROTATED_COUNT + 1))
+        done
 
-            # Extract the rotated content
-            ROTATED=$(sed -n "${ROTATE_START_LINE},${ROTATE_END_LINE}p" "$STATE")
-            ROTATED_HEADER=$(echo "$ROTATED" | head -1)
-
-            # Parse YYYY-MM from header: "### Session: 2026-05-19 ..."
-            YYYY_MM=$(echo "$ROTATED_HEADER" | grep -oE "[0-9]{4}-[0-9]{2}" | head -1)
-            if [ -z "$YYYY_MM" ]; then
-                echo "  ERROR: Could not parse date from '$ROTATED_HEADER' — aborting rotation."
-                exit 1
-            fi
-
-            ARCHIVE_FILE="$ARCHIVE_DIR/${YYYY_MM}.md"
-
-            # Append to month archive (create with header if new)
-            if [ ! -f "$ARCHIVE_FILE" ]; then
-                cat > "$ARCHIVE_FILE" <<EOF
-# Session Archive: $YYYY_MM
-
-> Rotated out of state/STATE.md by scripts/rotate_state.sh.
-> Searchable via grep. Linked from state/STATE.md "Archive" pointer section.
-
----
-
-EOF
-            fi
-            echo "$ROTATED" >> "$ARCHIVE_FILE"
-            echo "" >> "$ARCHIVE_FILE"
-
-            # Remove rotated lines from STATE.md
-            TMP=$(mktemp)
-            sed "${ROTATE_START_LINE},${ROTATE_END_LINE}d" "$STATE" > "$TMP"
-            mv "$TMP" "$STATE"
-
-            # Update archive pointer table — increment session count for this month
-            # (best-effort: if a row already exists for this month, leave it; if not, append)
-            if ! grep -q "archive/${YYYY_MM}.md" "$STATE"; then
-                echo "  WARNING: Archive pointer for $YYYY_MM not found in STATE.md — please add manually."
-            fi
-
-            echo "  Rotated session '$ROTATED_HEADER' → $ARCHIVE_FILE"
+        if [ "$ROTATED_COUNT" -eq 0 ]; then
+            echo "  (no surplus session blocks to rotate; re-check archival bounds the size trigger)"
         fi
 
-        echo "  New STATE.md size: $(wc -c < "$STATE" | tr -d ' ')B"
+        FINAL_BYTES=$(wc -c < "$STATE" | tr -d ' ')
+        if [ "$FINAL_BYTES" -gt "$STATE_MAX_BYTES" ]; then
+            echo "  NOTE: still ${FINAL_BYTES}B > ${STATE_MAX_BYTES}B and no rotatable session blocks left — the surplus is non-session content (sections 1-4); trim it manually or raise STATE_MAX_BYTES in config/state_rotation.conf."
+        fi
+        echo "  New STATE.md size: ${FINAL_BYTES}B"
     else
         echo "STATE.md within thresholds — no rotation needed."
     fi

@@ -1,9 +1,8 @@
 # Distribution & Installation
 
 `ai-management` ships the **`myai`** CLI (alias `ai-manage`) plus the
-full AI Management Framework it scaffolds. There are three supported install
-paths: **npm** (recommended), the **`curl | sh` bootstrap** (no npm needed),
-and the **Claude Code plugin marketplace** (agents/skills/hooks only, no
+full AI Management Framework it scaffolds. There are two supported install
+paths: **npm** (recommended) and the **Claude Code plugin marketplace** (agents/skills/hooks only, no
 gateway/dashboard/runner).
 
 > **Prerequisites:** Docker Desktop / engine (running), Node.js ≥ 20, and `git`.
@@ -62,40 +61,7 @@ myai down                          # stop the stack (--volumes also drops mongo 
 
 ---
 
-## Option B — `curl | sh` bootstrap (no npm)
-
-For machines without npm, or to register many existing repos at once, use the
-bundled `install.sh`. It scans a directory for git repos, detects their tech
-stacks, registers them with the framework, and starts the management hub.
-
-```bash
-# Inspect first (always read a remote script before piping to a shell):
-curl -fsSL https://raw.githubusercontent.com/knofler/ai_management/main/install.sh -o install.sh
-less install.sh
-
-# Run it against a directory of projects:
-bash install.sh ~/path/to/projects
-```
-
-One-liner (only after you've reviewed the script you trust):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/knofler/ai_management/main/install.sh | bash -s -- ~/path/to/projects
-```
-
-Useful flags:
-
-| Flag | Effect |
-|---|---|
-| `--dry-run` | Show what would happen, make no changes |
-| `--yes` | Auto-confirm all prompts (non-interactive) |
-| `--skip-docker` | Register repos but don't start the Docker stack |
-| `--max-depth N` | Repo-scan depth (default 4) |
-| `--help` | Usage |
-
----
-
-## Option C — Claude Code plugin marketplace
+## Option B — Claude Code plugin marketplace
 
 For Claude Code users who just want the agents/skills/hooks — not the
 gateway, dashboard, or runner — install myAI as a plugin bundle instead.
@@ -127,18 +93,18 @@ Or from inside a running Claude Code session:
 /plugin install myai-brain@ai-management
 ```
 
-The marketplace is sourced from `knofler/myai` — the same curated public
+The marketplace is sourced from the repository added above — the same curated public
 mirror that `scripts/publish_release.sh` (npm publish + mirror sync, atomic)
 refreshes on every release, so `.claude-plugin/` is always in sync with the
 latest npm version.
 
 **This path does not install the gateway, dashboard, or runner** — for the
-full self-hosted stack, use Option A or Option B above.
+full self-hosted stack, use Option A above.
 
 ### Updating / removing plugins
 
 ```bash
-claude plugin marketplace update knofler/myai   # pull the latest manifest
+claude plugin marketplace update ai-management   # pull the latest manifest
 claude plugin uninstall myai-brain@ai-management
 ```
 
@@ -148,7 +114,7 @@ claude plugin uninstall myai-brain@ai-management
 
 The package is **clean-room**: it contains the framework only — never operator
 context. Shipped: the `myai` bin, agents, skills, hooks, scripts, templates,
-`.claude-plugin/` (the plugin marketplace manifest, Option C above), the
+`.claude-plugin/` (the plugin marketplace manifest, Option B above), the
 runtime gateway + dashboard sources, the portable `docker-compose.yml`, docs,
 and `*.example` configs. **Excluded** (by both the `package.json` `files`
 allowlist and `scripts/publish_guard.sh`): `state/`, `plan/`, `memory/`,
@@ -164,8 +130,7 @@ myai --help          # command list
 ## Updating
 
 ```bash
-npm update -g ai-management     # npm path
-# curl|sh path: re-run install.sh; it is idempotent and skips already-registered repos
+npm update -g ai-management
 ```
 
 ## Uninstalling

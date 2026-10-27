@@ -5,7 +5,7 @@ import { createChildLogger } from '../shared/logger.js';
 import { listAgents, getAgent } from '../agents/loader.js';
 import { listSessions, getSession, exportSession, importSession, recallSessionContext } from '../core/session-manager.js';
 import type { SessionExport } from '../core/session-manager.js';
-import { routeMessage } from '../core/message-router.js';
+import { routeMessage, stripChannelMetadata } from '../core/message-router.js';
 import { WsIncoming } from '../shared/types.js';
 import type { WsOutgoing } from '../shared/types.js';
 import { authenticateWs } from '../core/auth.js';
@@ -107,7 +107,7 @@ function handleMessage(ws: WebSocket, raw: string): void {
         send(ws, { type: 'error', id: msg.id, error: 'agentName required', timestamp: new Date().toISOString() });
         break;
       }
-      routeMessage(undefined, msg.agentName, msg.content || 'Session started', msg.metadata || {})
+      routeMessage(undefined, msg.agentName, msg.content || 'Session started', stripChannelMetadata(msg.metadata))
         .then(result => {
           send(ws, {
             type: 'event',
@@ -139,7 +139,7 @@ function handleMessage(ws: WebSocket, raw: string): void {
         send(ws, { type: 'error', id: msg.id, error: 'Session not found', timestamp: new Date().toISOString() });
         break;
       }
-      routeMessage(msg.sessionId, session.agentName, msg.content, msg.metadata || {})
+      routeMessage(msg.sessionId, session.agentName, msg.content, stripChannelMetadata(msg.metadata))
         .then(result => {
           send(ws, {
             type: 'event',

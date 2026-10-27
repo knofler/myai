@@ -99,27 +99,27 @@ function FanoutComposer({ repos }: { repos: ConsoleRepo[] }) {
     <Card accent="blue" title="Bulk dispatch — fan out one task across repos" meta={`${selected.size} selected`}>
       <div className="p-4 space-y-4">
         <div>
-          <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1.5">Task description</label>
+          <label className="block text-label uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1.5">Task description</label>
           <input
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             maxLength={300}
             placeholder="e.g. Bump Next.js to 15.4 and run the test suite"
-            className="w-full bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] rounded-lg px-3 py-2 text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-blue-500/50 focus:outline-none"
+            className="w-full bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] rounded-lg px-3 py-2 text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-blue-500/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
           />
         </div>
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))]">Repos</label>
+            <label className="block text-label uppercase tracking-wider text-[rgb(var(--text-muted))]">Repos</label>
             <div className="flex flex-wrap gap-1.5">
               {groups.map((g) => (
                 <button
                   key={g}
                   type="button"
                   onClick={() => selectGroup(g)}
-                  className="text-[10px] px-2 py-0.5 rounded-full border border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] hover:text-teal-300 hover:border-teal-500/40 transition-colors"
+                  className="text-label px-2 py-0.5 rounded-full border border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] hover:text-teal-300 hover:border-teal-500/40 transition-colors"
                 >
                   + {g}
                 </button>
@@ -142,7 +142,7 @@ function FanoutComposer({ repos }: { repos: ConsoleRepo[] }) {
                   }`}
                 >
                   <span className="font-mono">{r.repo}</span>
-                  {r.open > 0 && <span className="text-[10px] px-1 rounded-full bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]">{r.open}</span>}
+                  {r.open > 0 && <span className="text-label px-1 rounded-full bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]">{r.open}</span>}
                 </button>
               );
             })}
@@ -151,21 +151,21 @@ function FanoutComposer({ repos }: { repos: ConsoleRepo[] }) {
 
         <div className="flex flex-wrap items-end gap-4">
           <div>
-            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1.5">Priority</label>
+            <label className="block text-label uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1.5">Priority</label>
             <select
               value={priority}
               onChange={(e) => setPriority(e.target.value as Priority)}
-              className="bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] rounded-lg px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:border-blue-500/50 focus:outline-none"
+              className="bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] rounded-lg px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:border-blue-500/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
             >
               {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-[11px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1.5">Strategy hint</label>
+            <label className="block text-label uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1.5">Strategy hint</label>
             <select
               value={topology}
               onChange={(e) => setTopology(e.target.value as Topology | '')}
-              className="bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] rounded-lg px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:border-blue-500/50 focus:outline-none"
+              className="bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] rounded-lg px-3 py-2 text-sm text-[rgb(var(--text-primary))] focus:border-blue-500/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50"
               title="A strategy hint stamped on each task — independent lanes, not guaranteed ordering."
             >
               <option value="">none</option>
@@ -182,7 +182,7 @@ function FanoutComposer({ repos }: { repos: ConsoleRepo[] }) {
           </button>
         </div>
 
-        <p className="text-[11px] text-zinc-600">
+        <p className="text-label text-zinc-600">
           Each repo gets one independent queue task. The strategy hint is an execution note for the agents — not a synchronization guarantee.
         </p>
         {msg && <p className={`text-xs ${msg.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}`}>{msg}</p>}
@@ -235,7 +235,7 @@ function ReprioritizeBoard({ tasks }: { tasks: PendingTask[] }) {
               >
                 <div className="flex items-center justify-between px-1 pb-1 border-b border-[rgb(var(--border-subtle))]/60">
                   <PriorityBadge priority={p} />
-                  <span className="text-[10px] text-zinc-600">{byPriority(p).length}</span>
+                  <span className="text-label text-zinc-600">{byPriority(p).length}</span>
                 </div>
                 {byPriority(p).map((t) => (
                   <div
@@ -249,14 +249,14 @@ function ReprioritizeBoard({ tasks }: { tasks: PendingTask[] }) {
                     }`}
                   >
                     <p className="text-xs text-[rgb(var(--text-primary))] truncate">{t.title}</p>
-                    <p className="text-[10px] text-[rgb(var(--text-muted))] font-mono truncate">{t.repo}</p>
+                    <p className="text-label text-[rgb(var(--text-muted))] font-mono truncate">{t.repo}</p>
                   </div>
                 ))}
               </div>
             ))}
           </div>
         )}
-        <p className="mt-3 text-[11px] text-zinc-600">
+        <p className="mt-3 text-label text-zinc-600">
           Drag a card to a new lane to change its priority{pending ? ' · saving…' : ''}.
         </p>
         {msg && <p className={`mt-1 text-xs ${msg.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}`}>{msg}</p>}

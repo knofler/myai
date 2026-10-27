@@ -9,16 +9,24 @@ import BillingManager from './billing-manager';
 
 export const dynamic = 'force-dynamic';
 
+/** The one-line answer (DESIGN_LANGUAGE §5.1). Plan, spend and invoices are
+ *  loaded by the client manager, so this shell quotes no figures. */
+function billingSummary(): string {
+  return 'Everything about your subscription lives here. Update the card you pay with, move up or down a plan, cancel, or pull an invoice, all through the Stripe portal.';
+}
+
 export default function BillingPage() {
   return (
     <div className="max-w-5xl mx-auto">
       <PageHeader
+        icon="billing"
         title="Billing"
-        subtitle="Manage your subscription — update your payment method, change plans, cancel, or download an invoice. Handled by Stripe's hosted billing portal."
+        summary={billingSummary()}
+        subtitle="Stripe hosted billing portal · invoices included."
       >
         <Link
           href="/pricing"
-          className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-[rgb(var(--text-secondary))] hover:bg-[rgb(var(--bg-hover))] hover:text-[rgb(var(--text-primary))]"
+          className="rounded-lg border border-[rgb(var(--border-subtle))] px-3 py-1.5 text-meta text-[rgb(var(--text-secondary))] hover:bg-[rgb(var(--bg-hover))] hover:text-[rgb(var(--text-primary))]"
         >
           View plans ↗
         </Link>

@@ -30,6 +30,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT="${POOL_CAPACITY_OUT:-$REPO_ROOT/state/pool-capacity.json}"
 LEDGER="${PACE_LEDGER:-${RUNNER_STATE_DIR:-$HOME/.ai-cli-runner}/pacing}"
 
+# The runner's profile and pool label — same derivation as cli_task_runner.sh
+# (RUNNER_POOL): the profile dir's basename, dot stripped.
+# shellcheck source=scripts/lib/swarm_roles.sh
+. "$SCRIPT_DIR/lib/swarm_roles.sh"
+RUNNER_CFG="${CLAUDE_CONFIG_DIR:-$(role_runner_profile)}"
+RUNNER_POOL="$(basename "${RUNNER_CFG%/}")"; RUNNER_POOL="${RUNNER_POOL#.}"
+
 mkdir -p "$(dirname "$OUT")"
 
 # Derive AUTO_WEEKLY_TOKEN_BUDGET the same way the runner does — source the
@@ -42,7 +49,7 @@ day="$(TZ=Australia/Sydney date +%Y%m%d)"    # == pace_day()
 
 read_int() { local v; v="$(cat "$1" 2>/dev/null | tr -cd '0-9')"; echo "${v:-0}"; }
 
-# Reconcile the claude-tech pool ledger from the profile's transcripts FIRST
+# Reconcile the runner pool ledger from the profile's transcripts FIRST
 # (2026-09-08, "Pool-capacity drift: CRITICAL"): tok-<day|week> used to hold only
 # runner-attributed spend, so interactive sessions on the same Team pool were
 # invisible to every consumer of this snapshot. session_tokens.py reconcile raises
@@ -51,7 +58,7 @@ read_int() { local v; v="$(cat "$1" 2>/dev/null | tr -cd '0-9')"; echo "${v:-0}"
 # will say so. Skip with POOL_RECONCILE=off (tests feed a fixture ledger).
 if [ "${POOL_RECONCILE:-on}" = "on" ] && [ -f "$SCRIPT_DIR/lib/session_tokens.py" ]; then
   "${PYTHON_BIN:-python3}" "$SCRIPT_DIR/lib/session_tokens.py" reconcile \
-    "${CLAUDE_CONFIG_DIR:-$HOME/.claude-tech}" "$LEDGER" >/dev/null 2>&1 || true
+    "$RUNNER_CFG" "$LEDGER" >/dev/null 2>&1 || true
 fi
 
 spent_week="$(read_int "$LEDGER/tok-$week")"
@@ -73,7 +80,7 @@ else
   pct_week="0"
 fi
 
-# ── claude-tech session% (AVAILABILITY dimension for the runner's
+# ── runner-pool session% (AVAILABILITY dimension for the runner's
 # capability×cost×availability router — route_task_model in cli_task_runner.sh
 # reads this alongside pctUsedWeekly to decide when tech is "hot"). ──────────
 sess_today="$(read_int "$LEDGER/sess-$day")"
@@ -150,7 +157,7 @@ cat > "$tmp" <<EOF
   "source": "pool_capacity_snapshot.sh (runner_budget.conf + pacing ledger)",
   "pools": [
     {
-      "pool": "claude-tech",
+      "pool": "$RUNNER_POOL",
       "weeklyBudgetTokens": $budget_week,
       "weeklySpentTokens": $spent_week,
       "weeklyRemainingTokens": $remaining_week,
@@ -164,7 +171,7 @@ cat > "$tmp" <<EOF
     {
       "pool": "fable",
       "kind": "paced-weekly-bucket",
-      "note": "own separate bucket (never exempt — PR #393's blanket exemption removed 2026-07-26); used for reserve-headroom shifts off a hot claude-tech pool, or a deliberate expiring-credit window, never as a default",
+      "note": "own separate bucket (never exempt — PR #393's blanket exemption removed 2026-07-26); used for reserve-headroom shifts off a hot runner pool, or a deliberate expiring-credit window, never as a default",
       "weeklySessionsUsed": $fable_sess_week,
       "weeklySessionsBudget": $fable_sess_cap,
       "dailySessionsUsed": $fable_sess_today,
@@ -216,10 +223,10 @@ cat > "$tmp" <<EOF
       "pctUsedWeekly": 0
     },
     {
-      "pool": "gemini",
+      "pool": "agy",
       "kind": "unconfigured",
       "configured": false,
-      "note": "L4 roadmap (plan/MULTI_PROVIDER_ORCHESTRATION.md) — no CLI_CMD wiring yet, not a routable pool",
+      "note": "L4 roadmap (plan/MULTI_PROVIDER_ORCHESTRATION.md) — Antigravity CLI, no usage-ledger wiring yet, not a routable pool (replaces the removed Gemini pool, task-5a8c09ca)",
       "weeklyBudgetTokens": 0,
       "weeklySpentTokens": 0,
       "weeklyRemainingTokens": 0,

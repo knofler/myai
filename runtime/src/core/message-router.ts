@@ -144,6 +144,18 @@ function buildSystemPrompt(
  * Returns null when tools should not be wired, or `AnthropicToolOptions`
  * with the whitelisted tool set + a handler that audit-logs each call.
  */
+/**
+ * Channel identity (channelType/channelId/userId) is set only by the
+ * operator's channel adapters (channels/registry.ts). Chat tools run as the
+ * operator for those channels, so a REST or WebSocket caller must never be able
+ * to supply it (G5 NF-2): strip it from client-supplied metadata.
+ */
+export function stripChannelMetadata(metadata: unknown): Record<string, unknown> {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return {};
+  const { channelType: _t, channelId: _c, userId: _u, ...rest } = metadata as Record<string, unknown>;
+  return rest;
+}
+
 export function buildChatModeToolOpts(
   agentName: string,
   metadata: Record<string, unknown>,

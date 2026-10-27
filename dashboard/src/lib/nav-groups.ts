@@ -44,6 +44,7 @@ export const FLAT_LINKS: NavLink[] = [
   { href: '/notifications', label: 'Notifications', short: 'Alerts', icon: '🔔', hint: 'alerts · history', primary: false },
   { href: '/memory', label: 'Memory', short: 'Memory', icon: '∞', hint: 'sona · sessions', primary: false },
   { href: '/brain', label: 'Brain', short: 'Brain', icon: '❋', hint: 'namespaces · atoms · stashes', primary: false },
+  { href: '/tour', label: 'Brain tour', short: 'Tour', icon: '▶', hint: 'animated tour of how the brain works', primary: false },
   { href: '/context', label: 'Your Context', short: 'Context', icon: '⊡', hint: 'view · download · port', primary: false },
   { href: '/api-keys', label: 'API Keys', short: 'Keys', icon: '⚿', hint: 'create · scope · rotate · revoke', primary: false },
   { href: '/billing', label: 'Billing', short: 'Billing', icon: '$', hint: 'card · plan · cancel · invoices', primary: false },
@@ -62,7 +63,7 @@ const GROUP_DEFS: { id: string; label: string; hrefs: string[] }[] = [
   { id: 'work', label: 'Work', hrefs: ['/work', '/fleet', '/swarm', '/projects', '/apps'] },
   { id: 'insights', label: 'Insights & Billing', hrefs: ['/analytics', '/velocity', '/savings', '/recap', '/revenue'] },
   { id: 'system', label: 'System', hrefs: ['/system', '/connectors', '/registry', '/marketplace', '/logs', '/runs'] },
-  { id: 'brain', label: 'Brain & Memory', hrefs: ['/memory', '/brain', '/context'] },
+  { id: 'brain', label: 'Brain & Memory', hrefs: ['/memory', '/brain', '/tour', '/context'] },
   { id: 'account', label: 'Account', hrefs: ['/notifications', '/api-keys', '/billing', '/referrals', '/sessions', '/2fa', '/audit'] },
 ];
 

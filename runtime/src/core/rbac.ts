@@ -306,6 +306,22 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   tasks_claim: 'work',
   tasks_fail: 'work',
   tasks_bulk: 'work',
+  // Mailbox (durable swarm messaging — SWARM_MESSAGING P1)
+  mail_send: 'work',
+  mail_inbox: 'read',
+  mail_ack: 'work',
+  swarm_plan: 'work',
+  swarm_approve: 'work',
+  swarm_stop: 'work',
+  swarm_update_budget: 'work',
+  swarm_list: 'read',
+  swarm_live: 'read',
+  swarm_action: 'work',
+  swarm_get: 'read',
+  // Agent dispatch layer (AGENT_MESSAGING_DISPATCH phase 1)
+  dispatch_delegate: 'work',
+  mail_claim_as_task: 'work',
+  mail_task_result: 'work',
   // Traces / logs / artifacts
   traces_record: 'work',
   traces_list: 'read',
@@ -323,12 +339,29 @@ export const TOOL_CAPS: Readonly<Record<string, Capability>> = Object.freeze({
   runner_lease_release: 'work',
   runner_lease_list: 'read',
   runner_lease_history: 'read',
+  // Keyed leases (SWARM_COORDINATOR_PLAN phase 1) — coordinator election +
+  // resource claims; separate from the runner_lease_* slot pool above.
+  lease_acquire: 'work',
+  lease_heartbeat: 'work',
+  // lease_release force:true additionally needs 'configure' — per-argument,
+  // so checked in the handler (mcp/tools.ts canForceReleaseLease).
+  lease_release: 'work',
+  lease_list: 'read',
+  // Account usage ledger (multi-Mac phase 2) — each Mac pushes its own usage.
+  account_usage_record: 'work',
+  account_usage_status: 'read',
   runner_heartbeat: 'work',
   runner_liveness: 'read',
+  worker_lane_status: 'read',
   // Runner-backlog well cursor (task-e9163eb9) — the cross-machine consumed-
   // count replacing the gitignored, machine-local config/.runner_backlog.cursor.
   backlog_cursor_get: 'read',
   backlog_cursor_set: 'work',
+  // Runner-backlog consumed-titles ledger (task-aa331af6) — durable, does not
+  // age out of tasks_list's limit:2000 window the way position-based
+  // self-heal confirmation does.
+  backlog_ledger_get: 'read',
+  backlog_ledger_add: 'work',
   // Repos registry + code graph
   repos_list: 'read',
   repos_status: 'read',
@@ -671,6 +704,21 @@ export const OPERATOR_ONLY_TOOLS: ReadonlySet<string> = new Set([
   // Standing-agent framework health — operator/fleet observability, not a
   // tenant's own data.
   'standing_agents_status',
+  // v1 gate G5 (H-2): these act on the operator's installation, not on the
+  // caller's tenant — the operator's STATE/handoff files, code graphs over any
+  // container path, repo scans, the default tenant's schedules, the operator's
+  // LLM key (no tenant metering), global pattern analysis and health alerts,
+  // and the global trace store (traces_record stays visible: the runner records
+  // each tenant's own spans through it).
+  'state_read', 'state_update',
+  'get_pr_impact', 'triage_prs', 'get_neighbors', 'shortest_path',
+  'repos_scan', 'schedules_seed', 'skills_invoke',
+  'pattern_analyze', 'health_alerts_run', 'traces_list',
+  // G5 re-verify (RV-1/RV-2): memory_reindex indexes the operator's state/ and
+  // managed repos into the CALLER's vectors; repos_* return the operator's repo
+  // paths and branches; agents_invoke spends the operator's LLM key. The
+  // runner and wrap-up call these through the local token (operator context).
+  'memory_reindex', 'repos_list', 'repos_status', 'repos_priority', 'agents_invoke',
 ]);
 
 /** True for contexts that already bypass `assertToolCapability` — they ARE

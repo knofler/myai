@@ -9,7 +9,7 @@
 # previously cross-checked that ledger against reality — a bug in the
 # snapshot writer (a missed transcript, a lost snapshot marker across a
 # runner restart, a CLAUDE_CONFIG_DIR mismatch) could silently mis-route work
-# for days before a human noticed. This re-derives claude-tech's daily/weekly
+# for days before a human noticed. This re-derives the runner pool's daily/weekly
 # spent-token figures directly from the Claude Code transcripts
 # (scripts/lib/pool_capacity_drift.py — sums message.usage.output_tokens for
 # the current Sydney day/week window, no offset bookkeeping) and LOGS drift
@@ -31,7 +31,7 @@
 #
 # Env:
 #   POOL_CAPACITY_OUT               snapshot artifact to check (default state/pool-capacity.json)
-#   CLAUDE_CONFIG_DIR               transcript root (default $HOME/.claude-tech — the runner's scheduled profile)
+#   CLAUDE_CONFIG_DIR               transcript root (default: role_runner_profile — the runner's scheduled profile)
 #   POOL_CAPACITY_DRIFT_LOG         append-only drift log (default ~/.ai-cli-runner/pool-capacity-drift.log)
 #   POOL_CAPACITY_DRIFT_STATUS_OUT  JSON alert-bridge artifact (default state/pool-capacity-drift-status.json)
 #   DRIFT_TOLERANCE_PCT             relative tolerance, percent of actual usage (default 10)
@@ -48,7 +48,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PY="${PYTHON_BIN:-python3}"
 
 OUT="${POOL_CAPACITY_OUT:-$REPO_ROOT/state/pool-capacity.json}"
-CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude-tech}"
+# shellcheck source=scripts/lib/swarm_roles.sh
+. "$SCRIPT_DIR/lib/swarm_roles.sh"
+CFG="${CLAUDE_CONFIG_DIR:-$(role_runner_profile)}"
 LOG="${POOL_CAPACITY_DRIFT_LOG:-${RUNNER_STATE_DIR:-$HOME/.ai-cli-runner}/pool-capacity-drift.log}"
 TOL_PCT="${DRIFT_TOLERANCE_PCT:-10}"
 TOL_FLOOR="${DRIFT_TOLERANCE_TOKENS:-5000}"

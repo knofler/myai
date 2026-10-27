@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>myAI /brain Tour — Direction A: Living Architectural SVG</title>
+  <style>
+    :root {
+      --bg-canvas: #020617;
+      --bg-surface: #0f172a;
+      --bg-raised: #1e293b;
+      --bg-hover: #334155;
+      --border-subtle: #1e293b;
+      --border-strong: #334155;
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      
+      /* Color semantics */
+      --teal: #14b8a6;         /* System State: boot, sync, gateway, ci, runner */
+      --teal-glow: rgba(20, 184, 166, 0.4);
+      --teal-dim: rgba(20, 184, 166, 0.12);
+      --coral: #d97757;        /* Intelligence: brain, memory atoms, rag, distillation */
+      --coral-glow: rgba(217, 119, 87, 0.45);
+      --coral-dim: rgba(217, 119, 87, 0.15);
+      
+      --purple: #a855f7;       /* Claude */
+      --green: #22c55e;        /* Codex */
+      --orange: #f97316;       /* Antigravity */
+      --cyan: #06b6d4;         /* Ollama / Local */
+      
+      --radius: 10px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-canvas);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Top Bar */
+    header {
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 12px 20px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-badge {
+      background: linear-gradient(135deg, var(--coral), #b95837);
+      color: #fff;
+      font-weight: 800;
+      font-size: 13px;
+      letter-spacing: 0.5px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      box-shadow: 0 0 16px var(--coral-glow);
+    }
+
+    .tour-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .direction-chip {
+      background: var(--bg-raised);
+      border: 1px solid var(--teal);
+      color: var(--teal);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 2px 7px;
+      border-radius: 4px;
+    }
+
+    /* Controls Bar */
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button.btn {
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
+      color: var(--text-primary);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 7px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      min-height: 44px; /* touch accessible */
+    }
+
+    button.btn:hover {
+      background: var(--bg-hover);
+      border-color: var(--teal);
+      color: #fff;
+    }
+
+    button.btn.primary {
+      background: var(--teal);
+      color: #042f2e;
+      border-color: var(--teal);
+      font-weight: 700;
+    }
+
+    button.btn.primary:hover {
+      background: #2dd4bf;
+      box-shadow: 0 0 14px var(--teal-glow);
+    }
+
+    .speed-btn {
+      font-family: monospace;
+      font-size: 12px;
+    }
+
+    .time-display {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      color: var(--text-secondary);
+      background: var(--bg-surface);
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    /* Timeline Stepper Pills */
+    .scene-nav {
+      background: rgba(15, 23, 42, 0.95);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 8px 16px;
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      white-space: nowrap;
+      scrollbar-width: thin;
+    }
+
+    .scene-pill {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 20px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s ease;
+      min-height: 44px;
+    }
+
+    .scene-pill .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-muted);
+    }
+
+    .scene-pill:hover {
+      border-color: var(--border-strong);
+      color: var(--text-primary);
+    }
+
+    .scene-pill.active {
+      background: var(--bg-raised);
+      border-color: var(--coral);
+      color: var(--text-primary);
+      box-shadow: 0 0 12px var(--coral-glow);
+    }
+
+    .scene-pill.active .dot {
+      background: var(--coral);
+      box-shadow: 0 0 6px var(--coral);
+    }
+
+    .scene-pill.completed .dot {
+      background: var(--teal);
+    }
+
+    /* Global Scrubber Track */
+    .scrubber-track {
+      width: 100%;
+      height: 4px;
+      background: var(--bg-raised);
+      position: relative;
+      cursor: pointer;
+    }
+
+    .scrubber-progress {
+      height: 100%;
+      background: linear-gradient(90deg, var(--teal), var(--coral));
+      width: 0%;
+      transition: width 0.1s linear;
+      box-shadow: 0 0 8px var(--teal);
+    }
+
+    /* Main Viewport Container */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 16px;
+      gap: 16px;
+    }
+
+    .stage-wrapper {
+      position: relative;
+      background: radial-gradient(circle at 50% 30%, #0d1933 0%, var(--bg-surface) 60%, var(--bg-canvas) 100%);
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      overflow: hidden;
+      aspect-ratio: 16 / 9;
+      min-height: 440px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+    }
+
+    svg#brain-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* SVG Subsystem Node Styles */
+    .subsystem {
+      transition: all 0.5s ease;
+      cursor: pointer;
+    }
+
+    .subsystem rect.node-box,
+    .subsystem path.node-shape {
+      fill: #0d1527;
+      stroke: var(--border-strong);
+      stroke-width: 1.5;
+      transition: all 0.4s ease;
+    }
+
+    .subsystem:hover rect.node-box {
+      stroke: var(--teal);
+      filter: drop-shadow(0 0 10px var(--teal-glow));
+    }
+
+    .subsystem.dimmed {
+      opacity: 0.28;
+      filter: grayscale(40%);
+    }
+
+    .subsystem.active rect.node-box,
+    .subsystem.active path.node-shape {
+      stroke: var(--coral);
+      stroke-width: 2.5;
+      fill: #151d33;
+      filter: drop-shadow(0 0 18px var(--coral-glow));
+    }
+
+    .subsystem.active-system rect.node-box {
+      stroke: var(--teal);
+      stroke-width: 2.5;
+      fill: #0c232f;
+      filter: drop-shadow(0 0 18px var(--teal-glow));
+    }
+
+    .node-title {
+      font-size: 13px;
+      font-weight: 700;
+      fill: #f8fafc;
+      letter-spacing: 0.3px;
+    }
+
+    .node-sub {
+      font-size: 10px;
+      fill: var(--text-secondary);
+      font-family: monospace;
+    }
+
+    /* Data Pulse Paths */
+    .data-pipe {
+      fill: none;
+      stroke: #1e293b;
+      stroke-width: 2;
+      stroke-dasharray: 4 4;
+      transition: stroke 0.4s ease;
+    }
+
+    .data-pipe.active-teal {
+      stroke: var(--teal);
+      stroke-width: 2.5;
+      stroke-dasharray: 6 3;
+      animation: pipeFlow 1.2s linear infinite;
+      filter: drop-shadow(0 0 6px var(--teal));
+    }
+
+    .data-pipe.active-coral {
+      stroke: var(--coral);
+      stroke-width: 2.5;
+      stroke-dasharray: 6 3;
+      animation: pipeFlow 1.2s linear infinite;
+      filter: drop-shadow(0 0 6px var(--coral));
+    }
+
+    @keyframes pipeFlow {
+      from { stroke-dashoffset: 36; }
+      to { stroke-dashoffset: 0; }
+    }
+
+    .pulse-packet {
+      fill: #fff;
+      filter: drop-shadow(0 0 5px #fff);
+      opacity: 0;
+    }
+
+    .pulse-packet.firing {
+      opacity: 1;
+    }
+
+    /* Live Telemetry Card (Bottom Panel) */
+    .telemetry-deck {
+      display: grid;
+      grid-template-columns: 1.8fr 1.2fr 1fr;
+      gap: 16px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+
+    @media (max-width: 900px) {
+      .telemetry-deck {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .narrative-col {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .scene-meta-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .scene-index-badge {
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--teal);
+      background: var(--teal-dim);
+      border: 1px solid rgba(20, 184, 166, 0.3);
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .scene-duration {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    .scene-heading {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .scene-description {
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--text-secondary);
+    }
+
+    .scene-highlight {
+      color: var(--coral);
+      font-weight: 600;
+    }
+
+    /* Console Col */
+    .console-col {
+      background: #020617;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.6;
+      color: #94a3b8;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      overflow-y: hidden;
+      height: 110px;
+    }
+
+    .console-header {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      border-bottom: 1px solid #1e293b;
+      padding-bottom: 4px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .console-line {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+
+    /* Console lines stream in one-by-one across the scene so the panel never
+       sits static (operator feedback: keep something changing every ~1s). */
+    .console-line.pending {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+
+    .console-line.teal { color: var(--teal); }
+    .console-line.coral { color: var(--coral); }
+    .console-line.dim { color: #475569; }
+
+    /* Legend Col */
+    .legend-col {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      justify-content: center;
+      border-left: 1px solid var(--border-subtle);
+      padding-left: 16px;
+    }
+
+    @media (max-width: 900px) {
+      .legend-col {
+        border-left: none;
+        padding-left: 0;
+        border-top: 1px solid var(--border-subtle);
+        padding-top: 12px;
+      }
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .legend-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+    }
+
+    .legend-swatch.teal { background: var(--teal); box-shadow: 0 0 6px var(--teal); }
+    .legend-swatch.coral { background: var(--coral); box-shadow: 0 0 6px var(--coral); }
+    .legend-swatch.swarm { background: linear-gradient(90deg, var(--purple), var(--green), var(--orange), var(--cyan)); }
+
+    /* Motion Accessibility */
+    @media (prefers-reduced-motion: reduce) {
+      .data-pipe.active-teal,
+      .data-pipe.active-coral {
+        animation: none !important;
+      }
+      * {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+      }
+    }
+
+    /* Small screen tuning */
+    @media (max-width: 600px) {
+      header {
+        padding: 10px 12px;
+      }
+      .brand-group {
+        width: 100%;
+        justify-content: space-between;
+      }
+      .controls {
+        width: 100%;
+        justify-content: space-between;
+      }
+      main {
+        padding: 8px;
+      }
+      .stage-wrapper {
+        min-height: 280px;
+        aspect-ratio: auto;
+        height: 380px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation & Controls Bar -->
+  <header>
+    <div class="brand-group">
+      <div class="logo-badge">myAI</div>
+      <div class="tour-title">
+        <span>/brain Tour</span>
+        <span class="direction-chip">Direction A: SVG Walkthrough</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="btn primary" id="playBtn" aria-label="Play or pause animation">
+        <span id="playIcon">⏸</span>
+        <span id="playLabel">Pause</span>
+      </button>
+
+      <button class="btn" id="prevBtn" aria-label="Previous scene">⏮ Prev</button>
+      <button class="btn" id="nextBtn" aria-label="Next scene">Next ⏭</button>
+
+      <button class="btn speed-btn" id="speedBtn" title="Toggle Speed">1.0x</button>
+      <div class="time-display" id="timeDisplay">00:00 / 00:48</div>
+    </div>
+  </header>
+
+  <!-- Global Progress Bar -->
+  <div class="scrubber-track" id="scrubberTrack" title="Click to scrub anywhere in the 48s tour">
+    <div class="scrubber-progress" id="scrubberBar"></div>
+  </div>
+
+  <!-- Scene Navigation Pills (8 Scenes) -->
+  <nav class="scene-nav" id="sceneNav" aria-label="Story Scenes">
+    <!-- Populated by JS -->
+  </nav>
+
+  <!-- Main Showcase Stage -->
+  <main>
+    <div class="stage-wrapper">
+      <svg id="brain-canvas" viewBox="0 0 1200 680" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <!-- SVG Filters -->
+          <filter id="glow-teal" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+
+          <filter id="glow-coral" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="7" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+
+          <!-- Gradients -->
+          <linearGradient id="grad-teal-line" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#0f766e" />
+            <stop offset="50%" stop-color="#14b8a6" />
+            <stop offset="100%" stop-color="#2dd4bf" />
+          </linearGradient>
+
+          <linearGradient id="grad-coral-line" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#9a3412" />
+            <stop offset="50%" stop-color="#d97757" />
+            <stop offset="100%" stop-color="#fb923c" />
+          </linearGradient>
+
+          <linearGradient id="grad-core-brain" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#1e1b4b" />
+            <stop offset="100%" stop-color="#0f172a" />
+          </linearGradient>
+        </defs>
+
+        <!-- Ambient Background Grid Gridlines -->
+        <g stroke="#1e293b" stroke-width="0.7" opacity="0.35">
+          <line x1="0" y1="170" x2="1200" y2="170" />
+          <line x1="0" y1="340" x2="1200" y2="340" />
+          <line x1="0" y1="510" x2="1200" y2="510" />
+          <line x1="300" y1="0" x2="300" y2="680" />
+          <line x1="600" y1="0" x2="600" y2="680" />
+          <line x1="900" y1="0" x2="900" y2="680" />
+        </g>
+
+        <!-- Dynamic Data Pipelines (Interconnecting Cables) -->
+        <g id="pipelines">
+          <!-- S1 (Macs) to S2 (Git Brain) -->
+          <path id="pipe-1-2" class="data-pipe" d="M 230 140 C 330 140, 360 210, 430 210" />
+          <!-- S2 (Git Brain) to S3 (Distillation) -->
+          <path id="pipe-2-3" class="data-pipe" d="M 610 210 C 680 210, 680 140, 750 140" />
+          <!-- S3 (Distillation) to S4 (Vector RAG) -->
+          <path id="pipe-3-4" class="data-pipe" d="M 930 140 C 990 140, 1000 240, 1000 300" />
+          <!-- S2 (Git Brain) to S5 (MCP Gateway) -->
+          <path id="pipe-2-5" class="data-pipe" d="M 520 280 L 520 370" />
+          <!-- S5 (MCP Gateway) to S6 (Local Runner CI) -->
+          <path id="pipe-5-6" class="data-pipe" d="M 430 430 C 360 430, 340 510, 260 510" />
+          <!-- S5 (MCP Gateway) to S7 (Swarm) -->
+          <path id="pipe-5-7" class="data-pipe" d="M 610 430 C 700 430, 720 500, 780 500" />
+          <!-- S7 (Swarm) & S4 back to S8 Loop (Tomorrow Boot) -->
+          <path id="pipe-7-8" class="data-pipe" d="M 960 510 C 1100 510, 1150 420, 1150 250 C 1150 70, 400 30, 180 80" />
+        </g>
+
+        <!-- Pipeline Packet Particles -->
+        <circle id="packet-1" class="pulse-packet" r="4" />
+        <circle id="packet-2" class="pulse-packet" r="4" />
+
+        <!-- ============================================== -->
+        <!-- SUBSYSTEM NODES (8 SCENES)                     -->
+        <!-- ============================================== -->
+
+        <!-- NODE 1: 08:00 Boot & Dual Mac Wakeup -->
+        <g id="node-scene-1" class="subsystem" transform="translate(60, 70)">
+          <rect class="node-box" width="180" height="130" rx="10" />
+          <circle cx="28" cy="28" r="10" fill="#042f2e" stroke="var(--teal)" stroke-width="1.5" />
+          <text x="28" y="32" font-size="10" text-anchor="middle" fill="var(--teal)">⏰</text>
+          <text x="48" y="32" class="node-title">08:00 Morning Boot</text>
+          <text x="20" y="58" class="node-sub">Home Mac</text>
+          <text x="20" y="74" class="node-sub">Office Mac</text>
+          <rect x="20" y="88" width="140" height="24" rx="4" fill="#020617" stroke="#334155" />
+          <text x="30" y="104" font-size="11" fill="var(--teal)" font-family="monospace">▶ sync code + brain</text>
+        </g>
+
+        <!-- NODE 2: Git Brain & Memory Atoms -->
+        <g id="node-scene-2" class="subsystem" transform="translate(420, 150)">
+          <rect class="node-box" width="200" height="135" rx="10" />
+          <circle cx="28" cy="28" r="10" fill="#2d120a" stroke="var(--coral)" stroke-width="1.5" />
+          <text x="28" y="32" font-size="10" text-anchor="middle" fill="var(--coral)">🧠</text>
+          <text x="48" y="32" class="node-title">Git Brain Repo</text>
+          <text x="20" y="58" class="node-sub">Atoms = Commits (Markdown/JSON)</text>
+          <!-- Mini Git Branch Visual -->
+          <line x1="25" y1="80" x2="175" y2="80" stroke="#475569" stroke-width="2" />
+          <circle cx="45" cy="80" r="5" fill="var(--coral)" />
+          <circle cx="95" cy="80" r="5" fill="var(--teal)" />
+          <circle cx="150" cy="80" r="6" fill="#fff" stroke="var(--coral)" stroke-width="2" />
+          <path d="M 45 80 Q 70 102 95 102 L 130 102 Q 145 102 150 80" fill="none" stroke="var(--coral)" stroke-width="1.5" stroke-dasharray="2 2" />
+          <text x="20" y="122" class="node-sub" fill="var(--coral)">SHA: da5c8422 · merge wrap-up</text>
+        </g>
+
+        <!-- NODE 3: Distillation Engine -->
+        <g id="node-scene-3" class="subsystem" transform="translate(740, 80)">
+          <rect class="node-box" width="190" height="130" rx="10" />
+          <circle cx="28" cy="28" r="10" fill="#2d120a" stroke="var(--coral)" stroke-width="1.5" />
+          <text x="28" y="32" font-size="10" text-anchor="middle" fill="var(--coral)">⚗️</text>
+          <text x="48" y="32" class="node-title">Distillation Pipeline</text>
+          <rect x="20" y="52" width="150" height="18" rx="3" fill="#1e293b" />
+          <text x="26" y="65" font-size="9" fill="#e2e8f0">1. Brief (1-line essence)</text>
+          <rect x="20" y="74" width="150" height="18" rx="3" fill="#1e293b" />
+          <text x="26" y="87" font-size="9" fill="#e2e8f0">2. Working (Active context)</text>
+          <rect x="20" y="96" width="150" height="18" rx="3" fill="#1e293b" />
+          <text x="26" y="109" font-size="9" fill="var(--coral)">3. Rollup (Fleet intelligence)</text>
+        </g>
+
+        <!-- NODE 4: Vector Store & RAG -->
+        <g id="node-scene-4" class="subsystem" transform="translate(930, 260)">
+          <rect class="node-box" width="180" height="140" rx="10" />
+          <circle cx="28" cy="28" r="10" fill="#2d120a" stroke="var(--coral)" stroke-width="1.5" />
+          <text x="28" y="32" font-size="10" text-anchor="middle" fill="var(--coral)">⚡</text>
+          <text x="48" y="32" class="node-title">Vector RAG Cortex</text>
+          <!-- Vector Nodes Graphic -->
+          <g transform="translate(20, 50)">
+            <circle cx="30" cy="25" r="4" fill="var(--coral)" opacity="0.8" />
+            <circle cx="70" cy="15" r="5" fill="var(--coral)" />
+            <circle cx="110" cy="35" r="4" fill="var(--teal)" opacity="0.7" />
+            <circle cx="50" cy="55" r="6" fill="#fff" stroke="var(--coral)" stroke-width="1.5" />
+            <circle cx="95" cy="65" r="4" fill="var(--coral)" opacity="0.6" />
+            <line x1="30" y1="25" x2="50" y2="55" stroke="var(--coral)" stroke-width="0.8" opacity="0.5" />
+            <line x1="70" y1="15" x2="50" y2="55" stroke="var(--coral)" stroke-width="1.2" />
+            <line x1="110" y1="35" x2="50" y2="55" stroke="var(--teal)" stroke-width="0.8" opacity="0.4" />
+          </g>
+          <text x="20" y="126" class="node-sub" fill="var(--coral)">cosine_sim: 0.942 (recalled)</text>
+        </g>
+
+        <!-- NODE 5: Unified MCP Gateway -->
+        <g id="node-scene-5" class="subsystem" transform="translate(425, 370)">
+          <rect class="node-box" width="200" height="145" rx="10" />
+          <circle cx="28" cy="28" r="10" fill="#042f2e" stroke="var(--teal)" stroke-width="1.5" />
+          <text x="28" y="32" font-size="10" text-anchor="middle" fill="var(--teal)">🔌</text>
+          <text x="48" y="32" class="node-title">Unified MCP Gateway</text>
+          <text x="20" y="56" class="node-sub">localhost:3100 · x-token guard</text>
+          <!-- 4 Gateway Hub Ports -->
+          <g transform="translate(18, 68)">
+            <rect x="0" y="0" width="75" height="24" rx="4" fill="#020617" stroke="var(--teal)" stroke-width="1" />
+            <text x="37" y="16" font-size="10" fill="var(--teal)" text-anchor="middle">tasks</text>
+
+            <rect x="85" y="0" width="75" height="24" rx="4" fill="#020617" stroke="var(--coral)" stroke-width="1" />
+            <text x="122" y="16" font-size="10" fill="var(--coral)" text-anchor="middle">brain</text>
+
+            <rect x="0" y="30" width="75" height="24" rx="4" fill="#020617" stroke="#38bdf8" stroke-width="1" />
+            <text x="37" y="46" font-size="10" fill="#38bdf8" text-anchor="middle">mailbox</text>
+
+            <rect x="85" y="30" width="75" height="24" rx="4" fill="#020617" stroke="var(--purple)" stroke-width="1" />
+            <text x="122" y="46" font-size="10" fill="var(--purple)" text-anchor="middle">swarm</text>
+          </g>
+        </g>
+
+        <!-- NODE 6: Local CI & Self-Hosted Runner -->
+        <g id="node-scene-6" class="subsystem" transform="translate(100, 460)">
+          <rect class="node-box" width="190" height="135" rx="10" />
+          <circle cx="28" cy="28" r="10" fill="#042f2e" stroke="var(--teal)" stroke-width="1.5" />
+          <text x="28" y="32" font-size="10" text-anchor="middle" fill="var(--teal)">⚙️</text>
+          <text x="48" y="32" class="node-title">Local Runner CI</text>
+          <text x="20" y="56" class="node-sub">Self-Hosted GitHub Runner</text>
+          <g transform="translate(20, 68)">
+            <rect x="0" y="0" width="150" height="16" rx="3" fill="#020617" />
+            <text x="8" y="12" font-size="9" fill="var(--teal)">✓ Docker hermetic suites</text>
+            <rect x="0" y="20" width="150" height="16" rx="3" fill="#020617" />
+            <text x="8" y="32" font-size="9" fill="var(--teal)">✓ Shellcheck 0 warnings</text>
+            <rect x="0" y="40" width="150" height="16" rx="3" fill="#020617" />
+            <text x="8" y="52" font-size="9" fill="#38bdf8">✓ Cloud CI cost: $0.00</text>
+          </g>
+        </g>
+
+        <!-- NODE 7: The Multi-Agent Swarm -->
+        <g id="node-scene-7" class="subsystem" transform="translate(730, 430)">
+          <rect class="node-box" width="240" height="155" rx="10" />
+          <circle cx="28" cy="28" r="10" fill="#2d120a" stroke="var(--coral)" stroke-width="1.5" />
+          <text x="28" y="32" font-size="10" text-anchor="middle" fill="var(--coral)">🐝</text>
+          <text x="48" y="32" class="node-title">Cross-Model Swarm</text>
+          <text x="20" y="54" class="node-sub">1 Goal Split Across 4 Specialized LLMs</text>
+          <!-- Agent Badges in Swarm -->
+          <g transform="translate(18, 64)">
+            <rect x="0" y="0" width="98" height="26" rx="5" fill="#1e1338" stroke="var(--purple)" />
+            <circle cx="10" cy="13" r="4" fill="var(--purple)" />
+            <text x="20" y="17" font-size="10" fill="#d8b4fe" font-weight="600">Claude 🟣</text>
+
+            <rect x="106" y="0" width="98" height="26" rx="5" fill="#052e16" stroke="var(--green)" />
+            <circle cx="116" cy="13" r="4" fill="var(--green)" />
+            <text x="126" y="17" font-size="10" fill="#86efac" font-weight="600">Codex 🟢</text>
+
+            <rect x="0" y="32" width="98" height="26" rx="5" fill="#2d1607" stroke="var(--orange)" />
+            <circle cx="10" cy="45" r="4" fill="var(--orange)" />
+            <text x="20" y="49" font-size="10" fill="#fdba74" font-weight="600">Antigravity 🟠</text>
+
+            <rect x="106" y="32" width="98" height="26" rx="5" fill="#082f49" stroke="var(--cyan)" />
+            <circle cx="116" cy="45" r="4" fill="var(--cyan)" />
+            <text x="126" y="49" font-size="10" fill="#7dd3fc" font-weight="600">Ollama ⚪</text>
+          </g>
+          <text x="20" y="145" class="node-sub" fill="var(--teal)">inter-agent mailbox: synced</text>
+        </g>
+
+        <!-- NODE 8: Tomorrow Morning & Compound Intelligence Flywheel -->
+        <g id="node-scene-8" class="subsystem" transform="translate(980, 70)">
+          <rect class="node-box" width="180" height="120" rx="10" />
+          <circle cx="28" cy="28" r="10" fill="#2d120a" stroke="var(--coral)" stroke-width="1.5" />
+          <text x="28" y="32" font-size="10" text-anchor="middle" fill="var(--coral)">🔄</text>
+          <text x="48" y="32" class="node-title">Compound Flywheel</text>
+          <text x="20" y="58" class="node-sub">Next 08:00 Boot</text>
+          <rect x="20" y="70" width="140" height="34" rx="4" fill="#020617" stroke="var(--coral)" stroke-width="1" />
+          <text x="28" y="86" font-size="10" fill="var(--coral)">+18% Context Velocity</text>
+          <text x="28" y="99" font-size="9" fill="var(--teal)">0 Repeated Mistakes</text>
+        </g>
+      </svg>
+    </div>
+
+    <!-- Live Telemetry Deck (Bottom Panel) -->
+    <div class="telemetry-deck">
+      <div class="narrative-col">
+        <div class="scene-meta-row">
+          <span class="scene-index-badge" id="sceneBadge">Scene 1 of 8</span>
+          <span class="scene-duration" id="sceneDurationBadge">Duration: 9s</span>
+        </div>
+        <h2 class="scene-heading" id="sceneTitle">08:00 Boot — Syncing Machines</h2>
+        <p class="scene-description" id="sceneDesc">
+          Each workstation wakes on schedule. <span class="scene-highlight">morning_boot.sh</span> verifies launchd plists, tests the MCP gateway bridge, and syncs code and memory across home-mac and office-mac via Dropbox git-fetch.
+        </p>
+      </div>
+
+      <div class="console-col" id="consoleBox">
+        <div class="console-header">
+          <span>myAI Telemetry Stream</span>
+          <span id="consoleStatus">ACTIVE</span>
+        </div>
+        <div id="consoleLines">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <div class="legend-col">
+        <div class="legend-item">
+          <div class="legend-swatch teal"></div>
+          <span><strong>Teal:</strong> System State (Boot, Runner, CI, Gateway)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-swatch coral"></div>
+          <span><strong>Coral:</strong> Intelligence (Memory, Atoms, RAG, Swarm)</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-swatch swarm"></div>
+          <span><strong>Multi-Model:</strong> Claude, Codex, Antigravity, Ollama</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    /* Scene Data Dictionary */
+    const SCENES = [
+      {
+        id: 1,
+        title: "08:00 Boot — Dual Mac Hardware Wakeup",
+        nodeId: "node-scene-1",
+        pipeId: "pipe-1-2",
+        pipeColor: "teal",
+        colorType: "active-system",
+        badge: "08:00 Boot",
+        desc: "At 08:00 sharp, macOS launchd triggers morning_boot.sh. home-mac (Home) and office-mac (Office) wake, verify Docker daemons, and sync repository commits and brain state before human arrival.",
+        logs: [
+          { text: "08:00:00 [boot] home-mac macOS launchd fired", cls: "teal" },
+          { text: "08:00:01 [sync] git fetch origin (Dropbox layer)", cls: "dim" },
+          { text: "08:00:02 [docker] containers verified healthy", cls: "teal" },
+          { text: "08:00:03 [boot] sync guard: PASS exit 0", cls: "teal" }
+        ]
+      },
+      {
+        id: 2,
+        title: "The Brain is a Git Repo of Memory Atoms",
+        nodeId: "node-scene-2",
+        pipeId: "pipe-2-3",
+        pipeColor: "coral",
+        colorType: "active",
+        badge: "Memory Atoms",
+        desc: "Memory isn't a black box. The brain is an explicit git repository where every session is a commit and wrap-up merges branches. Memory atoms are immutable markdown/JSON files tracked by SHA.",
+        logs: [
+          { text: "08:00:04 [brain] read atomic store: 1,420 atoms", cls: "coral" },
+          { text: "08:00:05 [git] commit da5c8422 'session: wrap up'", cls: "dim" },
+          { text: "08:00:06 [git] fast-forward merge to brain/main", cls: "coral" },
+          { text: "08:00:07 [store] 0 merge conflicts detected", cls: "teal" }
+        ]
+      },
+      {
+        id: 3,
+        title: "Distillation Compiles Atoms Into Brief / Working / Rollup",
+        nodeId: "node-scene-3",
+        pipeId: "pipe-3-4",
+        pipeColor: "coral",
+        colorType: "active",
+        badge: "Distillation",
+        desc: "Raw context degrades LLMs. Our 3-stage distillation pipeline compiles verbose session atoms into: 1. Brief (single-sentence quick answer), 2. Working (active task state), 3. Rollup (cross-fleet wisdom).",
+        logs: [
+          { text: "08:00:08 [distill] parsing raw atoms (42 KB)", cls: "dim" },
+          { text: "08:00:09 [distill] compiled brief: 180 tokens", cls: "coral" },
+          { text: "08:00:10 [distill] compiled working: 1.2k tokens", cls: "coral" },
+          { text: "08:00:11 [distill] rollup updated: fleet knowledge base", cls: "teal" }
+        ]
+      },
+      {
+        id: 4,
+        title: "Vector Cortex & RAG — Patterns Embedded & Recalled",
+        nodeId: "node-scene-4",
+        pipeId: "pipe-2-5",
+        pipeColor: "coral",
+        colorType: "active",
+        badge: "Vector RAG",
+        desc: "Patterns are vector embedded into an indexed semantic space. When an agent starts a task or hits an error, brain_explore performs cosine similarity retrieval to inject proven historical solutions.",
+        logs: [
+          { text: "08:00:12 [rag] query: 'Docker VM memory leak fix'", cls: "dim" },
+          { text: "08:00:13 [vector] cosine_sim 0.942 matched atom 92222089", cls: "coral" },
+          { text: "08:00:14 [retrieval] injected 3 patterns into context", cls: "coral" },
+          { text: "08:00:15 [rag] zero token hallucination floor", cls: "teal" }
+        ]
+      },
+      {
+        id: 5,
+        title: "The MCP Gateway Every AI Session Connects Through",
+        nodeId: "node-scene-5",
+        pipeId: "pipe-5-6",
+        pipeColor: "teal",
+        colorType: "active-system",
+        badge: "MCP Gateway",
+        desc: "Every AI agent connects through localhost:3100. The Gateway unifies tools for tasks (scheduler), brain (atomic memory), mailbox (inter-agent messaging), and swarm coordination behind authenticated tokens.",
+        logs: [
+          { text: "08:00:16 [gateway] listening 127.0.0.1:3100", cls: "teal" },
+          { text: "08:00:17 [mcp] registered tools: tasks, brain, mailbox, swarm", cls: "teal" },
+          { text: "08:00:18 [auth] token verified: x-gateway-local-token", cls: "dim" },
+          { text: "08:00:19 [gateway] latency 1.4ms per tool call", cls: "teal" }
+        ]
+      },
+      {
+        id: 6,
+        title: "Local Runner + Self-Hosted GitHub Runner Doing CI",
+        nodeId: "node-scene-6",
+        pipeId: "pipe-5-7",
+        pipeColor: "teal",
+        colorType: "active-system",
+        badge: "Local Runner CI",
+        desc: "No burning cloud CI bills or waiting on remote queues. The local CLI runner executes shellcheck, hermetic bash suites, and docker-compose builds locally before any PR is allowed to touch main.",
+        logs: [
+          { text: "08:00:20 [runner] task-451518c2 claimed by home-mac", cls: "dim" },
+          { text: "08:00:21 [ci] running 215 hermetic test suites", cls: "teal" },
+          { text: "08:00:22 [ci] shellcheck: 0 warnings, vitest: pass", cls: "teal" },
+          { text: "08:00:23 [runner] local build verified: $0 cloud bill", cls: "teal" }
+        ]
+      },
+      {
+        id: 7,
+        title: "The Swarm — 1 Goal Split Across Claude, Codex, Antigravity & Ollama",
+        nodeId: "node-scene-7",
+        pipeId: "pipe-7-8",
+        pipeColor: "coral",
+        colorType: "active",
+        badge: "Multi-Model Swarm",
+        desc: "One prompt decomposes into parallel specialist lanes: Claude 🟣 architects, Codex 🟢 writes API routes, Antigravity 🟠 crafts reactive UIs, and local Ollama ⚪ checks formatting. The mailbox coordinates state.",
+        logs: [
+          { text: "08:00:24 [swarm] goal decomposed into 4 parallel lanes", cls: "coral" },
+          { text: "08:00:25 [lane A] Antigravity 🟠 UI generated", cls: "coral" },
+          { text: "08:00:26 [lane B] Codex 🟢 API endpoints created", cls: "dim" },
+          { text: "08:00:27 [mailbox] Claude 🟣 merged peer handoffs", cls: "teal" }
+        ]
+      },
+      {
+        id: 8,
+        title: "Next Morning It Starts Again, Smarter",
+        nodeId: "node-scene-8",
+        pipeId: "pipe-1-2",
+        pipeColor: "coral",
+        colorType: "active",
+        badge: "Smarter Tomorrow",
+        desc: "The flywheel compounds. Every solution, bug fix, and architectural decision is written back into git atoms. Tomorrow morning at 08:00, the fleet boots with yesterday's collective intelligence built-in.",
+        logs: [
+          { text: "08:00:28 [flywheel] session outcomes indexed to memory", cls: "coral" },
+          { text: "08:00:29 [delta] +18% task velocity recorded", cls: "teal" },
+          { text: "08:00:30 [compound] 0 repeated regression bugs", cls: "teal" },
+          { text: "08:00:31 [cycle] ready for tomorrow 08:00 boot", cls: "coral" }
+        ]
+      }
+    ];
+
+    /* Animation State */
+    const DURATION_PER_SCENE = 6000; // 6 seconds (shortened from 9s on operator feedback)
+    const TOTAL_DURATION = SCENES.length * DURATION_PER_SCENE; // 48 seconds
+    let currentSceneIdx = 0;
+    let isPlaying = true;
+    let playbackSpeed = 1.0;
+    let sceneStartTime = performance.now();
+    let accumulatedTime = 0;
+    let rafId = null;
+    let logEls = []; // current scene's console-line nodes, streamed in by revealLogs()
+
+    /* DOM Elements */
+    const playBtn = document.getElementById("playBtn");
+    const playIcon = document.getElementById("playIcon");
+    const playLabel = document.getElementById("playLabel");
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const speedBtn = document.getElementById("speedBtn");
+    const timeDisplay = document.getElementById("timeDisplay");
+    const scrubberBar = document.getElementById("scrubberBar");
+    const scrubberTrack = document.getElementById("scrubberTrack");
+    const sceneNav = document.getElementById("sceneNav");
+
+    const sceneBadge = document.getElementById("sceneBadge");
+    const sceneDurationBadge = document.getElementById("sceneDurationBadge");
+    const sceneTitle = document.getElementById("sceneTitle");
+    const sceneDesc = document.getElementById("sceneDesc");
+    const consoleLines = document.getElementById("consoleLines");
+
+    /* Render Scene Nav Pills */
+    function initSceneNav() {
+      sceneNav.innerHTML = "";
+      SCENES.forEach((scene, idx) => {
+        const pill = document.createElement("button");
+        pill.className = `scene-pill ${idx === 0 ? "active" : ""}`;
+        pill.innerHTML = `<span class="dot"></span> ${idx + 1}. ${scene.badge}`;
+        pill.addEventListener("click", () => jumpToScene(idx));
+        sceneNav.appendChild(pill);
+      });
+    }
+
+    /* Jump to Specific Scene */
+    function jumpToScene(idx) {
+      currentSceneIdx = Math.max(0, Math.min(SCENES.length - 1, idx));
+      accumulatedTime = currentSceneIdx * DURATION_PER_SCENE;
+      sceneStartTime = performance.now();
+      applyScene(currentSceneIdx);
+      updateTimelineUI();
+      revealLogs(0);
+    }
+
+    /* Apply Visuals for a Scene */
+    function applyScene(idx) {
+      const scene = SCENES[idx];
+
+      // Update Scene Pills
+      const pills = sceneNav.querySelectorAll(".scene-pill");
+      pills.forEach((p, i) => {
+        p.classList.remove("active", "completed");
+        if (i < idx) p.classList.add("completed");
+        if (i === idx) p.classList.add("active");
+      });
+
+      // Update SVG Subsystem Nodes
+      document.querySelectorAll(".subsystem").forEach(node => {
+        node.classList.remove("active", "active-system", "dimmed");
+        if (node.id === scene.nodeId) {
+          node.classList.add(scene.colorType || "active");
+        } else {
+          node.classList.add("dimmed");
+        }
+      });
+
+      // Update Pipes
+      document.querySelectorAll(".data-pipe").forEach(pipe => {
+        pipe.classList.remove("active-teal", "active-coral");
+      });
+      const activePipe = document.getElementById(scene.pipeId);
+      if (activePipe) {
+        activePipe.classList.add(scene.pipeColor === "teal" ? "active-teal" : "active-coral");
+      }
+
+      // Update Text Deck
+      sceneBadge.textContent = `Scene ${scene.id} of ${SCENES.length}`;
+      sceneTitle.textContent = scene.title;
+      sceneDesc.innerHTML = scene.desc;
+
+      // Update Console Log Output — rendered hidden, then streamed in by revealLogs()
+      consoleLines.innerHTML = "";
+      logEls = [];
+      scene.logs.forEach(log => {
+        const line = document.createElement("div");
+        line.className = `console-line ${log.cls} pending`;
+        line.textContent = log.text;
+        consoleLines.appendChild(line);
+        logEls.push(line);
+      });
+    }
+
+    /* Stream console lines in across the scene so nothing holds static >~1.5s */
+    function revealLogs(timeInScene) {
+      if (!logEls.length) return;
+      const per = DURATION_PER_SCENE / logEls.length;
+      logEls.forEach((el, i) => {
+        if (timeInScene >= i * per) el.classList.remove("pending");
+      });
+    }
+
+    /* Format Time helper (seconds -> mm:ss) */
+    function formatTime(ms) {
+      const totalSec = Math.floor(ms / 1000);
+      const m = Math.floor(totalSec / 60).toString().padStart(2, '0');
+      const s = (totalSec % 60).toString().padStart(2, '0');
+      return `${m}:${s}`;
+    }
+
+    /* Update Timeline UI */
+    function updateTimelineUI() {
+      const progressPercent = (accumulatedTime / TOTAL_DURATION) * 100;
+      scrubberBar.style.width = `${Math.min(100, Math.max(0, progressPercent))}%`;
+      timeDisplay.textContent = `${formatTime(accumulatedTime)} / ${formatTime(TOTAL_DURATION)}`;
+    }
+
+    /* Main Animation Loop */
+    let lastTick = performance.now();
+    function tick(now) {
+      if (isPlaying) {
+        // rAF's `now` is the frame START, which can precede the
+        // performance.now() that seeded lastTick — a negative delta drove
+        // accumulatedTime below 0 and SCENES[-1].nodeId threw (G8 e2e).
+        const delta = Math.max(0, now - lastTick) * playbackSpeed;
+        accumulatedTime += delta;
+
+        if (accumulatedTime >= TOTAL_DURATION) {
+          // Loop seamlessly
+          accumulatedTime = 0;
+        }
+
+        const calculatedIdx = Math.floor(accumulatedTime / DURATION_PER_SCENE);
+        if (calculatedIdx !== currentSceneIdx && calculatedIdx < SCENES.length) {
+          currentSceneIdx = calculatedIdx;
+          applyScene(currentSceneIdx);
+        }
+
+        updateTimelineUI();
+        revealLogs(accumulatedTime - currentSceneIdx * DURATION_PER_SCENE);
+      }
+      lastTick = now;
+      rafId = requestAnimationFrame(tick);
+    }
+
+    /* Playback Controls */
+    playBtn.addEventListener("click", () => {
+      isPlaying = !isPlaying;
+      if (isPlaying) {
+        playIcon.textContent = "⏸";
+        playLabel.textContent = "Pause";
+        lastTick = performance.now();
+      } else {
+        playIcon.textContent = "▶";
+        playLabel.textContent = "Play";
+      }
+    });
+
+    prevBtn.addEventListener("click", () => {
+      jumpToScene(currentSceneIdx - 1);
+    });
+
+    nextBtn.addEventListener("click", () => {
+      jumpToScene(currentSceneIdx + 1);
+    });
+
+    speedBtn.addEventListener("click", () => {
+      if (playbackSpeed === 1.0) playbackSpeed = 1.5;
+      else if (playbackSpeed === 1.5) playbackSpeed = 2.0;
+      else playbackSpeed = 1.0;
+      speedBtn.textContent = `${playbackSpeed.toFixed(1)}x`;
+    });
+
+    // Scrubber click
+    scrubberTrack.addEventListener("click", (e) => {
+      const rect = scrubberTrack.getBoundingClientRect();
+      const clickRatio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      accumulatedTime = clickRatio * TOTAL_DURATION;
+      const idx = Math.min(SCENES.length - 1, Math.floor(accumulatedTime / DURATION_PER_SCENE));
+      currentSceneIdx = idx;
+      applyScene(idx);
+      updateTimelineUI();
+      revealLogs(accumulatedTime - idx * DURATION_PER_SCENE);
+    });
+
+    // Keyboard Shortcuts
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space") {
+        e.preventDefault();
+        playBtn.click();
+      } else if (e.code === "ArrowRight") {
+        nextBtn.click();
+      } else if (e.code === "ArrowLeft") {
+        prevBtn.click();
+      }
+    });
+
+    // Interactive Node Clicking on SVG
+    SCENES.forEach((scene, idx) => {
+      const nodeEl = document.getElementById(scene.nodeId);
+      if (nodeEl) {
+        nodeEl.addEventListener("click", () => jumpToScene(idx));
+      }
+    });
+
+    // Initial setup
+    initSceneNav();
+    applyScene(0);
+    updateTimelineUI();
+    revealLogs(0);
+    lastTick = performance.now();
+    rafId = requestAnimationFrame(tick);
+  </script>
+</body>
+</html>

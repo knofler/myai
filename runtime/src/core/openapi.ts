@@ -203,6 +203,7 @@ const schemas: Obj = {
       dependsOn: { type: 'array', items: { type: 'string' }, description: 'Upstream taskIds (DAG scheduling) — the task is unclaimable until every upstream is done' },
       startedAt: { type: 'string', format: 'date-time' },
       completedAt: { type: 'string', format: 'date-time' },
+      reviewEnteredAt: { type: 'string', format: 'date-time', description: "Stamped once on the transition into status:'review' — review-held executions count at this, not updatedAt." },
       createdAt: { type: 'string', format: 'date-time' },
       updatedAt: { type: 'string', format: 'date-time' },
     },
@@ -1674,6 +1675,80 @@ function buildPaths(): Obj {
             additionalProperties: true,
           }),
           '500': errorResponse('Handler error'),
+        },
+      },
+    },
+    '/api/swarm/live': {
+      get: {
+        tags: ['Orchestration'],
+        summary: 'Live swarm snapshot for the dashboard Control Room (delegates to the swarm_live MCP handler; read-only)',
+        operationId: 'getSwarmLive',
+        parameters: [{
+          name: 'host', in: 'query', required: false, schema: { type: 'string' },
+          description: "Report this host's coordinator lease as `coordinator` (default: the freshest heartbeat)",
+        }],
+        responses: {
+          '200': jsonResponse('coordinator(s), lanes (busy|idle|unknown), claims, mail, prs + prsSource, today\'s events', {
+            type: 'object',
+            required: ['generatedAt', 'day', 'coordinator', 'coordinators', 'lanes', 'claims', 'mail', 'prs', 'prsSource', 'events'],
+            properties: {
+              generatedAt: { type: 'string', format: 'date-time' },
+              day: { type: 'string', description: 'YYYY-MM-DD in Australia/Sydney — the window `events` covers' },
+              coordinator: { type: ['object', 'null'], additionalProperties: true },
+              coordinators: { type: 'array', items: { type: 'object', additionalProperties: true } },
+              lanes: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    lane: { type: 'string' },
+                    host: { type: 'string' },
+                    state: { type: 'string', enum: ['busy', 'idle', 'unknown'] },
+                    lastSeenAt: { type: ['string', 'null'], format: 'date-time' },
+                    claimCount: { type: 'integer' },
+                  },
+                  additionalProperties: true,
+                },
+              },
+              claims: { type: 'array', items: { type: 'object', additionalProperties: true } },
+              mail: { type: 'object', additionalProperties: true },
+              prs: { type: 'array', items: { type: 'object', additionalProperties: true } },
+              prsSource: {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string', enum: ['snapshot', 'unavailable'] },
+                  asOf: { type: ['string', 'null'], format: 'date-time' },
+                  stale: { type: 'boolean' },
+                },
+              },
+              events: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    t: { type: 'string', format: 'date-time' },
+                    until: { type: 'string', format: 'date-time', description: 'Only on ended `work` spans; absent = point or still open' },
+                    lane: { type: 'string' },
+                    kind: { type: 'string', enum: ['work', 'merge', 'mail', 'claim'] },
+                    label: { type: 'string' },
+                    ref: { type: 'string' },
+                  },
+                },
+              },
+            },
+          }),
+          '500': errorResponse('Handler error'),
+        },
+      },
+    },
+    '/api/swarm/live/stream': {
+      get: {
+        tags: ['Orchestration'],
+        summary: 'Server-Sent Events: one `event: swarm_live` frame (same payload as GET /api/swarm/live) every 10s',
+        operationId: 'streamSwarmLive',
+        parameters: [{ name: 'host', in: 'query', required: false, schema: { type: 'string' } }],
+        responses: {
+          '200': { description: 'text/event-stream of `swarm_live` frames', content: { 'text/event-stream': { schema: { type: 'string' } } } },
         },
       },
     },

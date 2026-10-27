@@ -8,7 +8,7 @@
 # ANTHROPIC_API_KEY injected — metered API billing against that credit instead
 # of the (capped) subscription pools. Policy, non-negotiable:
 #   • RESERVE ONLY — drawn ONLY after every free subscription pool
-#     (Max20x Fable → Claude Pro → Codex Business → Gemini, i.e. the whole
+#     (Max20x Fable → Claude Pro → Codex Business → Antigravity, i.e. the whole
 #     free Claude chain in cli_task_runner.sh) AND the opt-in DeepSeek/Kimi
 #     agentic lane have declined. Never the default lane.
 #   • Off out of the box: MYAI_API_CREDIT_USD unset/0 in .env = disabled.

@@ -79,6 +79,12 @@ export function contrastRatio(a: Rgb, b: Rgb): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+/** PWA/browser-chrome colour (`<meta name="theme-color">`, app/layout.tsx).
+ *  Lives here so no .tsx carries a raw hex — design-tokens.test.ts forbids
+ *  hex literals outside this file. Darker than --brand-orange on purpose:
+ *  it tints the OS status bar, not a surface. */
+export const BRAND_THEME_COLOR = '#cc4426';
+
 export const WCAG_AA_NORMAL = 4.5;
 export const WCAG_AA_LARGE = 3.0;
 

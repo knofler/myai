@@ -13,36 +13,18 @@
 
 import { usePathname } from 'next/navigation';
 import { AppShellV2 } from '@/components/shell/app-shell-v2';
+import { Suspense } from 'react';
 import { ProductTour } from '@/components/product-tour';
+import { PerfBeacon } from '@/components/perf-beacon';
+import { NavProgress } from '@/components/nav-progress';
+import { isFullBleed } from '@/lib/nav-v2';
 
 // DASHBOARD_REDESIGN_2026-09 B6: the "Mission Control" shell is now the only
 // shell — the NEXT_PUBLIC_UI_V2 flag and the legacy chrome it gated are gone.
 
-// Routes that render WITHOUT the operator chrome (public marketing / legal /
-// trust). These leave the app shell per the redesign brief §"Information
-// architecture" — they are static, unauthenticated surfaces. Every entry is
-// also an OPERATOR_PUBLIC path in src/middleware.ts, so an anonymous visitor
-// never sees operator chrome (and its authenticated-only polling).
-const FULL_BLEED = [
-  '/welcome',
-  '/recap',
-  '/demo',
-  '/showcase',
-  '/proof',
-  '/pricing',
-  '/developers',
-  // Trust + compliance pack — procurement reads these pre-signature.
-  '/privacy',
-  '/terms',
-  '/acceptable-use',
-  '/security',
-  '/dpa',
-  '/subprocessors',
-];
-
-function isFullBleed(pathname: string): boolean {
-  return FULL_BLEED.some((p) => pathname === p || pathname.startsWith(`${p}/`));
-}
+// The FULL_BLEED list moved to lib/nav-v2.ts — it has to sit beside the nav so
+// a test can prove the two never overlap. A nav row pointing at a full-bleed
+// route is a one-way door: no rail, no bottom bar, no way back.
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -58,6 +40,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <>
       <AppShellV2>{children}</AppShellV2>
       <ProductTour />
+      {/* useSearchParams needs a Suspense boundary under the app router. */}
+      <Suspense fallback={null}>
+        <PerfBeacon />
+        <NavProgress />
+      </Suspense>
     </>
   );
 }

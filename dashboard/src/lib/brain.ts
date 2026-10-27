@@ -3,7 +3,7 @@
 // gateway resolves the tenant from the local bridge token and serves that
 // tenant's brain store only (ADR-010 directory isolation).
 
-import { callGateway } from './gateway';
+import { cachedGatewayRead } from './server-cache';
 import { fetchBrainExploreFromRemote } from './brain-git-remote';
 
 export interface BrainAtomMeta {
@@ -82,7 +82,7 @@ export type BrainSection = 'atoms' | 'stashes' | 'provenance';
  * from its own git remote (brain-git-remote.ts) — no gateway required.
  */
 export async function fetchBrainExplore(sections?: BrainSection[]): Promise<BrainExplore | null> {
-  const viaGateway = await callGateway<BrainExplore>('brain_explore', sections ? { sections } : {});
+  const viaGateway = await cachedGatewayRead<BrainExplore>('brain_explore', sections ? { sections } : {});
   if (viaGateway) return viaGateway;
   return fetchBrainExploreFromRemote(sections);
 }
@@ -103,6 +103,13 @@ export interface BrainHealthSignals {
   contradictionCount: number;
   contradictionWindowDays: number;
   recallHitRate: number | null;
+  /** W5.3 fraction (0-1) of observed sessions that produced a captured atom; null/undefined when
+   *  no sessions were observed in the window (fresh brain, hooks never fired, gateway down). */
+  captureCoverage?: number | null;
+  /** Observed sessions captureCoverage was computed over; 0 when captureCoverage is null. */
+  captureCoverageSampleSize?: number;
+  /** Size (days) of the trailing window session-observation was considered over. */
+  captureCoverageWindowDays?: number;
 }
 
 export interface BrainHealthSubscores {
@@ -110,6 +117,8 @@ export interface BrainHealthSubscores {
   coverage: number;
   contradictions: number;
   recall: number | null;
+  /** null when captureCoverage is unavailable — excluded from the weighted composite, not assumed. */
+  captureCoverage?: number | null;
 }
 
 export interface BrainHealthSnapshot {
@@ -130,7 +139,7 @@ export interface BrainHealth {
 /** `record: false` so a dashboard page load never counts as a trend snapshot —
  *  only `myai brain status` / a deliberate MCP call records one. */
 export function fetchBrainHealth(): Promise<BrainHealth | null> {
-  return callGateway<BrainHealth>('brain_health', { record: false });
+  return cachedGatewayRead<BrainHealth>('brain_health', { record: false });
 }
 
 // ── Retrieval bandit stats (BRAIN B-7 follow-up, task-49fda69b) ─────────────
@@ -168,7 +177,7 @@ export interface BanditStats {
 }
 
 export function fetchBanditStats(): Promise<BanditStats | null> {
-  return callGateway<BanditStats>('brain_bandit_stats', {});
+  return cachedGatewayRead<BanditStats>('brain_bandit_stats', {});
 }
 
 // ── Router-training readiness (BRAIN B-7.1, task-7fdc970b) ──────────────────
@@ -204,17 +213,25 @@ export interface RouterTrainReadiness {
 }
 
 export function fetchRouterTrainReadiness(): Promise<RouterTrainReadiness | null> {
-  return callGateway<RouterTrainReadiness>('brain_router_train_readiness', {});
+  return cachedGatewayRead<RouterTrainReadiness>('brain_router_train_readiness', {});
 }
 
 /** Render a brain UTC stamp (`YYYYMMDDTHHMMSSZ`) as a locale date-time; falls
  *  back to the raw value when it isn't the expected shape. */
 export function formatBrainStamp(stamp?: string): string {
   if (!stamp) return '—';
+  const dt = parseBrainStamp(stamp);
+  return dt ? dt.toLocaleString() : stamp;
+}
+
+/** Parse a brain UTC stamp (`YYYYMMDDTHHMMSSZ`) into a Date, or null when the
+ *  string isn't in that shape — lets callers feed `written` into relative-time
+ *  helpers (e.g. `timeAgo`) instead of just the locale string above. */
+export function parseBrainStamp(stamp?: string): Date | null {
+  if (!stamp) return null;
   const m = stamp.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
-  if (!m) return stamp;
+  if (!m) return null;
   const [, y, mo, d, h, mi, s] = m;
-  const iso = `${y}-${mo}-${d}T${h}:${mi}:${s}Z`;
-  const dt = new Date(iso);
-  return Number.isNaN(dt.getTime()) ? stamp : dt.toLocaleString();
+  const dt = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}Z`);
+  return Number.isNaN(dt.getTime()) ? null : dt;
 }

@@ -10,8 +10,16 @@
 # work, compare "now" against that repo's last runner-log timestamp
 # (~/.ai-cli-runner/logs/*-<repo>-task-*.log[.gz] — same glob convention as
 # `agent mode -resume`). >STALE_HOURS since that repo's last log while it has
-# pending work → alert (state/runner-repo-staleness.json + optional Telegram
-# with --notify).
+# pending work → alert (state/runner-repo-staleness.<host>.json + optional
+# Telegram with --notify).
+#
+# PER-HOST BY NAME (task-1eba9e51, operator directive 2026-09-28): this file
+# used to be state/runner-repo-staleness.json AND git-tracked — rewritten per
+# machine on every runner fire, it kept the tree permanently dirty and blocked
+# resync fast-forwards on every Mac (the resync.sh REGENERABLE special case
+# existed solely to paper over it). Now: per-host filename, untracked,
+# gitignored. Each Mac's runner reports on ITS OWN log dir anyway — the
+# artifact was always machine-local by content.
 #
 # Usage:
 #   ./scripts/runner_repo_staleness.sh                 # check + write artifact
@@ -31,8 +39,29 @@ RUNNER_LOGS="${RUNNER_LOGS:-$HOME/.ai-cli-runner/logs}"
 STALE_HOURS="${STALE_HOURS:-48}"
 MCP_PORT="${MCP_PORT:-3100}"
 MCP_URL="${MCP_URL:-http://localhost:${MCP_PORT}/mcp}"
-OUT="${RUNNER_STALENESS_OUT:-$REPO_ROOT/state/runner-repo-staleness.json}"
 IGNORE_FILE="${SCHEDULE_IGNORE_FILE:-$REPO_ROOT/config/schedule_ignore.txt}"
+
+# Per-host artifact name (see header). Same lib + fallback as runner_health.sh.
+for _lslib in "$REPO_ROOT/scripts/lib/local_state.sh" "$REPO_ROOT/AI/scripts/lib/local_state.sh"; do
+  [ -f "$_lslib" ] && . "$_lslib" && break
+done
+if ! command -v local_state_suffix >/dev/null 2>&1; then
+  local_state_suffix() {
+    h="$(hostname -s 2>/dev/null)"; [ -n "$h" ] || h="$(hostname 2>/dev/null)"
+    [ -n "$h" ] || h="unknown-host"
+    printf '%s' "$h" | tr -c 'A-Za-z0-9_.-' '_'
+  }
+fi
+OUT="${RUNNER_STALENESS_OUT:-}"
+if [ -z "$OUT" ]; then
+  OUT="$REPO_ROOT/state/runner-repo-staleness.$(local_state_suffix).json"
+  # Default path only (never on an env override — tests point OUT elsewhere):
+  # retire the pre-per-host shared-name file. It is untracked as of this task,
+  # so on a converged checkout this is just a leftover working-tree file.
+  [ -f "$REPO_ROOT/state/runner-repo-staleness.json" ] \
+    && ! git -C "$REPO_ROOT" ls-files --error-unmatch state/runner-repo-staleness.json >/dev/null 2>&1 \
+    && rm -f -- "$REPO_ROOT/state/runner-repo-staleness.json" 2>/dev/null
+fi
 
 NOTIFY=0
 for a in "$@"; do [ "$a" = "--notify" ] && NOTIFY=1; done
@@ -127,7 +156,10 @@ def last_log_ts(repo):
             if not m:
                 continue
             try:
-                ts = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
+                # The runner stamps log names in UTC; a naive parse reads them as
+                # local time and skews every age by the host's UTC offset.
+                ts = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S") \
+                    .replace(tzinfo=timezone.utc).timestamp()
             except ValueError:
                 continue
             if best is None or ts > best:

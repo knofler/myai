@@ -275,7 +275,7 @@ export default function TotpManager() {
             </button>
           )}
         </div>
-        {error && <p className="mt-2 text-xs text-rose-400">{error}</p>}
+        {error && <p role="alert" className="mt-2 text-xs text-rose-400">{error}</p>}
 
         {status?.enabled && (
           <div className="mt-4 pt-4 border-t border-[rgb(var(--border-subtle))]/70 space-y-3">
@@ -284,7 +284,7 @@ export default function TotpManager() {
                 <p className="text-xs text-[rgb(var(--text-muted))]">
                   Enter a current authenticator code to {manageOpen === 'disable' ? 'disable 2FA' : 'regenerate your recovery codes'}.
                 </p>
-                {manageError && <p className="text-xs text-rose-400">{manageError}</p>}
+                {manageError && <p role="alert" className="text-xs text-rose-400">{manageError}</p>}
                 <input
                   type="text"
                   inputMode="numeric"
@@ -353,7 +353,7 @@ export default function TotpManager() {
               {policy ? 'Required' : 'Not required'}
             </button>
           </div>
-          {policyError && <p className="mt-2 text-xs text-rose-400">{policyError}</p>}
+          {policyError && <p role="alert" className="mt-2 text-xs text-rose-400">{policyError}</p>}
         </div>
       )}
     </div>

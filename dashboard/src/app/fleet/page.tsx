@@ -5,6 +5,14 @@
 // type:'morning-resume-all' runs — /api/projects also writes type:'task-fanout'
 // runs to the same collection (ADR-015 §3), explicitly excluded below so a
 // batch dispatch never hijacks this console's "latest run".
+//
+// D5 / DESIGN_LANGUAGE §5 (plan day 6, 2026-09-18): this page now follows the
+// homepage contract instead of the console it was — a one-line ANSWER in the
+// header ("Swept 20 repos on office-mac 51d ago. 6 need your decision and 1
+// shipped."), state tiles with tinted glyphs before any detail, sentence-case
+// facts ("13 ahead · 8 uncommitted · 3 blocked") in place of UPPERCASE MONO
+// key/value strips, and design tokens in place of hard-coded zinc greys. Same
+// queries, same data, same 4-second live refresh.
 
 import { connectDB, FleetRun, Tenant } from '@/lib/db';
 import { getActiveTenant, tenantFilter, DEFAULT_TENANT_ID } from '@/lib/tenant';
@@ -12,7 +20,9 @@ import { hasTeamFleetConsole, type TenantPlan } from '@/lib/billing';
 import { planLabel } from '@/lib/hosted-brain';
 import { latestRunPerMachine, type FleetRunSummary } from '@/lib/team-fleet';
 import { timeAgo, fmtSydney } from '@/lib/format';
+import { plural, verb, joinClauses, cap } from '@/lib/summary';
 import { StatCard, EmptyState, Card } from '@/components/ui/card';
+import { SectionHead } from '@/components/ui/section-head';
 import { PageHeader } from '@/components/page-header';
 import AutoRefresh from '@/components/auto-refresh';
 import { RecommendationChip, ActionStatus } from '@/components/fleet-status-chips';
@@ -65,41 +75,108 @@ function RunStatusPill({ status }: { status?: string }) {
   const s = (status ?? 'running').toLowerCase();
   if (s === 'completed') {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-xs font-medium text-emerald-300">
-        <span className="w-2 h-2 rounded-full bg-emerald-400" />
-        completed
+      <span className="inline-flex min-h-tap items-center gap-1.5 rounded-full bg-[rgb(var(--ok))]/15 px-3 text-label font-medium text-[rgb(var(--ok))]">
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[rgb(var(--ok))]" />
+        Completed
       </span>
     );
   }
   if (s === 'aborted') {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-500/15 border border-red-500/40 text-xs font-medium text-red-300">
-        <span className="w-2 h-2 rounded-full bg-red-400" />
-        aborted
+      <span className="inline-flex min-h-tap items-center gap-1.5 rounded-full bg-[rgb(var(--err))]/15 px-3 text-label font-medium text-[rgb(var(--err))]">
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[rgb(var(--err))]" />
+        Aborted
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/15 border border-amber-500/40 text-xs font-medium text-amber-300">
-      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-      running
+    <span className="inline-flex min-h-tap items-center gap-1.5 rounded-full bg-[rgb(var(--accent))]/15 px-3 text-label font-medium text-[rgb(var(--accent))]">
+      <span aria-hidden="true" className="h-1.5 w-1.5 animate-pulse rounded-full bg-[rgb(var(--accent))]" />
+      Running
     </span>
   );
 }
 
-/* ── Small metadata badge ──────────────────────────────────── */
+/* ── The one-line answer (§5.1) ────────────────────────────── */
 
-function MetaBadge({ label, value, accent }: { label: string; value?: number; accent?: 'red' | 'amber' }) {
-  if (value === undefined || value === null) return null;
-  const tone =
-    value > 0 && accent === 'red' ? 'text-red-400' :
-    value > 0 && accent === 'amber' ? 'text-amber-400' :
-    value > 0 ? 'text-[rgb(var(--text-primary))]' : 'text-zinc-600';
+function fleetSummary(
+  run: FleetRunDoc | null,
+  counts: { total: number; needsAction: number; shipped: number; failed: number },
+  dbError: boolean,
+): string {
+  if (dbError) return 'The fleet console cannot reach the database right now.';
+  if (!run) return 'No morning sweep has run yet.';
+  const machine = run.machine || 'an unknown machine';
+  const status = (run.status ?? 'running').toLowerCase();
+  // `timeAgo` yields '—' for a missing/invalid date, which would read
+  // "started —." — so the clause is dropped entirely when there is no date.
+  const when = run.startedAt ? timeAgo(run.startedAt) : '';
+  const head =
+    status === 'running'
+      ? `Sweeping ${plural(counts.total, 'repo')} on ${machine}${when ? `, started ${when}` : ''}.`
+      : `Swept ${plural(counts.total, 'repo')} on ${machine}${when ? ` ${when}` : ''}.`;
+  // "Nothing needs your decision" is only true when nothing FAILED either:
+  // needsAction comes from `recommendation`, failed from `actionStatus` — two
+  // independent fields, so a run can have 0 of the first and 3 of the second.
+  // Saying "nothing needs your decision" above a red "Failed 3" tile is a lie.
+  const quiet = counts.needsAction === 0 && counts.failed === 0;
+  const tail = joinClauses([
+    counts.needsAction > 0
+      ? `${plural(counts.needsAction, 'repo')} ${verb(counts.needsAction, 'needs', 'need')} your decision`
+      : quiet ? 'nothing needs your decision' : '',
+    counts.shipped > 0 && `${counts.shipped} shipped`,
+    counts.failed > 0 && `${plural(counts.failed, 'repo')} failed and ${verb(counts.failed, 'needs', 'need')} you`,
+  ]);
+  const aborted = status === 'aborted' ? ' The run was aborted before it finished.' : '';
+  return `${head} ${cap(tail)}.${aborted}`;
+}
+
+/** The qualifier under the answer — run identity and timing, dim and small. */
+function fleetQualifier(run: FleetRunDoc): string {
+  return [
+    run.type ?? 'morning sweep',
+    run.runId,
+    run.agent,
+    run.startedAt && `started ${fmtSydney(run.startedAt, 'full')}`,
+    run.finishedAt && `finished ${fmtSydney(run.finishedAt, 'full')}`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/* ── Sentence-case facts ("13 ahead · 8 uncommitted · 3 blocked") ── */
+
+function Fact({ children, tone }: { children: React.ReactNode; tone?: 'warn' | 'err' }) {
+  const color =
+    tone === 'err' ? 'text-[rgb(var(--err))]' : tone === 'warn' ? 'text-[rgb(var(--warn))]' : 'text-[rgb(var(--text-secondary))]';
+  return <span className={`${color} whitespace-nowrap`}>{children}</span>;
+}
+
+function FactList({ children }: { children: React.ReactNode[] }) {
+  const items = children.filter(Boolean);
+  if (items.length === 0) return null;
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-mono">
-      <span className="text-zinc-600 uppercase tracking-wider">{label}</span>
-      <span className={tone}>{value}</span>
-    </span>
+    <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-meta">
+      {items.map((item, i) => (
+        <span key={i} className="inline-flex items-center gap-1.5">
+          {i > 0 && <span aria-hidden="true" className="text-[rgb(var(--text-muted))]">·</span>}
+          {item}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+function RepoFacts({ r }: { r: FleetRepo }) {
+  return (
+    <FactList>
+      {r.branch ? <Fact>on <span className="font-mono">{r.branch}</span></Fact> : null}
+      {(r.ahead ?? 0) > 0 ? <Fact tone="warn">{r.ahead} ahead</Fact> : null}
+      {(r.uncommitted ?? 0) > 0 ? <Fact tone="warn">{r.uncommitted} uncommitted</Fact> : null}
+      {(r.openPrs ?? 0) > 0 ? <Fact>{plural(r.openPrs ?? 0, 'open PR')}</Fact> : null}
+      {(r.reviewTasks ?? 0) > 0 ? <Fact tone="warn">{r.reviewTasks} to review</Fact> : null}
+      {(r.blockedTasks ?? 0) > 0 ? <Fact tone="err">{r.blockedTasks} blocked</Fact> : null}
+    </FactList>
   );
 }
 
@@ -113,20 +190,23 @@ function MetaBadge({ label, value, accent }: { label: string; value?: number; ac
 // billed so they always see it (ADR-010 — never paywall the local operator).
 
 function TeamActivityRow({ run }: { run: FleetRunSummary }) {
+  const s = run.summary ?? {};
   return (
-    <div className="flex items-center justify-between gap-3 py-2 px-3 border-b border-[rgb(var(--border-subtle))]/60 last:border-b-0">
-      <div className="min-w-0 flex items-center gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[rgb(var(--border-subtle))]/60 px-4 py-3 last:border-b-0">
+      <div className="flex min-w-0 items-center gap-3">
         <RunStatusPill status={run.status} />
         <div className="min-w-0">
-          <p className="text-sm font-mono text-[rgb(var(--text-primary))] truncate">{run.machine || 'unknown machine'}</p>
-          <p className="text-[10px] text-zinc-600">{run.agent || 'agent unknown'} · {timeAgo(run.startedAt)}</p>
+          <p className="truncate text-body font-medium text-[rgb(var(--text-primary))]">{run.machine || 'Unknown machine'}</p>
+          <p className="text-meta text-[rgb(var(--text-secondary))]">
+            {run.agent || 'agent unknown'} · {timeAgo(run.startedAt)}
+          </p>
         </div>
       </div>
-      <div className="flex items-center gap-3 shrink-0">
-        <MetaBadge label="repos" value={run.summary?.total} />
-        <MetaBadge label="needs" value={run.summary?.needsAction} accent="amber" />
-        <MetaBadge label="failed" value={run.summary?.failed} accent="red" />
-      </div>
+      <FactList>
+        {s.total != null ? <Fact>{plural(s.total, 'repo')}</Fact> : null}
+        {(s.needsAction ?? 0) > 0 ? <Fact tone="warn">{s.needsAction} need you</Fact> : null}
+        {(s.failed ?? 0) > 0 ? <Fact tone="err">{s.failed} failed</Fact> : null}
+      </FactList>
     </div>
   );
 }
@@ -134,16 +214,16 @@ function TeamActivityRow({ run }: { run: FleetRunSummary }) {
 function TeamActivityUpsell({ plan }: { plan: TenantPlan }) {
   return (
     <Card>
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex flex-col justify-between gap-3 p-4 sm:flex-row sm:items-center">
         <div>
-          <p className="text-sm text-[rgb(var(--text-primary))]">See every teammate&apos;s sweep, on every machine, live.</p>
-          <p className="text-xs text-[rgb(var(--text-muted))] mt-1">
+          <p className="text-body text-[rgb(var(--text-primary))]">See every teammate&apos;s sweep, on every machine, live.</p>
+          <p className="mt-1 text-meta text-[rgb(var(--text-secondary))]">
             Team Activity is a {planLabel('team')} feature — you&apos;re currently on {planLabel(plan)}.
           </p>
         </div>
         <a
           href="/pricing"
-          className="shrink-0 gel-brand px-3 py-2 rounded-lg text-sm font-medium text-teal-100 hover:brightness-110 transition whitespace-nowrap text-center"
+          className="gel-brand shrink-0 whitespace-nowrap rounded-xl px-3 py-2 text-center text-meta font-medium text-teal-100 transition hover:brightness-110"
         >
           Upgrade to Team
         </a>
@@ -190,15 +270,69 @@ async function TeamActivity({ tenantId }: { tenantId: string }) {
   const byMachine = latestRunPerMachine(runs);
 
   return (
-    <Card>
-      {byMachine.length === 0 ? (
-        <EmptyState>No fleet runs yet across your team&apos;s machines.</EmptyState>
-      ) : (
-        <div>
-          {byMachine.map((r) => <TeamActivityRow key={r.runId} run={r} />)}
+    <section className="space-y-3">
+      <SectionHead title="Team activity" count={byMachine.length} />
+      <Card>
+        {byMachine.length === 0 ? (
+          <EmptyState>No fleet runs yet across your team&apos;s machines.</EmptyState>
+        ) : (
+          <div>
+            {byMachine.map((r) => <TeamActivityRow key={r.runId} run={r} />)}
+          </div>
+        )}
+      </Card>
+    </section>
+  );
+}
+
+/* ── Repo card ─────────────────────────────────────────────── */
+
+function RepoCard({ r }: { r: FleetRepo }) {
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))] p-4 transition-colors hover:border-[rgb(var(--border-strong))]">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-body font-medium text-[rgb(var(--text-primary))]">{r.repo}</p>
+          {r.group && <p className="mt-0.5 text-label text-[rgb(var(--text-muted))]">{r.group}</p>}
+        </div>
+        <RecommendationChip value={r.recommendation} />
+      </div>
+
+      <p className="min-h-[1rem] text-meta text-[rgb(var(--text-secondary))] line-clamp-3">{r.overnight || 'No overnight summary.'}</p>
+
+      <div className="border-t border-[rgb(var(--border-subtle))]/70 pt-2">
+        <RepoFacts r={r} />
+      </div>
+
+      <div className="flex items-center justify-between border-t border-[rgb(var(--border-subtle))]/70 pt-2">
+        <ActionStatus status={r.actionStatus} />
+        <div className="flex items-center gap-2">
+          {r.action && <span className="text-label text-[rgb(var(--text-muted))]">{r.action}</span>}
+          {r.prUrl && (
+            <a
+              href={r.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-label font-medium text-[rgb(var(--ok))] underline decoration-[rgb(var(--border-strong))] hover:brightness-110"
+            >
+              PR
+            </a>
+          )}
+        </div>
+      </div>
+
+      {(r.detail || r.decision) && (
+        <div className="space-y-1 border-t border-[rgb(var(--border-subtle))]/70 pt-2">
+          {r.decision && (
+            <p className="text-meta text-[rgb(var(--text-primary))]">
+              <span className="text-[rgb(var(--text-muted))]">Decision </span>
+              {r.decision}
+            </p>
+          )}
+          {r.detail && <p className="text-meta text-[rgb(var(--text-secondary))] line-clamp-3">{r.detail}</p>}
         </div>
       )}
-    </Card>
+    </div>
   );
 }
 
@@ -231,19 +365,22 @@ export default async function FleetPage() {
     repos.filter((r) => (r.actionStatus ?? '').toLowerCase() === 'done').length;
   const failed = run?.summary?.failed ??
     repos.filter((r) => (r.actionStatus ?? '').toLowerCase() === 'failed').length;
+  const counts = { total, needsAction, shipped, failed };
 
   return (
     <div className="max-w-7xl mx-auto">
       <AutoRefresh seconds={4} />
       <PageHeader
-        title="Fleet Morning Console"
-        subtitle="The morning sweep across every repo — overnight state, the recommended move, and live progress as you action each one."
+        icon="fleet"
+        title="Fleet"
+        summary={fleetSummary(run, counts, dbError)}
+        subtitle={run ? fleetQualifier(run) : 'The morning sweep across every repo — overnight state, the recommended move, and live progress.'}
       >
         {run && <RunStatusPill status={run.status} />}
       </PageHeader>
 
       {dbError && (
-        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400 mb-6">
+        <div className="mb-6 rounded-2xl bg-[rgb(var(--err))]/10 p-4 text-meta text-[rgb(var(--err))]">
           {dbUnreachableHint('the fleet console')}
         </div>
       )}
@@ -251,7 +388,7 @@ export default async function FleetPage() {
       {!run && !dbError && (
         <Card>
           <EmptyState>
-            No fleet run yet — kick one off with <code className="text-emerald-400">agent mode -resume all</code>.
+            No fleet run yet — kick one off with <code className="text-[rgb(var(--ok))]">agent mode -resume all</code>.
             The morning sweep populates this console live as it walks each repo.
           </EmptyState>
         </Card>
@@ -259,118 +396,30 @@ export default async function FleetPage() {
 
       {run && (
         <div className="space-y-6">
-          {/* Run header */}
-          <div className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl p-4 flex flex-wrap items-center gap-x-6 gap-y-2">
-            <div>
-              <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Run</p>
-              <p className="text-sm font-mono text-[rgb(var(--text-primary))]">{run.runId}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Started</p>
-              <p className="text-sm text-[rgb(var(--text-primary))]">
-                {timeAgo(run.startedAt)}
-                <span className="text-zinc-600 ml-2 text-xs">{fmtSydney(run.startedAt, 'full')}</span>
-              </p>
-            </div>
-            {run.finishedAt && (
-              <div>
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Finished</p>
-                <p className="text-sm text-[rgb(var(--text-primary))]">
-                  {timeAgo(run.finishedAt)}
-                  <span className="text-zinc-600 ml-2 text-xs">{fmtSydney(run.finishedAt, 'full')}</span>
-                </p>
-              </div>
-            )}
-            <div>
-              <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Machine</p>
-              <p className="text-sm font-mono text-[rgb(var(--text-primary))]">{run.machine || '—'}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Agent</p>
-              <p className="text-sm text-[rgb(var(--text-primary))]">{run.agent || '—'}</p>
-            </div>
-            {run.type && (
-              <div>
-                <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Type</p>
-                <p className="text-sm font-mono text-[rgb(var(--text-secondary))]">{run.type}</p>
-              </div>
-            )}
-          </div>
-
-          {/* Summary strip */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard label="Repos" value={total} />
-            <StatCard label="Needs action" value={needsAction} accent={needsAction > 0 ? 'yellow' : 'gray'} />
-            <StatCard label="Shipped" value={shipped} accent={shipped > 0 ? 'green' : 'gray'} />
-            <StatCard label="Failed" value={failed} accent={failed > 0 ? 'red' : 'gray'} />
+          {/* State before detail (§5.2) */}
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <StatCard label="Repos swept" value={total} icon="fleet" tone="muted" />
+            <StatCard label="Need your decision" value={needsAction} icon="alert" tone={needsAction > 0 ? 'warn' : 'muted'} />
+            <StatCard label="Shipped" value={shipped} icon="check" tone={shipped > 0 ? 'ok' : 'muted'} />
+            <StatCard label="Failed" value={failed} icon="cross" tone={failed > 0 ? 'err' : 'muted'} />
           </div>
 
           {/* Team Activity */}
-          <div>
-            <h2 className="text-xs font-semibold text-[rgb(var(--text-muted))] mb-3 uppercase tracking-wider">Team Activity</h2>
-            <TeamActivity tenantId={tenantId} />
-          </div>
+          <TeamActivity tenantId={tenantId} />
 
           {/* Repo grid */}
-          {repos.length === 0 ? (
-            <Card>
-              <EmptyState>This run has no repos yet — the sweep is still gathering state.</EmptyState>
-            </Card>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {repos.map((r) => (
-                <div key={r.repo} className="gel-surface bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-xl p-4 flex flex-col gap-3 hover:border-zinc-700 transition-colors">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="font-semibold text-sm text-[rgb(var(--text-primary))] font-mono truncate">{r.repo}</p>
-                      {r.group && <p className="text-[10px] text-zinc-600 uppercase tracking-wider mt-0.5">{r.group}</p>}
-                    </div>
-                    <RecommendationChip value={r.recommendation} />
-                  </div>
-
-                  <p className="text-xs text-[rgb(var(--text-secondary))] line-clamp-3 min-h-[1rem]">{r.overnight || 'No overnight summary.'}</p>
-
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[rgb(var(--border-subtle))]/70 pt-2">
-                    {r.branch && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-mono">
-                        <span className="text-zinc-600 uppercase tracking-wider">branch</span>
-                        <span className="text-[rgb(var(--text-primary))]">{r.branch}</span>
-                      </span>
-                    )}
-                    <MetaBadge label="ahead" value={r.ahead} accent="amber" />
-                    <MetaBadge label="uncommit" value={r.uncommitted} accent="amber" />
-                    <MetaBadge label="prs" value={r.openPrs} />
-                    <MetaBadge label="review" value={r.reviewTasks} accent="amber" />
-                    <MetaBadge label="blocked" value={r.blockedTasks} accent="red" />
-                  </div>
-
-                  <div className="flex items-center justify-between border-t border-[rgb(var(--border-subtle))]/70 pt-2">
-                    <ActionStatus status={r.actionStatus} />
-                    <div className="flex items-center gap-2">
-                      {r.action && <span className="text-[10px] font-mono text-[rgb(var(--text-muted))] uppercase tracking-wider">{r.action}</span>}
-                      {r.prUrl && (
-                        <a href={r.prUrl} target="_blank" rel="noreferrer" className="text-[11px] text-emerald-400/90 hover:text-emerald-300 underline decoration-zinc-700">
-                          PR
-                        </a>
-                      )}
-                    </div>
-                  </div>
-
-                  {(r.detail || r.decision) && (
-                    <div className="border-t border-[rgb(var(--border-subtle))]/70 pt-2 space-y-1">
-                      {r.decision && (
-                        <p className="text-[10px] text-[rgb(var(--text-muted))]">
-                          <span className="text-zinc-600 uppercase tracking-wider">decision</span>{' '}
-                          <span className="text-[rgb(var(--text-primary))]">{r.decision}</span>
-                        </p>
-                      )}
-                      {r.detail && <p className="text-xs text-[rgb(var(--text-secondary))] line-clamp-3">{r.detail}</p>}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+          <section className="space-y-3">
+            <SectionHead title="Every repo" count={repos.length} />
+            {repos.length === 0 ? (
+              <Card>
+                <EmptyState>This run has no repos yet — the sweep is still gathering state.</EmptyState>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {repos.map((r) => <RepoCard key={r.repo} r={r} />)}
+              </div>
+            )}
+          </section>
         </div>
       )}
     </div>

@@ -153,7 +153,7 @@ disk headroom, the failure is no longer disk-driven — stop and escalate
 **Symptom:** code merged into `runtime/` (or `dashboard/`) isn't reflected in
 the running gateway's behavior — new MCP tools 404, a bugfix doesn't take,
 `/health/deep` reports an old build. Recorded repeatedly across July sessions
-(work-desktop→MBP machine switches, post-merge sessions that forgot the rebuild
+(office→home machine switches, post-merge sessions that forgot the rebuild
 step) — "stale gateway image" is one of the most frequently recurring notes
 in the session archive.
 
@@ -375,7 +375,7 @@ free-tier minutes are exhausted for the billing period (recurring — see
 
 ```bash
 gh run list --branch test --limit 5                          # look for "startup_failure" or nothing for the latest SHA
-gh api repos/knofler/ai_management/actions/permissions        # confirm Actions is enabled (billing block ≠ disabled, just can't run)
+gh api repos/<owner>/<repo>/actions/permissions        # confirm Actions is enabled (billing block ≠ disabled, just can't run)
 ./scripts/local-ci.sh --dry-run                                # run the real local gates, post NOTHING — see what would pass/fail/skip
 ```
 
@@ -413,7 +413,7 @@ and wait rather than forcing further.
 
 ```bash
 gh pr view <PR#> --json state,mergedAt,mergeCommit           # state: MERGED
-gh api repos/knofler/ai_management/commits/main/status | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["state"])'
+gh api repos/<owner>/<repo>/commits/main/status | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["state"])'
 ```
 
 ### Rollback
@@ -431,6 +431,32 @@ Once GitHub Actions billing/outage is resolved, stop using the local-ci
 fallback for new PRs and let Actions run required checks normally again —
 this path is a stopgap, not a standing replacement.
 
+### Same root cause: Docs Site (github-pages) workflow — moved to self-hosted (2026-09-15)
+
+The billing block also killed the `Docs Site` workflow (`.github/workflows/
+docs.yml`, push-to-main): five consecutive merges (#440/#443/#444/#453/#454)
+got a red X from a job that died in 4-6s before its first step. Two knock-on
+effects made this worse than cosmetic: (1) each failed run still registered a
+**github-pages deployment** against the merge sha ~1s after merge — a decoy
+that `scripts/verify_deployment.sh` matched instead of the real Vercel
+Production deploy landing ~74s later (helper fix tracked separately as
+task-e0af7e38); (2) a permanently-red check on main trains sessions and
+operators to skim past red, which is how a genuine failure gets waved through.
+
+**Decision taken: option (a) — keep the docs site, move the job to
+`runs-on: [self-hosted, myai-local]`** (the same pattern as merge-gate /
+script-unit-tests / fleet-smoke / dependency-scan / dashboard-typecheck).
+The site is still wanted: the README badge and docs section link to
+<https://<owner>.github.io/<repo>/>, and Vercel serves the dashboard,
+not these docs. Retiring it (option b) was rejected for that reason;
+`continue-on-error` was never an option — it hides the signal. The runner
+image bakes Node 22, which is all `scripts/build_docs.mjs` needs (zero
+dependencies, no npm install), so `setup-node` was dropped. The check is not
+required on any branch and fires only on push-to-main, so a runner outage
+delays a docs deploy but never blocks a merge (no new mode-9 exposure).
+Revert path once hosted billing is fixed: restore `runs-on: ubuntu-latest`
+and re-add `actions/setup-node` (noted in the workflow header).
+
 ---
 
 ## 6. Pool-capacity ledger drift → `pool_capacity_drift_check.sh` alert
@@ -439,7 +465,7 @@ this path is a stopgap, not a standing replacement.
 warning` or `Pool-capacity drift: CRITICAL`. The capability×cost×
 availability router (task-21dc2746) and the API-credit reserve
 (task-874364a3) both make routing/throttling decisions off
-`state/pool-capacity.json`'s claude-tech `dailySpentTokens`/
+`state/pool-capacity.json`'s claude-<runner-profile> `dailySpentTokens`/
 `weeklySpentTokens`, which come from an **incremental** ledger
 (`scripts/lib/session_tokens.py` snapshot/delta, plain integer files at
 `~/.ai-cli-runner/pacing/tok-<day|week>`, incremented on every runner fire).
@@ -456,7 +482,7 @@ signal that the incremental ledger may have silently drifted from reality
 ```bash
 cat state/pool-capacity-drift-status.json | python3 -m json.tool          # the exact artifact the alerter read
 tail -20 ~/.ai-cli-runner/pool-capacity-drift.log                          # durable history of every run (OK and DRIFT)
-python3 scripts/lib/pool_capacity_drift.py state/pool-capacity.json "${CLAUDE_CONFIG_DIR:-$HOME/.claude-tech}" 10 5000   # re-run the check live, right now
+python3 scripts/lib/pool_capacity_drift.py state/pool-capacity.json "${CLAUDE_CONFIG_DIR:-$HOME/.claude-<runner-profile>}" 10 5000   # re-run the check live, right now
 ```
 
 Four things to check before treating a delivered alert as actionable —
@@ -469,7 +495,7 @@ directly against the artifact rather than trusting the alert text alone:
    fresh when it fired, but re-running live (above) confirms it's still
    true right now.
 2. **`skipped` must be `null`** — a non-null `skipped` (`no-snapshot`,
-   `claude-tech-pool-missing`, `bad-generatedAt`) means the check couldn't
+   `<pool>-pool-missing`, `bad-generatedAt`) means the check couldn't
    even run and never alerts; a delivered alert always has `skipped: null`.
 3. **Double-gated tolerance** — a window only shows `DRIFT` when **both**
    the absolute diff clears `tolFloor` (default 5000 tokens) **and** the
@@ -507,9 +533,9 @@ cat ~/.ai-cli-runner/pacing/tok-$(TZ=Australia/Sydney date +%G-W%V)     # this w
 # 2. a runner restart mid-session can lose a snapshot marker — check for one around the drift window
 ls -lt ~/.ai-cli-runner/logs/ | head -10
 
-# 3. confirm the config dir the check used matches what the runner actually uses (default ~/.claude-tech)
-echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude-tech}"
-ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude-tech}"/projects/**/*.jsonl 2>/dev/null | wc -l   # transcripts present/readable at all?
+# 3. confirm the config dir the check used matches what the runner actually uses (default ~/.claude-<runner-profile>)
+echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude-<runner-profile>}"
+ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude-<runner-profile>}"/projects/**/*.jsonl 2>/dev/null | wc -l   # transcripts present/readable at all?
 ```
 
 If a persistent, confirmed root cause turns up (missed transcript, wrong
@@ -531,7 +557,7 @@ ONLY** to apply (DEPLOY GUARD).
 ### Confirm
 
 ```bash
-python3 scripts/lib/pool_capacity_drift.py state/pool-capacity.json "${CLAUDE_CONFIG_DIR:-$HOME/.claude-tech}" 10 5000
+python3 scripts/lib/pool_capacity_drift.py state/pool-capacity.json "${CLAUDE_CONFIG_DIR:-$HOME/.claude-<runner-profile>}" 10 5000
 # both "day" and "week" print OK, or a window that's still DRIFT is the known transient from Verify step 4
 ```
 
@@ -553,7 +579,7 @@ The first CRITICAL alert (28% day / 45% week, 2026-09-08T08:19Z) was **not a
 bookkeeping fault**. The two numbers measured different things by design:
 `session_tokens.py delta` attributes tokens to ONE runner fire, so
 `tok-<day|week>` only ever held **runner** spend, while the drift check summed
-**every** transcript in the profile — and interactive claude-tech sessions draw
+**every** transcript in the profile — and interactive claude-<runner-profile> sessions draw
 on the same Team pool. The "drift" was the size of the blind spot the router
 and the API-credit reserve had.
 
@@ -671,3 +697,385 @@ Revert `.mcp.json` / `templates/mcp.json`'s myai entry to the old
 `"type": "http"` + header shape, and remove
 `hooks/session/24-myai-mcp-health.sh` from `.claude/settings.json`. Not
 recommended — that's the exact shape that caused this P0.
+
+---
+
+## 8. Dropbox stale tree → `pull --ff-only` blocked / files you never touched show modified
+
+**Symptom:** on session boot, one or both of:
+
+- `git pull --ff-only` **aborts** with `error: The following untracked working
+  tree files would be overwritten by merge` (and/or `Your local changes to the
+  following files would be overwritten`), listing files you never touched this
+  session, while `git status` shows the branch many commits behind.
+- `git status` shows `M`/`D` on tracked files you did not edit — sometimes
+  minutes after a clean boot (files can vanish or revert mid-session).
+
+**Mechanism (2026-09-11, atom `ed3e615a`):** both Macs' checkouts of this repo
+live in the **same Dropbox folder**. `.git` is Dropbox-ignored (AI_RULES §12)
+so history never syncs — but **working files do**. A Mac that sits N commits
+behind holds OLD file contents in its working tree, and Dropbox replays them
+over the up-to-date Mac's files as spurious modifications and untracked
+collisions. Cleaning up HERE does not fix the source: the stale Mac keeps
+re-uploading yesterday's files **until it pulls**.
+
+**Why this mode is urgent — the silent-failure trap:** the pull ABORTS. An
+agent that shrugs and moves on **boots on stale code without any further
+error** — on 2026-09-14 that would have been 30 commits behind. Never skip the
+pull; run this procedure instead. Occurrences: 2026-09-11 (×3, incl. two
+mid-session file-overwrite events and the first blocked pull), 2026-09-14 (×2,
+one blocking a 30-commit pull against 8 untracked collisions). The recipe
+below is the one that worked, unchanged, both times it blocked a pull.
+
+Substitute your branch for `test` below if you're on something else
+(`BR=test` is the common case — it's the boot/pull branch).
+
+### Verify (read-only) — prove the reset would be lossless
+
+```bash
+BR=test
+git fetch origin
+
+# 1. tracked files: an EMPTY diff means every tracked file already matches
+#    origin — the "local changes" git warns about are Dropbox echoes, not work.
+git diff --name-only "origin/$BR"
+
+# 2. untracked collisions: byte-compare each against origin's copy.
+git ls-files --others --exclude-standard | while IFS= read -r f; do
+  if git cat-file -e "origin/$BR:$f" 2>/dev/null; then
+    a=$(shasum -a 256 "$f" | cut -d' ' -f1)
+    b=$(git show "origin/$BR:$f" | shasum -a 256 | cut -d' ' -f1)
+    [ "$a" = "$b" ] && echo "IDENTICAL  $f" || echo "DIFFERS    $f"
+  else
+    echo "LOCAL-ONLY $f"    # no counterpart on origin — not a collision
+  fi
+done
+```
+
+Read the output before touching anything:
+
+- **All `IDENTICAL` + step 1 empty** → the reset in Fix is provably lossless.
+- **Any `DIFFERS`** → decide per file which side is newer (`ls -l "$f"` vs
+  `git log -1 --format=%ci "origin/$BR" -- "$f"`) **before** Fix step 1. On
+  2026-09-14 exactly one of nine differed — `state/runner-repo-staleness.json`,
+  newer locally — and it was preserved and committed (`1251c1a6`); everything
+  else was a stale echo.
+- **`LOCAL-ONLY` files** are untouched by this procedure (nothing below
+  deletes them) — leave them alone.
+- **Can't tell which side of a `DIFFERS` file is newer?** Don't guess:
+  `git stash push -u -m "dropbox stale tree $(date +%F)"` keeps everything
+  recoverable, then pull (this was the second-occurrence fix; the stash
+  `<host> stale Dropbox tree 2026-09-11` was retained for exactly this
+  reason). If other sessions may share the stash stack, capture your entry's
+  SHA immediately (`git stash list --format='%H %gs'`) and later `apply` that
+  SHA, never blind `pop`.
+
+### Fix
+
+1. **Preserve every `DIFFERS` file that is genuinely newer locally** (skip if
+   there were none):
+   ```bash
+   cp "state/some-differing-file.json" /tmp/preserve-some-differing-file.json   # per file
+   # (the 2026-09-14 example file, state/runner-repo-staleness.json, is no
+   # longer tracked — per-host by name since task-1eba9e51)
+   ```
+2. **Reset tracked files** to what origin (and, per Verify step 1, the local
+   history) already has:
+   ```bash
+   git checkout -- .
+   ```
+3. **Remove the byte-identical untracked collisions** so the merge can write
+   them — targeted, from the `IDENTICAL` list only (do NOT reach for a blanket
+   `git clean -fd`, which would also take the `LOCAL-ONLY` files):
+   ```bash
+   git ls-files --others --exclude-standard | while IFS= read -r f; do
+     git cat-file -e "origin/$BR:$f" 2>/dev/null || continue
+     [ "$(shasum -a 256 "$f" | cut -d' ' -f1)" = "$(git show "origin/$BR:$f" | shasum -a 256 | cut -d' ' -f1)" ] && rm -v "$f"
+   done
+   ```
+4. **Pull:**
+   ```bash
+   git pull --ff-only origin "$BR"
+   ```
+5. **Restore the preserved files** from step 1 and, if they belong in git,
+   commit them (2026-09-14: `chore(state): refresh runner staleness cache` →
+   `1251c1a6`).
+
+### Confirm
+
+```bash
+git status --porcelain        # empty (bar files you preserved in step 5)
+git log --oneline -1 HEAD "origin/$BR"   # same SHA — you are no longer behind
+```
+
+Then continue the boot **on the pulled code**. If containers were built from
+the pre-pull tree, remember the 2026-09-14 lesson: staleness can be PARTIAL —
+prove a rebuild by grepping bundle CONTENT for a string the new commits
+introduce, never by timestamps or "it restarted".
+
+### Rollback
+
+Every path above is recoverable: step-1 copies live in `/tmp`, the stash
+variant is explicitly recoverable by tag/SHA, and `git checkout -- .` only
+discarded contents proven byte-identical to origin in Verify. If you ran the
+stash variant and need the old tree back: `git stash apply <sha>`.
+
+### Fixing the SOURCE (or it happens again next boot)
+
+This procedure heals the victim Mac only. The stale Mac keeps re-uploading
+old files until **it** pulls — so on boot on ANY Mac: `git status` FIRST;
+`M`/`D` on files you didn't touch is Dropbox, and the fix starts at Verify
+above, never with an improvised `reset --hard`. The durable fleet fix
+(working trees out of the shared Dropbox sync path, not just `.git`) has no
+shipped mechanism yet — until then, expect a recurrence after any session
+where one Mac ends the day unpulled.
+
+---
+
+## 9. Self-hosted runner offline → required checks queue serially (one left) or block every PR (none left)
+
+**Symptom:** required checks on a PR sit `queued` for minutes, each starting
+only after the previous one finishes (on 2026-09-14 `Enforce branch policy`
+sat queued behind `Static lint`), or — worse — never start at all. Hosted
+Actions is billing-blocked (mode 5), so the self-hosted pool is the ONLY path
+to a green required check: with one runner offline the pool degrades to serial
+single-runner throughput; with ALL runners offline every PR is blocked exactly
+as the billing block did.
+
+**Pool semantics (why "one offline" is degraded, not down):** every workflow
+selects `runs-on: [self-hosted, myai-local]`. `myai-local` is the POOL label
+carried by every registered runner; the runner NAME is the machine identity
+(`myai-local` = legacy name on the first runner host, `myai-<hostname>` elsewhere — see
+`scripts/runner_selfhosted.sh` header). Jobs land on whichever labelled runner
+is free, so losing one machine halves throughput but changes nothing else.
+Corollary from the 2026-09 archive: with two runners the SAME job can pass on
+one machine and fail on the other (environment skew) — a check that flips
+between re-runs is a runner-skew signal, not flakiness to shrug at.
+
+**SPOF posture (explicit, so nobody re-litigates it mid-incident):** the fleet
+ACCEPTS single-runner operation as a degraded-but-working mode — serial checks
+are slow, not broken, and no action is *required* beyond restoring the second
+runner when convenient. What the fleet does NOT accept is zero runners, and it
+does not accept a runner left offline *silently*: if you find one offline,
+either restore it (Fix below) or record it as a known outage in the handoff.
+
+**Known root causes (both seen in production):**
+
+1. **The Mac slept.** Lid close / idle sleep kills the runner container's
+   connection to GitHub. Durable fix shipped 2026-09-12: the `sleep_guard`
+   root LaunchDaemon keeps `disablesleep 1` on AC power, checked every 60s
+   (`scripts/sleep_guard.sh --install-daemon`, once per machine). Since
+   2026-10-21 it lets the Mac sleep on BATTERY (since 2026-10-23 it just sets
+   `disablesleep 0` on battery — no lid detection) — a runner on battery in a bag going offline is expected; plug in, or
+   `sudo scripts/sleep_guard.sh --stay-awake 2h`.
+2. **`RUNNER_NAME` collision.** `entrypoint.sh` registers with
+   `config.sh --replace`, so a second machine using the SAME name silently
+   TAKES OVER the registration and knocks the first machine's runner offline
+   with no error anywhere. Guarded since 2026-08 (per-host default name +
+   ownership pre-flight in `runner_selfhosted.sh`) — but a manually exported
+   `RUNNER_NAME` can still recreate it.
+
+### Verify (read-only)
+
+```bash
+gh api repos/<owner>/<repo>/actions/runners \
+  --jq '.runners[] | {name, status, busy}'          # who is online/offline right now
+gh run list --branch test --limit 5                  # queued runs = pool saturated or empty
+# on the machine whose runner is offline:
+scripts/runner_selfhosted.sh status                  # registration + container state, matched by NAME
+scripts/runner_selfhosted.sh check                   # one OK/WARN line per runner (slot container + GitHub)
+docker ps --filter name=myai-gh-runner               # every runner container (myai-gh-runner-<repo>[-N])
+scripts/sleep_guard.sh --check                       # rc 1 = sleep posture drifted (root cause 1)
+```
+
+### Fix
+
+Run on the OFFLINE machine, from its MASTER checkout (the runner is `ci`
+profile CI infra, not the gateway stack — the DEPLOY GUARD does not apply to
+`runner_selfhosted.sh`, which scopes every compose verb to the `gh-runner`
+service):
+
+```bash
+scripts/runner_selfhosted.sh up          # build + register + start; verifies Online by NAME
+scripts/runner_selfhosted.sh logs        # if it registers then drops: look for session/token errors
+sudo scripts/sleep_guard.sh --install-daemon   # if --check showed drift (once per machine)
+```
+
+If `up` refuses with a name-ownership error, do NOT pass `RUNNER_REPLACE=1`
+casually — that is the takeover path. Confirm which machine genuinely owns the
+name first (`gh api .../actions/runners`), and delete a stale offline
+registration in GitHub → Settings → Actions → Runners rather than replacing a
+live one.
+
+### Break-glass (whole pool down, PR must merge)
+
+Only when NO runner can be restored now (machine physically unavailable) AND
+hosted Actions still cannot run. This is exactly the mode-5 situation, so its
+guardrails apply verbatim — real gates first, never over a genuine failure,
+announce the bypass:
+
+```bash
+./scripts/local-ci.sh --dry-run          # prove the code green in Docker, posts nothing
+./scripts/local-ci.sh                    # post success ONLY for checks that genuinely passed
+gh pr merge <PR#> --merge --admin        # only if a pinned check stays BLOCKED and protection allows it
+```
+
+Once any runner is back Online, re-run the skipped required checks for the
+record — `gh run rerun <run-id>` on the queued/failed run, or trigger fresh
+via `gh workflow run <workflow> --ref test` (all self-hosted workflows carry
+`workflow_dispatch`) — and stop using the break-glass path immediately.
+
+### Confirm
+
+```bash
+gh api repos/<owner>/<repo>/actions/runners \
+  --jq '.runners[] | {name, status}'     # target runner: online
+gh run list --branch test --limit 3      # previously-queued runs picked up, checks run in parallel again
+```
+
+### Rollback
+
+`scripts/runner_selfhosted.sh down <owner/repo> [--instance N]` stops that
+runner's slot (registration persists in its pinned volume; the next `up` is
+instant). `reset` deregisters and wipes the volume — only for a genuinely
+corrupt registration, since it forces a full re-register. Every call targets
+one slot service of project `myai`; nothing in this mode touches the
+app/gateway stack.
+
+## 10. Host RAM exhausted while the RAM guard reports "under ceiling"
+
+**Symptom:** the Mac is sluggish or swapping, and/or the CLI runner keeps
+tree-killing its own tasks on `RAM CAP HIT` — yet the session-start banner says
+`RAM Guard: NNN MB / 2048 MB (under ceiling)`. On 2026-09-18 five of the last
+twelve runner jobs on one host died this way (peaks 1536–1622 MB against the
+1536 MB cap, 7–19 processes) while every job on the personal Mac in the same
+window returned `done`.
+
+**Why the guard misses it — this is the whole point of the mode.**
+`hooks/session/13-ram-guard.sh` sums `docker stats` across this project's
+**default-profile containers only**. That is correct and deliberate (CLAUDE.md
+§2: the ceiling covers the APP stack; the `ci`-profile `gh-runner` is excluded
+as CI infra). But it means three large pools are structurally invisible to it:
+
+1. **Idle `claude` CLI sessions.** Each terminal tab left open holds its own
+   process plus a full MCP child stack, indefinitely. They are host processes,
+   not containers, so the guard never sees them.
+2. **Per-session MCP servers.** Every session spawns its own `mcp-remote`
+   (myai), `playwright-mcp`, `mcp-server-github`, `shadcn-mcp`, `docker-mcp`
+   and `gk mcp`. `playwright-mcp` additionally launches real Chrome instances
+   that outlive the run that created them.
+3. **Containers outside this compose file.** Other projects' stacks (e.g.
+   another app's container, which alone ran to ~2.8 GB) and Docker Desktop's MCP Toolkit
+   sandboxes (`mcp/node-code-sandbox`, label `docker-mcp=true`, unnamed
+   `pedantic_rosalind`-style names) are not myai services, so they are excluded
+   from the sum by design while still consuming the same physical RAM.
+
+**Measured on home-mac, 2026-09-19** — guard read 636 MB / 2048
+("under ceiling") while the host actually carried: 10 `claude` sessions
+= 1251 MB, 102 MCP child processes = 322 MB, 2 stray MCP sandbox containers,
+plus the myai stack and one app stack. Nine of the ten sessions had been idle 1d 5h.
+Reclaimed ~950 MB of agent-attributable RAM by closing seven of them.
+
+> **NOTE on Chrome:** most `Google Chrome` RSS on a desktop Mac is the
+> operator's OWN browser (root process parented by `launchd`). Only a Chrome
+> whose root is parented by a `playwright-mcp` node process is ours to kill.
+> Check the parent before attributing — or killing — anything Chrome.
+
+### Standing rule (home Mac, operator directive 2026-09-19)
+
+**Only `myai` and one app stack run on the personal Mac.** Any other repo's `claude`
+session or stack is closed when not actively in use. Either may be stopped too
+if its MCP surface isn't needed; both restart cleanly, and a restart is the
+right moment to apply a `mem_limit`. Keep exactly one myai phone doorway alive
+(`remote_fleet.sh status` → the `master` session) — that is not spare capacity.
+
+### Verify (read-only)
+
+```bash
+# 1. Every live claude session, with its working directory
+ps -eo pid,tty,etime,rss,comm | awk '$5=="claude"'
+for p in $(pgrep -x claude); do \
+  echo "$p $(lsof -a -p $p -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"; done
+
+# 2. Which of them are phone-drivable (master) — NEVER kill these blind
+./scripts/remote_fleet.sh status
+
+# 3. Agent-attributable host RAM, by family
+ps -eo rss,command | grep -E 'mcp-remote|server-github|shadcn-mcp|playwright-mcp|/docker-mcp|gk.* mcp' \
+  | grep -v grep | awk '{s+=$1} END {printf "mcp children: %.0f MB\n", s/1024}'
+ps -eo rss,comm | awk '$2=="claude"{s+=$1} END {printf "claude sessions: %.0f MB\n", s/1024}'
+
+# 4. Containers the guard does NOT count
+docker ps --format '{{.Names}}\t{{.Status}}' | grep -v '^myai-'
+docker ps --filter 'label=docker-mcp=true' -q            # Docker MCP Toolkit sandboxes
+```
+
+### Fix
+
+```bash
+# Close a session cleanly (SIGTERM reaps its whole MCP child stack).
+kill -TERM <claude-pid>
+
+# Master/phone sessions: use the fleet script, which also clears the tmux shell.
+./scripts/remote_fleet.sh stop <repo>
+
+# Stale playwright browsers, WITHOUT killing the operator's own Chrome:
+ps -eo pid,ppid,command | grep 'MacOS/Google Chrome ' | grep -v Helper
+#   → kill only roots whose ppid is a playwright-mcp node process.
+#     playwright-mcp relaunches a fresh browser on next use.
+
+# Docker MCP Toolkit sandboxes (respawn on demand):
+docker rm -f $(docker ps --filter 'label=docker-mcp=true' -q)
+```
+
+**Do not** raise the runner's 1536 MB cap as the first move. The cap is what
+stops a fan-out from taking the machine down; the logs name the real cause
+("subagent/parallel-tool fan-out, N processes in the tree at kill time"). Free
+the host first, then re-run. Raise the cap only once the host baseline is clean
+and a task still needs more.
+
+## 11. Host disk full, `du` finds nothing → a DELETED file still held open
+
+**Symptom.** macOS reports the disk (Data volume) nearly full — office-mac on
+2026-10-18: 99%, 878 of 926 GB used, 6 GB free — but every folder, even
+`sudo du -xh -d 3 /System/Volumes/Data`, adds up to a fraction of that
+(~234 GB). No Time Machine local snapshots, no other users.
+
+**Cause.** A process is holding open a file that has been DELETED. The name is
+gone, so nothing that walks the filesystem can see it, but the blocks are only
+freed when the holder exits. That day: an orphaned iOS-Simulator
+`SimRenderServer` (parent launchd, up 16 days, no Simulator running) was still
+writing a screen recording to `/private/tmp/<uuid>.mp4.sb-…` — **592 GB**.
+
+**Find it** (no sudo needed for your own processes):
+
+```bash
+lsof +L1 | awk 'NR==1 || $7+0 > 104857600'   # SIZE/OFF = bytes the deleted file still holds
+ps -o pid,ppid,etime,command -p <pid>        # ppid 1 = orphaned; etime = how long
+```
+
+**Fix.** End the holder — `kill <pid>` (then `kill -9` if it lingers). The
+space comes back instantly (6 → 640 GB free that day). For a SimRenderServer
+with no Simulator open nothing is lost: the file is already deleted and macOS
+relaunches the helper on demand.
+
+**Prevention (automatic).** `scripts/host_disk_guard.sh`, run by
+`scripts/machine_selfheal.sh` step 13 at every session start and in the daily
+08:00 boot:
+- deleted-but-open files ≥ 5 GB (`HOST_DISK_HELD_GB`): known-safe orphans in
+  `HOST_DISK_AUTOKILL` (default `SimRenderServer`; full process name, ppid 1,
+  its app not running) are ended automatically; anything else is reported with
+  pid, size, path and the exact `kill` — never killed unasked;
+- free < 50 GB (`HOST_DISK_WARN_FREE_GB`): Docker build cache + dangling images
+  pruned; < 20 GB (`HOST_DISK_CRIT_FREE_GB`): unused images too. Docker
+  VOLUMES are never touched (Mongo data). A hung Docker is skipped after 5 s;
+- still low → 🔴 line + macOS notification. Log:
+  `~/.myai/logs/host-disk-guard.log`. Report-only run:
+  `scripts/host_disk_guard.sh --check`.
+
+**Not a leak — "System Data" that is just big.** Storage settings files hidden
+folders, VM disks, swap and caches under "System Data": Docker's VM disk
+(`~/Library/Containers/com.docker.docker/…/Docker.raw`), iOS Simulator runtimes
+(`xcrun simctl runtime list`), Ollama models (`~/.ollama`), swap (APFS `VM`
+volume — cleared by a restart), the Claude desktop VM bundle, `~/Library/Caches`.
+`diskutil apfs list` shows the volume sizes.

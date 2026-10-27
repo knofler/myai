@@ -36,7 +36,14 @@
 
 # ── location resolution ──────────────────────────────────────────────────────
 
-brain_home() { printf '%s\n' "${MYAI_HOME:-$HOME/.myai}"; }
+# MYAI_HOME is the per-user STATE dir. A framework checkout there (the old
+# portable-compose meaning of the name, still set in some shells/.env files)
+# put state files at the AI repo root on both Macs (2026-10-18) — ignore it.
+brain_home() {
+  local h="${MYAI_HOME:-}"
+  if [ -n "$h" ] && [ -f "$h/scripts/lib/brain.sh" ] && [ -d "$h/runtime" ]; then h=""; fi
+  printf '%s\n' "${h:-$HOME/.myai}"
+}
 
 brain_dir() {
   if [ -n "${MYAI_BRAIN_DIR:-}" ]; then printf '%s\n' "$MYAI_BRAIN_DIR"; return 0; fi
@@ -228,7 +235,19 @@ brain_sync_pull() {
   local d; d="$(brain_dir)"
   brain_remote_url "$d" >/dev/null || return 0
   if ! _brain_net_git "$d" fetch -q origin main >/dev/null 2>&1; then
-    echo "brain: fetch from origin failed (offline?) — reading local main" >&2
+    # Offline is non-fatal, but it must NOT read as healthy: count against the
+    # last-known origin/main ref (local rev-list, no network) and say so when
+    # there is unreplicated work. Twin of the TS `reason:'offline'` counts —
+    # a bare "reading local main" hid a store that was 3 ahead of everywhere.
+    local oab oahead obehind
+    oab="$(_brain_ahead_behind "$d")"; oahead="${oab%% *}"; obehind="${oab##* }"
+    case "$oahead" in ''|*[!0-9]*) oahead=0 ;; esac
+    case "$obehind" in ''|*[!0-9]*) obehind=0 ;; esac
+    if [ "$oahead" -gt 0 ] || [ "$obehind" -gt 0 ]; then
+      echo "⚠️  brain: origin unreachable (offline) — ${oahead} commit(s) UNPUSHED, ${obehind} behind as of the last fetch. This work exists on THIS MACHINE ONLY. Run 'scripts/boot_sync.sh --no-gateway' from the host to replicate." >&2
+    else
+      echo "brain: fetch from origin failed (offline?) — reading local main" >&2
+    fi
     return 0
   fi
   local ab ahead behind
@@ -246,8 +265,13 @@ brain_sync_pull() {
     git -C "$d" fetch -q . refs/remotes/origin/main:refs/heads/main >/dev/null 2>&1 && synced=1
   fi
   behind="${behind:-0}"; case "$behind" in ''|*[!0-9]*) behind=0 ;; esac
+  ahead="${ahead:-0}"; case "$ahead" in ''|*[!0-9]*) ahead=0 ;; esac
   if [ "$synced" != 1 ] && [ "$behind" -gt 0 ]; then
     echo "⚠️  brain: local main is ${behind} commit(s) BEHIND origin/main (ahead ${ahead}) — pull-on-boot could not fast-forward (diverged). This session may be missing recent work from other machines. Run 'myai brain merge' (or resolve by hand) to reconcile." >&2
+  elif [ "$synced" != 1 ] && [ "$ahead" -gt 0 ]; then
+    # Ahead-only was silent before 2026-09-09: the guard tested `behind > 0`
+    # alone, so a store holding unpushed commits reported nothing whatsoever.
+    echo "⚠️  brain: local main is ${ahead} commit(s) AHEAD of origin/main and unpushed — this work exists on this machine only. Push it (scripts/boot_sync.sh --no-gateway) before relying on another machine seeing it." >&2
   fi
   return 0
 }
@@ -267,7 +291,7 @@ brain_sync_pull() {
 # and whoever pushes second diverges. And because `brain_sync_pull` is ff-only
 # BY DESIGN and deliberately refuses to merge, a diverged brain only printed a
 # warning and handed the reconcile to the MODEL. That bill came due twice in
-# 24h — 77f9280f (work-desktop <- Rummans, 122/181 commits) and e138b210 (Rummans <-
+# 24h — 77f9280f (office Mac <- home Mac, 122/181 commits) and e138b210 (home Mac <-
 # origin, 20/126) — each costing an interactive session to re-derive the same
 # mechanical merge, and each fork ALSO breaking anchor resolution so the next
 # `-min` boot silently degraded to the blank-agent brief. Operator direction:
@@ -297,8 +321,21 @@ brain_sync_pull() {
 _brain_converge_locked() {
   local d="$1"
 
-  if ! _brain_net_git "$d" fetch -q origin main >/dev/null 2>&1; then
-    echo "brain: offline — converge skipped (local main unchanged)" >&2
+  # RETRY BEFORE BELIEVING "OFFLINE" (2026-09-14). The first fetch at session
+  # start is the COLD one — DNS, SSH agent, keychain, wifi wake — and
+  # _brain_net_git's budget is 2s, which on a Mac with NEITHER `timeout` nor
+  # `gtimeout` (this operator's, checked) degrades to
+  # `ssh -o ConnectTimeout=2 -o BatchMode=yes`, where a not-yet-unlocked key is
+  # a hard FAILURE rather than a wait. A brain fetch here measures ~2.5s. So the
+  # fork killer was printing "offline" on a perfectly online machine and then
+  # doing NOTHING: observed this session, brain left 3 behind until a later hook
+  # with a looser budget happened to fix it. That is the same
+  # a-warning-nobody-acts-on failure this function exists to end.
+  # A genuine outage still fails in seconds, and this stays rc 0 either way.
+  if ! _brain_net_git "$d" fetch -q origin main >/dev/null 2>&1 \
+     && ! BRAIN_NET_TIMEOUT="${BRAIN_CONVERGE_FETCH_TIMEOUT:-12}" \
+          _brain_net_git "$d" fetch -q origin main >/dev/null 2>&1; then
+    echo "brain: offline — converge skipped after 2 attempts (local main unchanged)" >&2
     return 0
   fi
 

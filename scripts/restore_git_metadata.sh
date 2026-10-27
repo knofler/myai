@@ -5,7 +5,7 @@ set +e
 # Re-attach a Dropbox-synced working tree to its GitHub remote after its `.git`
 # directory has gone missing — WITHOUT touching a single working-tree file.
 #
-# WHY THIS EXISTS (incident 2026-08-27, runner-host)
+# WHY THIS EXISTS (incident 2026-08-27, the home Mac)
 # ---------------------------------------------------------
 # Fleet policy marks every repo's `.git` with `com.dropbox.ignored` so Dropbox
 # stops corrupting it with conflicted-copy ref files. On the machine that SETS
@@ -15,7 +15,7 @@ set +e
 #
 # THERE IS NOTHING TO RESTORE FROM DROPBOX. Verified 2026-08-27 against the live
 # account: no `.git` under any managed repo, and a deleted-file search for
-# `packed-refs` across `_MY_PROJECT` returns ZERO. Dropbox treats an ignore-flag
+# `packed-refs` across the dev root returns ZERO. Dropbox treats an ignore-flag
 # purge as a sync-config change, not a user delete, so it leaves no rewind
 # point. (Dropbox still holds `.git` for OLD, never-swept repos — the kind of
 # legacy project that predates the sweep — which is how we know the search works.)
@@ -35,21 +35,31 @@ set +e
 # reset a repo's index against someone else's history, so guessing is banned:
 #   1. `--remote <url>` for a single target
 #   2. `config/repo_remotes.txt`  ("<folder-name> <owner/repo>" per line)
-#   3. `gh repo view knofler/<folder-name>` — only on an EXACT name match
+#   3. `gh repo view <owner>/<folder-name>` — only on an EXACT name match
 #   Anything unresolved is SKIPPED and listed at the end.
 # DO NOT add package.json `repository.url` as a source: on this master repo it
-# points at `knofler/myai`, the scrubbed PUBLIC MIRROR, not the private repo.
+# points at `<owner>/myai`, the scrubbed PUBLIC MIRROR, not the private repo.
 #
 # Usage:
 #   ./scripts/restore_git_metadata.sh                      # dry-run, current repo
 #   ./scripts/restore_git_metadata.sh --apply              # fix current repo
-#   ./scripts/restore_git_metadata.sh --apply --remote knofler/ai_management .
+#   ./scripts/restore_git_metadata.sh --apply --remote <owner>/<repo> .
 #   ./scripts/restore_git_metadata.sh --fleet               # dry-run whole fleet
 #   ./scripts/restore_git_metadata.sh --fleet --apply       # fix whole fleet
 # -----------------------------------------------------------------------------
 
-OWNER_DEFAULT="knofler"
-# orgs are also searched for exact name matches (POWERHOUSE repos live in them).
+# The user's own GitHub account, searched first: $MYAI_GIT_OWNER, else the
+# signed-in gh user. Lazy for the same reason as owner_orgs() below.
+OWNER_DEFAULT_RESOLVED=0
+OWNER_DEFAULT=""
+owner_default() {
+  if [ "$OWNER_DEFAULT_RESOLVED" != "1" ]; then
+    OWNER_DEFAULT="${MYAI_GIT_OWNER:-$(gh api user --jq .login 2>/dev/null || true)}"
+    OWNER_DEFAULT_RESOLVED=1
+  fi
+  printf '%s' "$OWNER_DEFAULT"
+}
+# orgs are also searched for exact name matches (work-org repos live in them).
 # LAZY on purpose: resolved on first actual need inside resolve_remote(), not
 # unconditionally at startup. `gh api user/orgs` is a real network round-trip
 # (~0.5s) — firing it on every invocation, even a fully-healthy --fleet
@@ -109,7 +119,7 @@ resolve_remote() {
   # pick — that ambiguity is what config/repo_remotes.txt is for.
   if command -v gh >/dev/null 2>&1; then
     local hits="" owner
-    for owner in "$OWNER_DEFAULT" $(owner_orgs); do
+    for owner in $(owner_default) $(owner_orgs); do
       gh repo view "$owner/$name" --json name >/dev/null 2>&1 && hits="$hits $owner/$name"
     done
     set -- $hits
@@ -172,7 +182,7 @@ restore_one() {
       step "SKIP — AMBIGUOUS, name exists in several owners:$AMBIGUOUS"
     else
       step "SKIP — cannot resolve remote. Add a line to config/repo_remotes.txt:"
-      step "        $name  $OWNER_DEFAULT/<repo>"
+      step "        $name  ${OWNER_DEFAULT:-<owner>}/<repo>"
     fi
     SKIPPED+=("$name (unresolved remote)")
     return

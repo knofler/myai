@@ -137,10 +137,10 @@ export default function ConnectorManager() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <p className="font-semibold text-sm text-[rgb(var(--text-primary))] truncate">{c.label}</p>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-secondary))] font-mono">{c.transport}</span>
-                      {c.source === 'custom' && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">custom</span>}
+                      <span className="text-label px-1.5 py-0.5 rounded bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-secondary))] font-mono">{c.transport}</span>
+                      {c.source === 'custom' && <span className="text-label px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">custom</span>}
                     </div>
-                    <p className="text-[11px] text-zinc-600 font-mono mt-0.5">{c.key}</p>
+                    <p className="text-label text-zinc-600 font-mono mt-0.5">{c.key}</p>
                   </div>
                   <button
                     role="switch"
@@ -156,12 +156,12 @@ export default function ConnectorManager() {
 
                 <p className="text-xs text-[rgb(var(--text-secondary))] line-clamp-2">{c.description}</p>
 
-                <p className="text-[11px] text-zinc-600 font-mono truncate">
+                <p className="text-label text-zinc-600 font-mono truncate">
                   {c.transport === 'http' ? c.url : `${c.command ?? ''} ${(c.args ?? []).join(' ')}`}
                 </p>
 
                 {(c.requiresEnv?.length ?? 0) > 0 && (
-                  <p className="text-[11px] text-amber-400/90">
+                  <p className="text-label text-amber-400/90">
                     Needs env: {c.requiresEnv!.join(', ')}
                   </p>
                 )}
@@ -170,7 +170,7 @@ export default function ConnectorManager() {
                   <button
                     onClick={() => post({ action: 'remove', key: c.key }, c.key)}
                     disabled={busyKey === c.key}
-                    className="self-start text-[11px] text-rose-400/80 hover:text-rose-300 disabled:opacity-50"
+                    className="self-start text-label text-rose-400/80 hover:text-rose-300 disabled:opacity-50"
                   >
                     Remove
                   </button>

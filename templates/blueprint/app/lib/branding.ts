@@ -2,5 +2,5 @@
  *  init_blueprint.sh rewrites these values from the project name. */
 export const branding = {
   name: "__DISPLAY_NAME__",
-  description: "Built on the Powerhouse Blueprint.",
+  description: "Built on the myAI Blueprint.",
 } as const;

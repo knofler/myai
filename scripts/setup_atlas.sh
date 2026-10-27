@@ -9,9 +9,28 @@ set -uo pipefail
 #  migrate the local mongo data → set the Vercel project env → verify.
 #
 #  Idempotent: reuses an existing cluster/user/allow-list if present.
-#  Prereq: `atlas auth login` (CLI session valid) + `vercel` logged in.
+#  Prereq: `atlas auth login --profile <p>` (CLI session valid) + `vercel` logged in.
+#
+#  WHICH ATLAS ACCOUNT: config/atlas_profiles.txt routes repo → CLI profile
+#  (+ project / cluster). Unlisted repos use `default` (personal). Work-org repos
+#  (listed in config/atlas_profiles.txt) pin their work profile + "Project 0" /
+#  Cluster0 so this script REUSES them instead of creating a "myAI" project in the
+#  wrong org. Override per run: ATLAS_PROFILE=… ATLAS_PROJECT=… ATLAS_CLUSTER=…
 # ════════════════════════════════════════════════════════════════════════════
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# ── 0. Atlas CLI profile — every `atlas …` below goes through this wrapper ─────
+command -v atlas >/dev/null || { echo "[setup-atlas] ERROR: atlas CLI not installed" >&2; exit 1; }
+# Check the resolver's exit code BEFORE eval: a malformed table exits 2 with nothing on
+# stdout, and eval-ing nothing would silently fall through to `default` (wrong org).
+if ! PROFILE_ASSIGN="$("$ROOT/scripts/atlas_profile.sh")"; then
+  echo "[setup-atlas] ERROR: scripts/atlas_profile.sh failed — fix config/atlas_profiles.txt before provisioning" >&2
+  exit 1
+fi
+eval "$PROFILE_ASSIGN"
+ATLAS_PROFILE="${ATLAS_PROFILE:-default}"
+atlas() { command atlas --profile "$ATLAS_PROFILE" "$@"; }
+
 PROJECT_NAME="${ATLAS_PROJECT:-myAI}"
 CLUSTER="${ATLAS_CLUSTER:-myai}"
 TIER="${ATLAS_TIER:-M0}"
@@ -24,9 +43,16 @@ ENV_FILE="$ROOT/.env"
 log() { echo "[setup-atlas] $*"; }
 die() { echo "[setup-atlas] ERROR: $*" >&2; exit 1; }
 
-command -v atlas >/dev/null || die "atlas CLI not installed"
+log "atlas profile: $ATLAS_PROFILE (repo: ${ATLAS_REPO_RESOLVED:-?}) → project '$PROJECT_NAME', cluster '$CLUSTER'"
+# A non-default profile MUST be pinned to an existing project + cluster (table columns
+# 3-4 or ATLAS_PROJECT/ATLAS_CLUSTER env). Otherwise the defaults below (myAI / myai)
+# would CREATE a new project inside that org — the wrong-org outcome this routing exists
+# to prevent. Bootstrapping a genuinely new org is still possible: pass both env vars.
+if [ "$ATLAS_PROFILE" != "default" ] && { [ -z "${ATLAS_PROJECT:-}" ] || [ -z "${ATLAS_CLUSTER:-}" ]; }; then
+  die "profile '$ATLAS_PROFILE' is not pinned to an existing project + cluster — add columns 3-4 to config/atlas_profiles.txt (or pass ATLAS_PROJECT and ATLAS_CLUSTER) rather than creating a new '$PROJECT_NAME' project in that org"
+fi
 command -v vercel >/dev/null || log "vercel CLI missing — will skip the Vercel env step"
-atlas projects list >/dev/null 2>&1 || die "atlas session expired — run:  atlas auth login   then re-run this script"
+atlas projects list >/dev/null 2>&1 || die "atlas session expired or profile '$ATLAS_PROFILE' missing — run:  atlas auth login --profile $ATLAS_PROFILE   in a real terminal tab, then re-run this script"
 
 # ── 1. Project ───────────────────────────────────────────────────────────────
 PROJECT_ID=$(atlas projects list -o json 2>/dev/null | python3 -c "

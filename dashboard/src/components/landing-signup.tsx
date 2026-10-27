@@ -108,7 +108,7 @@ export function LandingSignup() {
         >
           {copied ? '✓ Copied' : 'Copy key'}
         </button>
-        <p className="text-[11px] text-amber-400/80 mt-3">
+        <p className="text-label text-amber-400/80 mt-3">
           ⚠ Store it in your password manager. You sign in with your email + password — this key is only for
           programmatic / CLI access.
         </p>

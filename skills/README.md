@@ -52,7 +52,7 @@ Each skill is a repeatable playbook stored as `skills/<skill-name>/SKILL.md`. Cl
 | `adr-write` | Write Architecture Decision Records | ADR, architecture decision, decision record |
 | `changelog-update` | Update CHANGELOG.md (Keep a Changelog format) | changelog, release notes, what changed, version notes |
 
-### Frontend Specialist (5 skills)
+### Frontend Specialist (6 skills)
 
 | Skill | Description | Triggers |
 |-------|-------------|----------|
@@ -61,6 +61,7 @@ Each skill is a repeatable playbook stored as `skills/<skill-name>/SKILL.md`. Cl
 | `api-integration` | Integrate frontend with API endpoints | fetch, API call, integrate API, connect to backend, data fetching |
 | `state-management` | Set up state management (Context/Zustand/React Query) | state management, global state, React Context, Zustand, store |
 | `vercel-deploy-frontend` | Deploy frontend to Vercel | Vercel deploy, deploy frontend, Vercel config, preview deployment |
+| `web-perceived-performance` | Make a Next.js app feel instant: measure, then tap feedback → server cache + warm → idle prefetch → persisted cache | slow, feels slow, perceived performance, warm cache, prefetch, skeleton, loading.tsx |
 
 ### Product Manager (4 skills)
 

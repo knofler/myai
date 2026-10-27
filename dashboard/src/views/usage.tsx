@@ -156,10 +156,10 @@ export default async function UsagePage() {
     <div>
       {/* ── Stat cards ─────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard label="Total units (all time)" value={numFmt.format(allTime)} sub="Across all event types" accent="green" />
-        <StatCard label="This month" value={numFmt.format(mtd)} sub={`Since ${monthStart.toISOString().slice(0, 10)} UTC`} accent="blue" />
-        <StatCard label="Today" value={numFmt.format(today)} sub={`Since ${dayStart.toISOString().slice(0, 10)} UTC`} accent={today > 0 ? 'yellow' : 'gray'} />
-        <StatCard label="Off-hours minutes (MTD)" value={numFmt.format(offhoursMtd)} sub="Runner wall-clock consumed" accent="purple" />
+        <StatCard label="Total units (all time)" value={numFmt.format(allTime)} sub="Across all event types" icon="analytics" tone="muted" />
+        <StatCard label="This month" value={numFmt.format(mtd)} sub={`Since ${monthStart.toISOString().slice(0, 10)} UTC`} icon="recap" tone="muted" />
+        <StatCard label="Today" value={numFmt.format(today)} sub={`Since ${dayStart.toISOString().slice(0, 10)} UTC`} icon="clock" tone={today > 0 ? 'accent' : 'muted'} />
+        <StatCard label="Off-hours minutes (MTD)" value={numFmt.format(offhoursMtd)} sub="Runner wall-clock consumed" icon="runs" tone="muted" />
       </div>
 
       {!anyData && (

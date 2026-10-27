@@ -83,6 +83,13 @@ uninstall)
     ;;
 esac
 
+# Runner profile from the role resolver — never a spelled profile name. Detect
+# first, so a reinstall keeps the profile this host's existing scheduler entry
+# already uses (runner_profile_detect writes runner.conf only when absent).
+# shellcheck source=scripts/lib/swarm_roles.sh
+. "$SCRIPT_DIR/lib/swarm_roles.sh"
+bash "$SCRIPT_DIR/lib/runner_profile_detect.sh" >/dev/null 2>&1 || true
+RUNNER_PROFILE="$(role_runner_profile)"
 mkdir -p "$LOG_DIR" "$HOME/Library/LaunchAgents"
 if [ -n "$EVERY_HOURS" ]; then
     INTERVAL=$(( EVERY_HOURS * 3600 )); CADENCE="every ${EVERY_HOURS}h"
@@ -108,7 +115,7 @@ cat > "$PLIST" <<PLIST_EOF
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key><string>$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-        <key>CLAUDE_CONFIG_DIR</key><string>$HOME/.claude-tech</string>
+        <key>CLAUDE_CONFIG_DIR</key><string>$RUNNER_PROFILE</string>
     </dict>
 </dict>
 PLIST_EOF

@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
-import { withSentryConfig } from "@sentry/nextjs";
+// @sentry/nextjs v10 deprecated importing withSentryConfig from the package
+// root (removed entirely in v11) — import from the dedicated config subpath.
+import { withSentryConfig } from "@sentry/nextjs/config";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,

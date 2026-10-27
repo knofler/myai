@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="myAI">
+  <!-- myAI MASKABLE icon (Android adaptive / PWA `purpose: maskable`).
+       WHY A THIRD CUT: a maskable icon is cropped by the OS to a safe zone —
+       the inner circle of radius ~40% (≈205px here). icon.svg is full bleed,
+       so its traffic-light dots sit ~283px from centre and Android would slice
+       them off. Here the whole window is scaled to ~62% and centred, so every
+       element lands inside the safe circle whatever mask the OS applies, and
+       the surrounding bleed is flat brand colour that can be cropped freely.
+       Any colour change must be made in icon.svg, favicon.svg AND here. -->
+  <!-- Full-bleed background: the part the OS is allowed to crop. Deliberately
+       a DARKER blue than the title bar (#3F7CC0) — at equal value the bar
+       dissolves into the bleed and the window loses its top edge, leaving the
+       three dots floating on nothing. -->
+  <rect width="512" height="512" fill="#2E5581"/>
+  <!-- window, scaled 0.62 and centred: 512*0.62 = 317.44, offset (512-317.44)/2 = 97.28 -->
+  <g transform="translate(97.28 97.28) scale(0.62)">
+    <g clip-path="url(#m-sq)">
+      <rect width="512" height="512" fill="#4F6B74"/>
+      <rect width="512" height="132" fill="#3F7CC0"/>
+      <circle cx="66"  cy="66" r="26" fill="#E9C846"/>
+      <circle cx="142" cy="66" r="26" fill="#F24B5C"/>
+      <circle cx="218" cy="66" r="26" fill="#56D2A0"/>
+      <g fill="none" stroke="#F2C230" stroke-width="44" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M138 212 246 288 138 364"/>
+        <path d="M292 366h96"/>
+      </g>
+    </g>
+  </g>
+  <defs>
+    <clipPath id="m-sq"><rect width="512" height="512" rx="72"/></clipPath>
+  </defs>
+</svg>

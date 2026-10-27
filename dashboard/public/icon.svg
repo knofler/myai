@@ -1,17 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="myAI">
+  <!-- myAI app icon — terminal window. Built from the operator's mockup
+       (2026-09-19, plan/design/mockups/2026-09-19-shell-icon.svg).
+       FULL BLEED: the window IS the tile. No white border, no inner margin —
+       the previous coral "myAI" wordmark read as flat text in a box.
+       Everything is clipped to the squircle so the title bar's top corners
+       round with the tile instead of sitting on a light seam. -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#a83420"/>
-      <stop offset="0.55" stop-color="#cc4426"/>
-      <stop offset="1" stop-color="#e4552e"/>
-    </linearGradient>
-    <linearGradient id="txt" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#ffedd5"/>
-    </linearGradient>
+    <clipPath id="squircle"><rect width="512" height="512" rx="112"/></clipPath>
   </defs>
-  <rect width="512" height="512" rx="112" fill="#09090b"/>
-  <rect x="36" y="36" width="440" height="440" rx="92" fill="url(#bg)"/>
-  <text x="256" y="308" font-family="ui-rounded, -apple-system, system-ui" font-size="150"
-        font-weight="800" text-anchor="middle" fill="url(#txt)" letter-spacing="-4">myAI</text>
+  <g clip-path="url(#squircle)">
+    <!-- window body -->
+    <rect width="512" height="512" fill="#4F6B74"/>
+    <!-- title bar -->
+    <rect width="512" height="116" fill="#3F7CC0"/>
+    <circle cx="54"  cy="58" r="17" fill="#E9C846"/>
+    <circle cx="112" cy="58" r="17" fill="#F24B5C"/>
+    <circle cx="170" cy="58" r="17" fill="#56D2A0"/>
+    <rect x="330" y="42" width="132" height="32" rx="16" fill="#FFFFFF"/>
+    <!-- prompt: >_ -->
+    <g fill="none" stroke="#F2C230" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M72 168 152 212 72 256"/>
+      <path d="M170 258h128"/>
+    </g>
+    <!-- output lines -->
+    <g fill="#8FB6DC">
+      <rect x="62"  y="330" width="150" height="22" rx="11"/>
+      <rect x="240" y="330" width="105" height="22" rx="11"/>
+      <rect x="372" y="330" width="78"  height="22" rx="11"/>
+
+      <rect x="62"  y="378" width="78"  height="22" rx="11"/>
+      <rect x="168" y="378" width="95"  height="22" rx="11"/>
+      <rect x="290" y="378" width="160" height="22" rx="11"/>
+
+      <rect x="62"  y="426" width="122" height="22" rx="11"/>
+      <rect x="212" y="426" width="95"  height="22" rx="11"/>
+      <rect x="335" y="426" width="115" height="22" rx="11"/>
+    </g>
+  </g>
 </svg>

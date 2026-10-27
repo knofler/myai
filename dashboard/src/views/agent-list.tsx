@@ -77,10 +77,10 @@ export function AgentList({ agents, categories }: { agents: AgentItem[]; categor
             <p className="text-xs text-[rgb(var(--text-muted))] line-clamp-2">{a.description}</p>
             <div className="flex flex-wrap gap-1 mt-3">
               {a.tools.slice(0, 5).map(t => (
-                <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-[rgb(var(--text-secondary))]">{t}</span>
+                <span key={t} className="text-label font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-[rgb(var(--text-secondary))]">{t}</span>
               ))}
               {a.tools.length > 5 && (
-                <span className="text-[10px] text-zinc-600">+{a.tools.length - 5}</span>
+                <span className="text-label text-zinc-600">+{a.tools.length - 5}</span>
               )}
             </div>
           </button>

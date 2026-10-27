@@ -100,7 +100,7 @@ session start (dry-run only, never writes anything):
   ```
   GIT FLEET PREFLIGHT: 1 repo(s) need attention (not discovered mid-session):
     · CONTENT_API — no .git, remote unresolved
-        → fix: add "CONTENT_API  knofler/<repo>" to config/repo_remotes.txt, then: /…/scripts/restore_git_metadata.sh --apply "/…/CONTENT_API"
+        → fix: add "<WORKSPACE_DIR>  <owner>/<repo>" to config/repo_remotes.txt, then: /…/scripts/restore_git_metadata.sh --apply "/…/CONTENT_API"
   ```
   Run the printed `--apply` command (adding a `config/repo_remotes.txt` mapping
   first if the remote could not be resolved) to re-attach it. Never runs

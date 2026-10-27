@@ -38,6 +38,15 @@ interface JsonRpcResponse {
 
 // ── MCP Request Handler ───────────────────────────────────
 
+/**
+ * Sanitize the `x-myai-repo` header (the caller's project hint): a brain
+ * namespace / repo name only, else undefined. Selection, never authorization.
+ */
+export function repoHint(raw: string | undefined): string | undefined {
+  const v = (raw || '').trim();
+  return /^[A-Za-z0-9._-]{1,100}$/.test(v) ? v : undefined;
+}
+
 export async function handleMcpRequest(
   req: JsonRpcRequest,
   ctx: ToolContext = SYSTEM_CONTEXT,
@@ -53,7 +62,7 @@ export async function handleMcpRequest(
       // handshake is byte-identical to pre-betaC behaviour. See context-bundle.ts.
       let instructions: string | undefined;
       try {
-        instructions = await buildContextBundle(ctx.tenantId);
+        instructions = await buildContextBundle(ctx.tenantId, { repo: ctx.callerRepo });
       } catch (err) {
         log.warn({ err }, 'betaC auto-boot bundle skipped');
       }
@@ -103,7 +112,12 @@ export async function handleMcpRequest(
     case 'tools/call': {
       const params = req.params || {};
       const toolName = params.name as string;
-      const toolArgs = (params.arguments || {}) as Record<string, unknown>;
+      let toolArgs = (params.arguments || {}) as Record<string, unknown>;
+      // context_boot without an explicit repo boots the CALLER's repo (the
+      // bridge's x-myai-repo hint) instead of guessing (v1 G2 B6).
+      if (toolName === 'context_boot' && !toolArgs.repo && ctx.callerRepo) {
+        toolArgs = { ...toolArgs, repo: ctx.callerRepo };
+      }
 
       if (!toolName) {
         return {
@@ -246,7 +260,9 @@ export function createMcpRouter(): express.Router {
       }
 
       const idempotencyKey = req.get('Idempotency-Key') || undefined;
-      const response = await handleMcpRequest(body, ctxFromReq(req), idempotencyKey);
+      const callerRepo = repoHint(req.get('x-myai-repo'));
+      const baseCtx = ctxFromReq(req);
+      const response = await handleMcpRequest(body, callerRepo ? { ...baseCtx, callerRepo } : baseCtx, idempotencyKey);
       res.json(response);
     } catch (err) {
       log.error({ err }, 'MCP handler error');

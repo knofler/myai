@@ -96,7 +96,7 @@ export function MarketplaceInstallPanel({
           </>
         )}
       </div>
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
     </div>
   );
 }

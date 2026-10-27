@@ -146,13 +146,23 @@ corpus was never on our servers to purge.
 
 | Port | Service | Default bind |
 |---|---|---|
-| 3100 | Gateway — MCP + REST API | `HOST_BIND` (default all interfaces, for LAN dashboard/phone workflows) |
+| 3100 | Gateway — MCP + REST API | `HOST_BIND` (default **`127.0.0.1`**) |
 | 3200 / 3201 | Gateway — channel HTTP / WebSocket | `HOST_BIND` (same) |
 | 3210 | Dashboard | `HOST_BIND` (same) |
-| 27200 | MongoDB | **`127.0.0.1` only** — the store ships with default credentials and must never face the LAN. Opt out with `MONGO_HOST_BIND` behind a trusted firewall |
+| 27200 | MongoDB | **`127.0.0.1` only**. The store must never face the LAN. Opt out with `MONGO_HOST_BIND` only behind a trusted firewall |
 
-Set `HOST_BIND=127.0.0.1` in `.env` to lock the whole stack to the local
-machine (single-laptop setups should).
+Everything is loopback-only by default (v1 gate G5). Containers still reach the
+gateway through `host.docker.internal` or the compose network. To use the
+dashboard from a phone or another machine on your LAN, opt in explicitly with
+`HOST_BIND=0.0.0.0` in your env file. That also turns off the dashboard's local
+auto-login, so you get the login page instead.
+
+**First-boot secrets.** `myai up` writes generated values into the env file the
+first time it runs: `GATEWAY_LOCAL_TOKEN`, `JWT_SECRET`, and (for a fresh bundled
+database) `MONGO_ROOT_PASSWORD`. A value you set yourself is never changed. The
+gateway refuses to start with the old published `JWT_SECRET` default. An
+existing database volume keeps its password, and `myai up` prints how to change
+it. Self-serve signup is off on local stacks (`SIGNUP_ENABLED=false`).
 
 **Tokens & authentication (ADR-010):**
 
@@ -238,6 +248,17 @@ hardware and the Docker socket), supply-chain compromise of upstream npm/base
 images (mitigated by lockfiles and pinned images, not eliminated), and secrets
 you paste directly into chat with a cloud LLM you configured.
 
+### Multi-tenant runner mode: trusted tenants only
+
+The default install is single-user: the runner works only your own queue. With
+`--tenant <id>` / `--all-tenants` (a tenant keys file), it also works OTHER
+tenants' tasks on this machine. Each tenant gets its own repo root and its own
+workspace clone (`.tenants/<tenant>/<repo>`, origin checked before reuse), but
+the agent CLI still runs as **your OS user** with the permission mode the runner
+is configured for. There is no OS-level sandbox yet: a tenant's task can reach
+whatever your user can. Serve only tenants you would trust to run code on this
+machine, until per-tenant containers or users land. (v1 security audit G5, NEW-2.)
+
 ---
 
 ## 6. Guardrail model — how autonomous agents are kept on a leash
@@ -282,11 +303,12 @@ running in:
 
 ## 7. Hardening checklist (recommended for anything beyond a single dev laptop)
 
-1. `HOST_BIND=127.0.0.1` in `.env` — gateway/dashboard loopback-only.
+1. Keep `HOST_BIND` at its `127.0.0.1` default unless you need LAN access.
 2. Set a strong, unique `GATEWAY_LOCAL_TOKEN` (the compose dev default is not
    a secret).
-3. Change the Mongo root credentials in `docker-compose.yml`/`MONGODB_URI` if
-   you ever widen `MONGO_HOST_BIND`.
+3. Keep the generated `JWT_SECRET` and `MONGO_ROOT_PASSWORD` private. If your
+   database still uses the old default password, change it with the command
+   `myai up` prints, especially before you ever widen `MONGO_HOST_BIND`.
 4. Restrict channel access: `TELEGRAM_ALLOWED_CHATS` / `DISCORD_ALLOWED_CHANNELS`
    (empty = allow all).
 5. Keep `tenancy.enforce` on (the default) — don't set `TENANT_ENFORCE=false`
@@ -305,11 +327,11 @@ running in:
 ## 8. Vulnerability disclosure policy
 
 - **Report privately** via GitHub Security Advisories on
-  [`knofler/myai`](https://github.com/knofler/myai/security/advisories/new) —
+  [the myAI repo's private advisory form](https://github.com/knofler/myai/security/advisories/new) —
   click **"Report a vulnerability"** (private vulnerability reporting is
   enabled on this public repo). Title the advisory `[SECURITY] myAI`. This is
   the supported private channel — there is no email intake, and the private
-  `knofler/ai_management` repo is not an external intake.
+  development repo is not an external intake.
 - Please include: affected component (gateway / dashboard / hooks / scripts),
   reproduction steps, and impact. A proof-of-concept helps; exploitation of
   other users' data does not — don't.

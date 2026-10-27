@@ -7,7 +7,7 @@
 #   `gh pr list`, `gh issue list` and `gh search *` default to a 30-item page
 #   and give NO indication they truncated. Any COUNT or BULK ACTION taken
 #   against that partial set is silently wrong — it fails in exactly the same
-#   way as a guard that silently passes. Measured 2026-09-04: knofler/app had
+#   way as a guard that silently passes. Measured 2026-09-04: one fleet repo had
 #   41 open PRs; the first query returned 26, and two rounds of PR cleanup were
 #   planned against that partial set before the cap was noticed (a third round
 #   was needed once `--limit 200` revealed PRs #2–#11).

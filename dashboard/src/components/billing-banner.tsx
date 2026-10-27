@@ -114,7 +114,7 @@ export function BillingBanner() {
         <span className="text-sm font-medium text-emerald-200 capitalize">{status.plan} plan</span>
         <span className="text-xs text-emerald-300/70">· {cadence}</span>
         {disc && (
-          <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-emerald-400/20 text-emerald-200">
+          <span className="text-label font-semibold px-1.5 py-0.5 rounded bg-emerald-400/20 text-emerald-200">
             {disc}
           </span>
         )}
@@ -139,7 +139,7 @@ export function BillingBanner() {
               maxAttempts,
             )} of ${maxAttempts}). Paid features are paused until payment succeeds; after the final attempt your workspace is downgraded to Free.`}
           </p>
-          {error && <p className="text-xs text-rose-400 mt-1">{error}</p>}
+          {error && <p role="alert" className="text-xs text-rose-400 mt-1">{error}</p>}
         </div>
         <button
           type="button"
@@ -162,7 +162,7 @@ export function BillingBanner() {
         <p className="text-xs text-amber-300/70 mt-0.5">
           {status.reason ?? 'Subscribe to unlock the off-hours runner, scheduling and the work queue.'}
         </p>
-        {error && <p className="text-xs text-rose-400 mt-1">{error}</p>}
+        {error && <p role="alert" className="text-xs text-rose-400 mt-1">{error}</p>}
       </div>
       <div className="shrink-0 flex items-center gap-2">
         {status.annualPlans && status.annualPlans.length > 0 && (

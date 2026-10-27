@@ -30,7 +30,7 @@ export function ThemeToggle() {
     >
       <span aria-hidden="true" className="text-sm leading-none">{ICON[preference]}</span>
       <span>{label}</span>
-      <span className="ml-auto text-[10px] text-[var(--text-muted)] font-mono">{resolved}</span>
+      <span className="ml-auto text-label text-[var(--text-muted)] font-mono">{resolved}</span>
     </button>
   );
 }

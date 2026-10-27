@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # runner_auth_guard.sh — an expired CLI login is a MACHINE condition, not a task failure.
 #
-# 2026-09-09: runner-host's claude-tech OAuth session expired. Every
+# 2026-09-09: one Mac's runner-profile OAuth session expired. Every
 # headless task the runner claimed there died with "Failed to authenticate: OAuth
 # session expired and could not be refreshed" — and each death went through the
 # normal failure path: tasks_fail bumped the task's retry ledger (3 strikes →
@@ -35,7 +35,7 @@ auth_guard_dir() {
     printf '%s' "$d"
 }
 
-# auth_guard_profile <profile_dir> — ~/.claude-tech → claude-tech (the CLAUDE_CONFIG_DIR basename, dot stripped)
+# auth_guard_profile <profile_dir> — ~/.claude-<x> → claude-<x> (the CLAUDE_CONFIG_DIR basename, dot stripped)
 auth_guard_profile() {
     local b; b="$(basename "${1:-$HOME/.claude}")"
     printf '%s' "${b#.}"

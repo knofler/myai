@@ -6,12 +6,21 @@ import TotpManager from './totp-manager';
 
 export const dynamic = 'force-dynamic';
 
+/** The one-line answer (DESIGN_LANGUAGE §5.1). This page is a thin shell around
+ *  a client manager and loads no data server-side, so the sentence says what the
+ *  page is for rather than stating a count it cannot know. */
+function twoFactorSummary(): string {
+  return 'Ask for a second factor from an authenticator app every time you sign in. Keep the one-time recovery codes somewhere safe so a lost phone never locks you out.';
+}
+
 export default function TwoFactorPage() {
   return (
     <div className="max-w-2xl mx-auto">
       <PageHeader
+        icon="security"
         title="Two-Factor Authentication"
-        subtitle="Add a second factor to your login with an authenticator app, plus one-time recovery codes as a fallback."
+        summary={twoFactorSummary()}
+        subtitle="Account security · TOTP authenticator apps."
       />
       <div className="mt-6">
         <TotpManager />

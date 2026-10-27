@@ -7,7 +7,7 @@
 # `gh issue list` / `gh search` default to a silent 30-item page and give NO
 # signal they truncated. A count or bulk action taken against that partial set
 # is silently wrong — a CLI that truncates silently fails exactly like a guard
-# that silently passes. Measured 2026-09-04: knofler/app had 41 open PRs; the
+# that silently passes. Measured 2026-09-04: one fleet repo had 41 open PRs; the
 # first query returned 26 and two cleanup rounds were planned against it before
 # the cap was noticed.
 #
@@ -63,7 +63,16 @@ while IFS= read -r f; do
       probe=line
       sub(/^[[:space:]]*/,"",probe)
       if (probe ~ /^#/) next
-      if (line ~ /gh[[:space:]]+(pr|issue)[[:space:]]+list/ || line ~ /gh[[:space:]]+search[[:space:]]+[a-z]/) {
+      # COMMAND POSITION, not mere mention. A real call is preceded by the
+      # start of the line or by a command separator ( $( ` ; | & ( { ). A log
+      # or echo message that merely NAMES the command is prose and must not
+      # trip the gate: `log "gh pr list failed/truncated"` was reported as a
+      # violation and failed CI, while the actual call one line above already
+      # used the paginated gh_pr_list helper (pr_review_step.sh:347).
+      # Note we deliberately do NOT blank quoted spans — a genuine call is
+      # very often written inside them, e.g. open="$(gh pr list --json n)".
+      if (line ~ /(^|[;|&(){}`]|\$\()[[:space:]]*gh[[:space:]]+(pr|issue)[[:space:]]+list/ \
+          || line ~ /(^|[;|&(){}`]|\$\()[[:space:]]*gh[[:space:]]+search[[:space:]]+[a-z]/) {
         if (line !~ /--limit/ && line !~ /--paginate/) { sub(/^[[:space:]]*/,"",line); print NR": "line }
       }
     }' "$path")"

@@ -4,7 +4,7 @@
 // + the runner's pacing ledger (~/.ai-cli-runner, not mounted) into
 // state/pool-capacity.json inside the repo — same pattern as lib/runner-health.ts.
 // The dashboard reads it off the AI_ROOT mount for the /schedule capacity panel:
-// the claude-tech weekly token pool, plus the metered API-credit RESERVE pool
+// the primary Claude weekly token pool, plus the metered API-credit RESERVE pool
 // (task-874364a3 — the operator's personal Claude-API credit, drawn only when
 // every free pool is session-capped; hard lifetime USD cap).
 

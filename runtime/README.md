@@ -95,7 +95,7 @@ Environment variables override `gateway.config.json`:
 | `AGENTFLOW_URL` | `http://host.docker.internal:3000` | agentFlow base URL for `new-app` idea→app trigger |
 | `AGENTFLOW_TOKEN` | — | Bearer token the gateway uses to authenticate to agentFlow |
 | `BETAC_AUTOBOOT` | on | betaC auto-boot. On MCP `initialize`, the gateway force-loads a tight context bundle via the standard `instructions` field. Set `0`/`false`/`off`/`no` to disable (handshake then omits `instructions`). |
-| `BETAC_IDENTITY` | — | One-line user identity injected into the auto-boot bundle (e.g. "Rumman — solution architect at Powerhouse"). Falls back to `<AI_ROOT>/state/identity.md`, then a neutral default. |
+| `BETAC_IDENTITY` | — | One-line user identity injected into the auto-boot bundle (e.g. "Sam — platform engineer at Acme"). Falls back to `<AI_ROOT>/state/identity.md`, then a neutral default. |
 | `BETAC_BUDGET_CHARS` | 1800 | Hard char budget for the auto-boot bundle (~4 chars/token). Keeps the boot cheap; deeper context is pulled lazily via `handoff_read`/`recall_session`/`memory_search`. |
 
 ### betaC auto-boot (MCP server-instructions)
@@ -131,6 +131,60 @@ docker compose down
 Ports: HTTP 3200, WebSocket 3201, MongoDB 27200 (mapped from 27017).
 
 ## Docker MCP Toolkit
+
+Two separate uses of Docker Desktop's MCP Toolkit (`docker mcp`, CLI v0.43.3):
+
+1. **Sessions run their MCP servers through a Docker MCP gateway** (rollout
+   direction A, below). This is what every session uses today.
+2. **The myAI gateway packaged as a catalog server** (further down). It's optional
+   and nothing depends on it.
+
+### Session MCP servers behind the Docker MCP gateway
+
+Each session's `docker` MCP entry starts `docker mcp gateway run` on **its
+lane's profile**, with every tool call passing a myAI interceptor.
+
+| Phase | What | Where |
+|---|---|---|
+| 0 · lock | Lane → profile map. The boot converges this Mac's profiles onto it. | `config/docker_mcp_profiles.txt`, `scripts/docker_mcp_profiles.sh` (`ensure` / `check` / `resolve`) |
+| 1 · prototype | The ai_management `docker` entry → the gateway | `.mcp.json` → `scripts/lib/mcp_docker_gateway.sh` |
+| 2 · move | Context7 runs inside every profile (remote, no key). Its host `npx` entry is gone from ai_management. | every profile in `config/docker_mcp_profiles.txt` = `docker-docs context7` |
+| 3 · guard | `before:exec` interceptor. It audits every call as a `traces_record` span (keys only, fails open) and refuses `mcp-add`, `mcp-remove`, `mcp-config-set` and `code-mode` for the master and runner lanes (`MCP_INTERCEPTOR_DENY_LANES`). | `scripts/lib/mcp_interceptor.sh`, contract in `plan/DOCKER_MCP_INTERCEPTOR_SPIKE.md` |
+| 4 · scope | The launcher always adds `--interceptor` and exports the lane it resolved | `scripts/lib/mcp_docker_gateway.sh` (`MYAI_DOCKER_MCP_INTERCEPTOR=0` to opt out) |
+| 6 · fleet (**opt-in**) | With `rollout_mcp_bridge.sh --docker-gateway` (or `MYAI_DOCKER_MCP_FLEET=1`), every repo with a docker-compose file gets the gateway `docker` entry (`templates/mcp-docker-gateway.json`), and its npx Context7 entry is retired. **Off by default**, so the 08:00 boot's rollout, which commits, doesn't roll it out until the operator says so. `verify_fleet_mcp.sh` handshakes the `docker` row. | `scripts/rollout_mcp_bridge.sh`, `scripts/verify_fleet_mcp.sh` |
+
+Lanes are data: `config/docker_mcp_profiles.txt` maps each lane to a profile
+with `lane <lane> <profile>` rows, and a lane with no row gets the `default`
+row. The master lane has its own profile, the runner (`MYAI_RUNNER_FIRE=1`)
+gets `myai_runner`, and worker lanes share the worker profile. The lane comes
+from `MYAI_SESSION_PROFILE`, otherwise from the `CLAUDE_CONFIG_DIR` suffix.
+
+**The fleet entry runs the framework's launcher.** A repo has no launcher of its
+own, and the launcher reads `config/docker_mcp_profiles.txt` relative to itself.
+The entry looks for it in this order: `MYAI_FRAMEWORK_DIR` → `MYAI_HOME` →
+`myai root` → repo `AI/` → global ai-management. **If none has it, the entry falls
+back to the legacy `npx -y docker-mcp` server** (without Context7, which the
+gateway entry retires), and verify reports a WARN. `package.json` `files` now
+includes `config/docker_mcp_profiles.txt`; the launcher scripts already ship
+under `scripts/`. So **after the next npm publish**, `myai root` resolves the
+real gateway with no env set. Until then a session needs `MYAI_FRAMEWORK_DIR`
+pointing at an ai_management checkout. Turn on the fleet opt-in only after that
+publish. The init/update overlay (`templates/mcp-docker.json`, used by
+`lib/mcp_config.sh`) is still the legacy entry.
+
+**Held on host `npx`, with reasons (phase 2 live tests):**
+
+| Server | Why it isn't behind the gateway |
+|---|---|
+| playwright | Inside the gateway's container it can't reach host apps (`localhost:<port>` → `ERR_CONNECTION_REFUSED`, `host.docker.internal` blocked). The operator's standing policy is browser-testing local containers. The image also lacks `browser_emulate_media` and `browser_find`. |
+| github-official | Needs the PAT in `docker mcp secret set github.personal_access_token` (an operator step). Its tools rename `mcp__github__*` → `mcp__docker__*`, so the read-only allow-list in `.claude/settings.json` has to follow. |
+| mongodb, dockerhub (phase 5) | Parked until the operator decides: a read-only Docker Hub token (or drop dockerhub), and which Mongo URI the read-only server uses. |
+
+Under auto mode, tools that moved behind the gateway are named `mcp__docker__<tool>`
+(e.g. `mcp__docker__resolve-library-id`), so they need their own
+`permissions.allow` entries.
+
+### The myAI gateway as a catalog server (optional)
 
 Docker Desktop's MCP Toolkit (`docker mcp`) can manage the connection to this
 gateway instead of hand-editing `.mcp.json`. One-time setup:

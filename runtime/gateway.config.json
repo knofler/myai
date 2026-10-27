@@ -5,7 +5,7 @@
     "host": "0.0.0.0"
   },
   "database": {
-    "uri": "mongodb://admin:password@localhost:27017/myai?authSource=admin",
+    "uri": "mongodb://localhost:27017/myai",
     "name": "myai"
   },
   "aiRoot": "../",

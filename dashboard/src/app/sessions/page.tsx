@@ -10,9 +10,14 @@ export const dynamic = 'force-dynamic';
 export default function SessionsPage() {
   return (
     <div className="max-w-4xl mx-auto">
+      {/* §5.1: the answer first. This shell loads nothing (SessionsManager
+          fetches the device list client-side), so the sentence says what the
+          page is FOR rather than quoting a device count not in scope here. */}
       <PageHeader
+        icon="sessions"
         title="Active Sessions"
-        subtitle="Every device currently signed in to your account. Revoke a session to sign that device out immediately — a password reset also revokes every session automatically."
+        summary="Every device currently signed in to your account. Revoke one to sign that device out immediately."
+        subtitle="A password reset revokes every session automatically."
       />
       <div className="mt-6">
         <IdleTimeoutSettings />

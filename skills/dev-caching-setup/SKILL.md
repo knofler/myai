@@ -76,3 +76,6 @@ description: "Set up a caching layer with strategy selection, middleware, TTLs, 
 - [ ] X-Cache header added for debugging
 - [ ] Cache bypass supported via request header
 - [ ] Monitoring tracks hit/miss ratio
+
+## Related
+- `web-perceived-performance` — the FRONTEND side for Next.js apps: `unstable_cache` over slow upstream reads beneath `force-dynamic` pages, a warm route, idle prefetch and a persisted client cache, applied only where measurements show a gap.

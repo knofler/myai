@@ -1,7 +1,8 @@
 import { loadConfig, setConfig } from '../shared/config.js';
 import { validateAndLog } from '../shared/config-validator.js';
 import { getLogger } from '../shared/logger.js';
-import { connectDB, recordMongoBootFailure, redactMongoUri, DEFAULT_TENANT_ID } from '../shared/db.js';
+import { connectDB, recordMongoBootFailure, clearMongoBootFailure, redactMongoUri, DEFAULT_TENANT_ID } from '../shared/db.js';
+import { startMongoReconnect, stopMongoReconnect } from './db-reconnect.js';
 import { seedReposFromManagedFile, seedReposFromRepoCards } from '../repos/repo-registry.js';
 import { ensureDefaultTenant } from './tenant-keys.js';
 import { ensureBootstrapAdmin } from './user-auth.js';
@@ -71,9 +72,9 @@ export async function bootstrap(configPath?: string): Promise<void> {
     throw new Error('Config validation failed — aborting startup (see logged errors above).');
   }
 
-  // Connect to MongoDB
-  try {
-    await connectDB();
+  // The DB-dependent boot steps, as functions so the background reconnect
+  // (db-reconnect.ts) runs exactly the same ones after a failed boot connect.
+  const seedAfterConnect = async (): Promise<void> => {
     // ADR-010 §5 step 11 — seed the `default` tenant so DEFAULT_TENANT_ID always
     // has a Tenant row (single-operator local use under TENANT_ENFORCE=false).
     // Idempotent: no-op when the row already exists, never overwrites its key.
@@ -91,7 +92,15 @@ export async function bootstrap(configPath?: string): Promise<void> {
     } catch (err) {
       log.warn({ err }, 'Bootstrap-admin seed failed — continuing (loopback access still works)');
     }
+  };
+
+  // Connect to MongoDB
+  let mongoBootFailed = false;
+  try {
+    await connectDB();
+    await seedAfterConnect();
   } catch (err) {
+    mongoBootFailed = true;
     // Loud and specific on purpose (LL 2026-07-04-gateway-ciworkspace-splitbrain /
     // the 2026-07-06 localhost:27017-misdirection incident): a quiet one-line
     // warn with the error discarded is exactly how a misdirected MONGODB_URI
@@ -110,16 +119,19 @@ export async function bootstrap(configPath?: string): Promise<void> {
   // pending migration exactly once, tracked in MigrationRecordModel. No-ops
   // when Mongo didn't connect above. /readyz gates on the result so a deploy
   // never serves traffic mid-migration or after a failed one.
-  try {
-    const migrationStatus = await runMigrations();
-    if (migrationStatus.allApplied) {
-      log.info({ applied: migrationStatus.applied }, 'Startup migrations applied');
-    } else {
-      log.error({ status: migrationStatus }, 'Startup migrations incomplete — /readyz will report not-ready until resolved');
+  const applyStartupMigrations = async (): Promise<void> => {
+    try {
+      const migrationStatus = await runMigrations();
+      if (migrationStatus.allApplied) {
+        log.info({ applied: migrationStatus.applied }, 'Startup migrations applied');
+      } else {
+        log.error({ status: migrationStatus }, 'Startup migrations incomplete — /readyz will report not-ready until resolved');
+      }
+    } catch (err) {
+      log.error({ err }, 'Startup migration runner threw — /readyz will report not-ready until resolved');
     }
-  } catch (err) {
-    log.error({ err }, 'Startup migration runner threw — /readyz will report not-ready until resolved');
-  }
+  };
+  await applyStartupMigrations();
 
   // Load agents and skills from AI root (file → memory)
   loadAgents();
@@ -136,68 +148,91 @@ export async function bootstrap(configPath?: string): Promise<void> {
   loadRules();
   log.info({ rules: getRuleCount() }, 'Rules loaded');
 
-  // Sync everything to MongoDB
-  try {
-    const agentSkillSync = await syncToDatabase();
-    log.info(agentSkillSync, 'Agents/skills synced to MongoDB');
+  // Mirror the in-memory framework (agents, skills, hooks, rules, repos,
+  // patterns) into MongoDB — at boot, and again after a background reconnect.
+  const syncFrameworkToDb = async (): Promise<void> => {
+    // Sync everything to MongoDB
+    try {
+      const agentSkillSync = await syncToDatabase();
+      log.info(agentSkillSync, 'Agents/skills synced to MongoDB');
 
-    const hookSync = await syncHooksToDatabase();
-    log.info({ hooks: hookSync }, 'Hooks synced to MongoDB');
+      const hookSync = await syncHooksToDatabase();
+      log.info({ hooks: hookSync }, 'Hooks synced to MongoDB');
 
-    const ruleSync = await syncRulesToDatabase();
-    log.info({ rules: ruleSync }, 'Rules synced to MongoDB');
-  } catch (err) {
-    log.warn({ err }, 'MongoDB sync failed — serving from memory only');
-  }
-
-  // ADR-021: seed the repos roster (DB) from managed_repos.txt for the default
-  // tenant. Idempotent + insert-only, so it's safe on every boot; non-fatal.
-  try {
-    const repoSeed = await seedReposFromManagedFile(DEFAULT_TENANT_ID);
-    if (repoSeed.seeded > 0) log.info(repoSeed, 'Repos roster seeded from managed_repos.txt');
-  } catch (err) {
-    log.warn({ err }, 'Repos roster seed failed — continuing (txt seed still served via union)');
-  }
-
-  // ADR-021 Phase 2 tail: also seed repocards-only repos (e.g. EXO) that have
-  // no counterpart in managed_repos.txt. Idempotent + insert-only; non-fatal.
-  try {
-    const cardSeed = await seedReposFromRepoCards(DEFAULT_TENANT_ID);
-    if (cardSeed.seeded > 0) log.info(cardSeed, 'Repos roster seeded from repocards (card-only repos)');
-  } catch (err) {
-    log.warn({ err }, 'Repocards roster seed failed — continuing');
-  }
-
-  // Self-heal the Atlas Vector Search index (root cause of the PR #390 empty
-  // recall): create/repair `vector_index` on `vectors` so it survives cluster
-  // rebuilds. No-op on local mongo; non-fatal — the embedded-ANN fallback in
-  // vector-store.ts keeps recall alive either way.
-  try {
-    const vectorIndex = await ensureAtlasVectorSearchIndex();
-    if (vectorIndex.action !== 'ok' && vectorIndex.action !== 'skipped') {
-      log.info(vectorIndex, 'Atlas vector search index ensured');
+      const ruleSync = await syncRulesToDatabase();
+      log.info({ rules: ruleSync }, 'Rules synced to MongoDB');
+    } catch (err) {
+      log.warn({ err }, 'MongoDB sync failed — serving from memory only');
     }
-    // Reliability: alert (Telegram + dashboard bell) when the self-heal keeps
-    // landing on a non-'ok' outcome (created/updated/recreated/failed) across
-    // repeated consecutive boots — a one-time repair is healthy, a repeated
-    // one means something keeps fighting the index definition (e.g. an M0
-    // tier silently dropping it, or replicas racing on createSearchIndex).
-    // Non-fatal; never blocks boot.
-    await checkAtlasIndexHealth(vectorIndex);
-  } catch (err) {
-    log.warn({ err }, 'Atlas vector index ensure threw — continuing on the embedded-ANN fallback');
-  }
 
-  // Migrate SONA patterns from file → MongoDB and index embeddings
-  try {
-    const migration = await migratePatterns();
-    if (migration.migrated > 0) log.info(migration, 'Patterns migrated');
-    const indexing = await indexEmbeddings();
-    if (indexing.indexed > 0) log.info(indexing, 'Pattern embeddings indexed');
-    const asIndexing = await indexAgentSkillEmbeddings();
-    if (asIndexing.indexed > 0) log.info(asIndexing, 'Agent/skill embeddings indexed');
-  } catch (err) {
-    log.warn({ err }, 'Memory migration/indexing failed — continuing without');
+    // ADR-021: seed the repos roster (DB) from managed_repos.txt for the default
+    // tenant. Idempotent + insert-only, so it's safe on every boot; non-fatal.
+    try {
+      const repoSeed = await seedReposFromManagedFile(DEFAULT_TENANT_ID);
+      if (repoSeed.seeded > 0) log.info(repoSeed, 'Repos roster seeded from managed_repos.txt');
+    } catch (err) {
+      log.warn({ err }, 'Repos roster seed failed — continuing (txt seed still served via union)');
+    }
+
+    // ADR-021 Phase 2 tail: also seed repocards-only repos (e.g. EXO) that have
+    // no counterpart in managed_repos.txt. Idempotent + insert-only; non-fatal.
+    try {
+      const cardSeed = await seedReposFromRepoCards(DEFAULT_TENANT_ID);
+      if (cardSeed.seeded > 0) log.info(cardSeed, 'Repos roster seeded from repocards (card-only repos)');
+    } catch (err) {
+      log.warn({ err }, 'Repocards roster seed failed — continuing');
+    }
+
+    // Self-heal the Atlas Vector Search index (root cause of the PR #390 empty
+    // recall): create/repair `vector_index` on `vectors` so it survives cluster
+    // rebuilds. No-op on local mongo; non-fatal — the embedded-ANN fallback in
+    // vector-store.ts keeps recall alive either way.
+    try {
+      const vectorIndex = await ensureAtlasVectorSearchIndex();
+      if (vectorIndex.action !== 'ok' && vectorIndex.action !== 'skipped') {
+        log.info(vectorIndex, 'Atlas vector search index ensured');
+      }
+      // Reliability: alert (Telegram + dashboard bell) when the self-heal keeps
+      // landing on a non-'ok' outcome (created/updated/recreated/failed) across
+      // repeated consecutive boots — a one-time repair is healthy, a repeated
+      // one means something keeps fighting the index definition (e.g. an M0
+      // tier silently dropping it, or replicas racing on createSearchIndex).
+      // Non-fatal; never blocks boot.
+      await checkAtlasIndexHealth(vectorIndex);
+    } catch (err) {
+      log.warn({ err }, 'Atlas vector index ensure threw — continuing on the embedded-ANN fallback');
+    }
+
+    // Migrate SONA patterns from file → MongoDB and index embeddings
+    try {
+      const migration = await migratePatterns();
+      if (migration.migrated > 0) log.info(migration, 'Patterns migrated');
+      const indexing = await indexEmbeddings();
+      if (indexing.indexed > 0) log.info(indexing, 'Pattern embeddings indexed');
+      const asIndexing = await indexAgentSkillEmbeddings();
+      if (asIndexing.indexed > 0) log.info(asIndexing, 'Agent/skill embeddings indexed');
+    } catch (err) {
+      log.warn({ err }, 'Memory migration/indexing failed — continuing without');
+    }
+  };
+  await syncFrameworkToDb();
+
+  // A failed boot connect is retried in the background (capped exponential
+  // backoff, every attempt logged). On success the same DB-dependent steps run,
+  // so /readyz — the Docker healthcheck — turns healthy without a restart.
+  if (mongoBootFailed) {
+    log.warn('MongoDB unreachable at boot — starting background reconnect');
+    void startMongoReconnect({
+      connect: connectDB,
+      onAttemptFailed: (err) => recordMongoBootFailure(err, config.database.uri),
+      onConnected: async () => {
+        clearMongoBootFailure();
+        await seedAfterConnect();
+        await applyStartupMigrations();
+        await syncFrameworkToDb();
+      },
+      log,
+    });
   }
 
   // Index master repo state files into vectors (non-blocking)
@@ -213,6 +248,7 @@ export async function bootstrap(configPath?: string): Promise<void> {
   const app = createHttpServer();
   startHttpServer(app, async (signal) => {
     log.info('HTTP server drained — stopping background workers...');
+    stopMongoReconnect();
     stopScheduler();
     stopHealthAlerts();
     stopSloAlerts();

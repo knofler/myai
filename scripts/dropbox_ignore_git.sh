@@ -25,7 +25,7 @@ set +e
 #   Marking .git `com.dropbox.ignored=1` removes it from dropbox.com as a
 #   sync-config change (NOT a user delete → no rewind point on Dropbox's side),
 #   and therefore Dropbox will delete .git from EVERY OTHER machine that syncs
-#   this folder (e.g. work-desktop). Working files are unaffected — they sync
+#   this folder (e.g. another Mac). Working files are unaffected — they sync
 #   separately. Recovery on the other machine is a re-clone from origin, or
 #   restore from the backup tarball this script can write.
 #   Correct fleet rollout order:
@@ -195,7 +195,7 @@ for ROOT in "${ROOTS[@]}"; do
       echo ""
       echo "⚠️  APPLYING com.dropbox.ignored to .git dirs is DESTRUCTIVE across machines:"
       echo "    Dropbox will DELETE .git from every OTHER machine syncing these folders"
-      echo "    (e.g. work-desktop). Working files are unaffected. Recover there by re-cloning"
+      echo "    (e.g. another Mac). Working files are unaffected. Recover there by re-cloning"
       echo "    from origin or restoring the ~/.git-backups tarball. Ensure all machines"
       echo "    pushed first; apply here → re-clone/restore on the other → apply there."
       echo ""

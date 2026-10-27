@@ -194,7 +194,7 @@ export default function BillingManager() {
                 </span>
               )}
               {disc && (
-                <span className="rounded bg-emerald-400/20 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-300">
+                <span className="rounded bg-emerald-400/20 px-1.5 py-0.5 text-label font-semibold text-emerald-300">
                   {disc}
                 </span>
               )}

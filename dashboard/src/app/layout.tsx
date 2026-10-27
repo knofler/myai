@@ -4,12 +4,14 @@ import { getLocale, getMessages } from 'next-intl/server';
 import { AppShell } from '@/components/app-shell';
 import { CookieConsent } from '@/components/cookie-consent';
 import { DemoBanner } from '@/components/demo-banner';
+import { DemoGuide } from '@/components/demo-guide';
 import { IdleTimeoutGuard } from '@/components/idle-timeout-guard';
 import { ImpersonationBanner } from '@/components/impersonation-banner';
 import { ServiceWorkerRegister } from '@/components/sw-register';
 import { TenantProvider } from '@/lib/tenant-context';
 import { TenantCookieSync } from '@/components/tenant-cookie-sync';
 import { ThemeProvider } from '@/lib/theme-context';
+import { BRAND_THEME_COLOR } from '@/lib/theme';
 import './globals.css';
 
 // Applies the resolved theme class before first paint so there's no
@@ -51,8 +53,14 @@ export const metadata: Metadata = {
     title: 'myAI',
   },
   icons: {
+    // ORDER MATTERS. favicon.svg is the REDUCED cut (title bar + big >_, no
+    // output lines) and is declared first so the browser tab gets it: measured
+    // at 16x16, icon.svg's nine output bars and three small dots collapse into
+    // grey mush. icon.svg stays the full-detail master — it feeds the 192/512
+    // PNGs and the apple-touch icon, where the detail reads properly.
     icon: [
-      { url: '/icon.svg', type: 'image/svg+xml' },
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/icon-32.png', sizes: '32x32', type: 'image/png' },
       { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
       { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
     ],
@@ -61,7 +69,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#cc4426',
+  themeColor: BRAND_THEME_COLOR,
   width: 'device-width',
   initialScale: 1,
   viewportFit: 'cover',
@@ -86,6 +94,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               <IdleTimeoutGuard />
               <AppShell>{children}</AppShell>
               <DemoBanner />
+              <DemoGuide />
               <ImpersonationBanner />
               <CookieConsent />
             </ThemeProvider>

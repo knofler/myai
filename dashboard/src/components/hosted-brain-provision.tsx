@@ -24,7 +24,7 @@ function CopyField({ label, value }: { label: string; value: string }) {
 
   return (
     <div>
-      <p className="text-[10px] uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1">{label}</p>
+      <p className="text-label uppercase tracking-wider text-[rgb(var(--text-muted))] mb-1">{label}</p>
       <div className="flex items-center gap-2">
         <code className="flex-1 select-all break-all rounded bg-black/50 px-3 py-2 font-mono text-xs text-emerald-200">
           {value}
@@ -98,7 +98,7 @@ export function HostedBrainProvision({ provisioned }: { provisioned: boolean }) 
         </div>
       )}
 
-      {error && <p className="text-xs text-rose-400">{error}</p>}
+      {error && <p role="alert" className="text-xs text-rose-400">{error}</p>}
 
       <div className="flex flex-wrap gap-2">
         <button

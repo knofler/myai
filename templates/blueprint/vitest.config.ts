@@ -13,7 +13,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
-      // Blueprint quality bar: 60% baseline (POWERHOUSE_BLUEPRINT.md §3).
+      // Blueprint quality bar: 60% baseline coverage.
       thresholds: {
         lines: 60,
         functions: 60,

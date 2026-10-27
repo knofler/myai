@@ -16,10 +16,13 @@ import { recordJobHistory, searchJobHistory, JOB_HISTORY_STATUSES } from '../tas
 import type { JobHistoryStatus } from '../shared/db.js';
 import { runInlineCycle, inlineQuotaUsage, INLINE_OPERATIONS } from '../tasks/inline-executor.js';
 import { acquireLease, heartbeatLease, releaseLease, listLeases, listLeaseHistory } from '../tasks/runner-lease-store.js';
-import { getBacklogCursor, setBacklogCursor } from '../tasks/runner-backlog-cursor-store.js';
+import { acquireKeyedLease, heartbeatKeyedLease, releaseKeyedLease, listKeyedLeases, KeyedLeaseValidationError } from '../tasks/keyed-lease-store.js';
+import { recordAccountUsage, getAccountUsageStatus, AccountUsageValidationError } from '../tasks/account-usage-store.js';
+import { getBacklogCursor, setBacklogCursor, getConfirmedTitles, addConfirmedTitles } from '../tasks/runner-backlog-cursor-store.js';
 import { recordHeartbeat, getRunnerLiveness } from '../tasks/runner-heartbeat-store.js';
+import { getWorkerLaneStatus } from '../tasks/worker-lane-status.js';
 import { enterFleetMaintenance, exitFleetMaintenance, getFleetMaintenanceStatus } from '../tasks/fleet-maintenance-store.js';
-import { listRepoPaths, listReposUnified, getRepoStatus, prioritizeRepos, scanDirectory } from '../repos/repo-registry.js';
+import { listRepoPaths, listReposUnified, listTenantRoster, getRepoStatus, prioritizeRepos, scanDirectory } from '../repos/repo-registry.js';
 import { upsertRepo } from '../repos/repo-store.js';
 import {
   buildCodeGraph, computePrImpact, resolveChangedFiles, triagePrs,
@@ -42,7 +45,8 @@ import {
 import type { ConnectorTransport } from '../repos/connector-bundle.js';
 import { setPlan, listPlanPage } from '../repos/plan-store.js';
 import type { PlanDayInput } from '../repos/plan-store.js';
-import { writeHandoff, readHandoff, listLatestHandoffs } from '../repos/handoff-store.js';
+import { writeHandoff, listLatestHandoffs } from '../repos/handoff-store.js';
+import { brainHeadline, readHandoffReconciled, toStamp, waitForFreshSecond } from '../repos/handoff-reconcile.js';
 import { exportSession, importSession, recallSessionContext } from '../core/session-manager.js';
 import type { SessionExport } from '../core/session-manager.js';
 import { buildBootBundle } from './context-bundle.js';
@@ -84,6 +88,13 @@ import { route as routeLlm, getRoutingConfig } from '../llm/router.js';
 import { isConnected, getDbFailoverState } from '../shared/db.js';
 import type { ArtifactKind, IVector, ScheduleKind, ScheduleStatus, TaskPriority, TaskSource, TaskStatus, TrashKind } from '../shared/db.js';
 import { sendNotification, getNotificationHistory } from '../notifications/notifier.js';
+import { sendMail, inboxFor, ackMail } from '../notifications/mailbox-store.js';
+import { planSwarm, approveSwarm, stopSwarm, getSwarm, listSwarms, updateSwarmBudget } from '../tasks/swarm-store.js';
+import type { SwarmChildInput } from '../tasks/swarm-store.js';
+import { buildSwarmLive } from '../swarm/live-aggregate.js';
+import { runSwarmAction } from '../swarm/operator-actions.js';
+import { delegateWork, claimMailAsTask, completeMailTask } from '../tasks/delegate-store.js';
+import type { DelegateInput } from '../tasks/delegate-store.js';
 import { runHealthCheck, getLatestHealthCheckResult, getHealthAlertStatus } from '../monitoring/health-alerter.js';
 import { recordContextServed, getContinuityStats, getUserSavings, estimateLegacyBootTokens } from '../monitoring/continuity-metrics.js';
 import { recordActivation, getActivationFunnel, getActivationRollup, getSelfServeConversion, getHostedBrainConversion } from '../monitoring/activation-funnel.js';
@@ -95,7 +106,7 @@ import { recordSpan, getSpans, getTraceIds, type SpanService, type SpanStatus } 
 import { recordLog, getLogs, type LogService, type LogLevel } from '../monitoring/log-store.js';
 import { performance } from 'node:perf_hooks';
 import { type ToolContext, SYSTEM_CONTEXT, AuthError, stripTenantFromArgs } from '../core/tenant-context.js';
-import { assertDeclaredCapability, assertToolCapability, assertToolVisibility } from '../core/rbac.js';
+import { assertDeclaredCapability, assertToolCapability, assertToolVisibility, assertCapability, ctxHasCapability } from '../core/rbac.js';
 import { verdictFor, tenantRepos, EntitlementError } from '../core/entitlements.js';
 import { loadEntitlementSnapshot } from '../core/entitlement-service.js';
 import { auditActorFromCtx } from '../core/audit-log.js';
@@ -122,6 +133,8 @@ import type { NamespaceGrantLevel } from '../core/namespace-share.js';
 import { publishSubmission } from '../marketplace/publish.js';
 import { searchListings, installListing } from '../marketplace/marketplace-store.js';
 import { registerPluginTool, listPluginTools, removePluginTool } from './plugin-tools.js';
+import { scheduleTargetAllowed, scheduleToolName } from '../scheduler/schedule-auth.js';
+import { assertTenantRepoPath } from '../repos/tenant-repo-path.js';
 
 const log = createChildLogger({ module: 'mcp-tools' });
 
@@ -271,6 +284,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'], description: 'Priority (default P2)' },
         assignedAgent: { type: 'string', description: 'Specialist agent to assign (optional)' },
         recommendedModel: { type: 'string', description: 'Recommended model for this task, e.g. claude-fable-5, claude-sonnet-4-6 (optional)' },
+        recommendedModelPreference: { type: 'boolean', description: 'true: recommendedModel is a demotable PREFERENCE (e.g. backlog/queue_topup auto-seeding) the runner policy may demote to the free local tier for mechanical docs/summarize/triage work. Omit/false: an absolute pin, always honored (default, unchanged behavior) — task-972913b7.' },
         source: { type: 'string', enum: ['manual', 'connect-hub', 'auto-detected', 'scheduler', 'telegram'], description: 'Where it originated (default: manual)' },
         sourceId: { type: 'string', description: 'External ref ID (e.g. bug-123)' },
         notes: { type: 'string', description: 'Additional notes (optional)' },
@@ -291,10 +305,11 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
         assignedAgent: { type: 'string' },
         recommendedModel: { type: 'string' },
+        recommendedModelPreference: { type: 'boolean', description: 'See tasks_create — true marks recommendedModel demotable, not an absolute pin.' },
         prUrl: { type: 'string' },
         notes: { type: 'string' },
         telegramMessageId: { type: 'number' },
-        routedProfile: { type: 'string', description: 'Router audit trail: the capacity pool the runner actually routed this task to (e.g. claude-tech, claude-fable), stamped at claim time' },
+        routedProfile: { type: 'string', description: 'Router audit trail: the capacity pool the runner actually routed this task to (e.g. claude-work, claude-fable), stamped at claim time' },
         routedModel: { type: 'string', description: 'Router audit trail: the model the runner actually routed this task to (e.g. claude-sonnet-5, claude-opus-4-8), stamped at claim time' },
         routedComplexity: { type: 'string', description: 'Router audit trail: the route_complexity classification (trivial|standard|complex) used for this task, stamped at claim time' },
         executionLane: { type: 'string', enum: ['claude', 'agentic-fallback'], description: 'Which backend actually executed this run — the normal Claude CLI chain, or the non-Claude agentic FALLBACK lane (DeepSeek/Kimi, scripts/lib/openai_agent.py). Stamped by the runner at review close-off, once settled.' },
@@ -305,7 +320,11 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         supersededBy: { type: 'string', description: 'Explicit supersession record: taskId of the task that replaces this one. Authorizes a pending→blocked transition past the bulk-block guard threshold.' },
         operatorAuthorized: { type: 'boolean', description: 'Explicit human-consented authorization for a bulk block, in lieu of supersededBy. Never set true from an automated caller.' },
         routeExhausted: { type: 'boolean', description: 'Set true alongside status:pending by route_task_model\'s exhaustion-defer branch (every pool out of headroom for this claimed task). Tracked as a CONSECUTIVE-defer counter (monitoring/task-defer-alerter.ts) that fires its own starvation alert past a threshold; set false (or omit) on a normal working re-stamp to reset the streak.' },
+        noopDispatch: { type: 'boolean', description: 'RUNNER: repeat-dispatch WARN — set true alongside a review-flip when the commits this fire pushed touched only docs/state paths (no real code change). Tracked as a CONSECUTIVE no-op-dispatch counter (monitoring/task-noop-dispatch-alerter.ts) that WARNs in the runner log past a threshold; set false (or omit) when this fire\'s commits touched real code, resetting the streak.' },
+        pacingDefer: { type: 'boolean', description: 'RUNNER: set true alongside status:pending when a POST-CLAIM pacing/routing gate releases a claimed task back to the queue BEFORE it ever routed (reserve-floor restriction on a non-trivial pick, predictive budget gate). Bumps pacingDeferCount so the claim→release churn is queryable (task-d85ea318, the 24:1 claims-vs-executions ratio). Pair with deferSeconds to back off the re-claim. Reset by a normal working re-stamp.' },
+        deferSeconds: { type: 'number', description: 'RUNNER: when releasing a claimed task back to status:pending for a pacing/routing reason, push nextRetryAt out this many seconds so the SAME head-of-queue task is not re-claimed on the very next fire (the loop behind the churn). Only honoured with status:pending; clamped to [0, 6h].' },
         dependsOn: { type: 'array', items: { type: 'string' }, description: 'REPLACE the task\'s upstream dependency list (DAG scheduling). Validated: upstreams must exist and the edit must not create a cycle (rejected otherwise). Empty array clears all dependencies — the operator escape hatch for a broken graph.' },
+        outputTokens: { type: 'number', description: 'This fire\'s actual output-token spend (e.g. cli_task_runner.sh\'s SESS_TOK/AC_TOK session-token delta). Added onto the task\'s running outputTokens total. When the task carries a swarmId, the same delta is applied to the owning swarm\'s cumulative spend and checked against guardrails.checkTokenBudget — meeting the budget pauses the whole swarm and mails the operator (SWARM_MESSAGING P5).' },
       },
       required: ['taskId'],
     },
@@ -322,7 +341,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   },
   {
     name: 'tasks_claim',
-    description: 'Atomically claim the highest-priority pending task (P0 first, then oldest), flipping it pending→working in a single findOneAndUpdate. Cross-machine safe: when two runners fire concurrently against the same queue, exactly one wins each task — no double-pick. Sets claimedBy/claimedAt/leaseUntil for stale-runner reclaim. DAG scheduling: a task with dependsOn is skipped until every upstream task is status done — this applies to explicit taskId claims too (dependency order is correctness, not pacing). Returns the claimed task, or {claimed:false} when nothing is claimable. Use this from the runner instead of tasks_list + tasks_update.',
+    description: 'Atomically claim the highest-priority pending task (P0 first, then oldest), flipping it pending→working in a single findOneAndUpdate. Cross-machine safe: when two runners fire concurrently against the same queue, exactly one wins each task — no double-pick. Sets claimedBy/claimedAt/leaseUntil for stale-runner reclaim. DAG scheduling: a task with dependsOn is skipped until every upstream task is status done — this applies to explicit taskId claims too (dependency order is correctness, not pacing). Host-aware claiming (task-972913b7): pass localModels (this host\'s installed Ollama models, e.g. from config/runner_lanes.txt) and a task pinned to a local-lane recommendedModel ("name:tag", e.g. "qwen3-coder:30b") this host lacks is skipped too, same correctness-gate treatment as dependsOn — left pending for a host that does have it. Omit localModels entirely on an older/undeclared caller to never filter. Returns the claimed task, or {claimed:false} when nothing is claimable. Use this from the runner instead of tasks_list + tasks_update.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -331,6 +350,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         repo: { type: 'string', description: 'Restrict the claim to one repo (optional)' },
         ignoreRepos: { type: 'array', items: { type: 'string' }, description: 'Repos to exclude from the claim (no-autonomous-schedule consent list)' },
         leaseSeconds: { type: 'number', description: 'Lease TTL in seconds (default 3600); a working task past leaseUntil is reclaimable' },
+        localModels: { type: 'array', items: { type: 'string' }, description: 'This runner host\'s installed local Ollama models (task-972913b7 host-aware claiming); a pending task pinned to a local model id not in this list is skipped' },
       },
       required: ['claimedBy'],
     },
@@ -406,6 +426,242 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
         stopOnError: { type: 'boolean', description: 'Halt at the first failed op; remaining ops report code SKIPPED (default false — partial application)' },
       },
       required: ['operations'],
+    },
+  },
+  // ── MAILBOX (durable swarm messaging — SWARM_MESSAGING P1) ──
+  {
+    name: 'mail_send',
+    description: 'Send a DURABLE, ADDRESSED message into the fleet mailbox — the path that never loses anything when the recipient is asleep (unlike live SendMessage/SSE, which only work while both ends are online). Addresses are resolved by convention, not a registry: `host` (e.g. "host-a"), `host/repo` (e.g. "host-a/my-repo"), `repo` (e.g. "my-repo"), or `role` (e.g. "reviewer"); to/from are lowercase-normalised so a hostname\'s casing never strands mail. The message waits unacked until a recipient reads it (mail_inbox) and acks it (mail_ack). ADDITIVE to the notifications event-bus: also emits a `message.received` event so an open dashboard sees the live toast + history row. Use to hand work across Macs/sessions ("home-mac: continue X") or to exchange notes inside a swarm (swarmId).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'Recipient address: host | host/repo | repo | role (lowercase-normalised)' },
+        from: { type: 'string', description: 'Sender address, same forms as `to`' },
+        kind: { type: 'string', description: 'Free label: note | request | live-note | swarm (default "note")' },
+        subject: { type: 'string', description: 'Short subject line' },
+        body: { type: 'string', description: 'Message body (optional)' },
+        replyTo: { type: 'string', description: 'messageId this replies to (threading)' },
+        swarmId: { type: 'string', description: 'Groups mail exchanged inside one swarm (P2 consumes this)' },
+      },
+      required: ['to', 'from', 'subject'],
+    },
+  },
+  {
+    name: 'mail_inbox',
+    description: 'Read the mailbox for one or more addresses — UNREAD (unacked) messages only by default, newest first. Pass `to` as a single address or the full set of addresses this session answers to (its host, host/repo, repo, and role) to drain everything addressed to it in one call. Returns {messages, unreadCount}; unreadCount is the total unacked for the address set regardless of limit (the number the session-start banner shows). Set includeAcked:true to also see already-handled mail. This is a READ — it does not ack; call mail_ack when the message is handled.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }], description: 'One address, or the set of addresses the caller answers to (host, host/repo, repo, role)' },
+        includeAcked: { type: 'boolean', description: 'Include already-acked mail too (default false → unread only)' },
+        limit: { type: 'number', description: 'Max messages to return (default 50, max 200)' },
+      },
+      required: ['to'],
+    },
+  },
+  {
+    name: 'mail_ack',
+    description: 'Acknowledge (mark read/handled) one mailbox message by id, so it stops showing as unread in mail_inbox and the session-start banner. Idempotent — acking an already-acked message is a no-op that returns its current state. Returns the updated message, or an error if no message with that id exists for this tenant.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The messageId (mail-…) to acknowledge' },
+        ackedBy: { type: 'string', description: 'Who acked it, for the audit trail (optional, e.g. "host-a/my-repo")' },
+      },
+      required: ['id'],
+    },
+  },
+  // ── SWARMS (grouped tasks behind one approval — SWARM_MESSAGING P2) ──
+  {
+    name: 'swarm_plan',
+    description: 'Plan a SWARM: one goal split into up to 5 child tasks (cap: SWARM_CHILD_CAP) for one repo, created PAUSED so nothing runs until the operator calls swarm_approve. Children are ordinary tasks stamped with the returned swarmId; a child may wait on EARLIER children via dependsOnIndexes (0-based), which become real dependsOn edges — the runner already defers a child until its upstreams are done. REFUSED for repos on config/schedule_ignore.txt unless consent:true is passed for this call. Returns {swarm, children}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'Repo every child runs in (task-store repo name, e.g. "ai_management")' },
+        goal: { type: 'string', description: 'The one goal the swarm delivers' },
+        createdBy: { type: 'string', description: 'Who planned it (address: host | host/repo | role) — mailed if the swarm is stopped' },
+        children: {
+          type: 'array',
+          description: 'Child tasks in plan order (1..cap)',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              description: { type: 'string' },
+              assignedAgent: { type: 'string' },
+              recommendedModel: { type: 'string' },
+              priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+              dependsOnIndexes: { type: 'array', items: { type: 'number' }, description: 'Indexes of EARLIER children this one waits on' },
+            },
+            required: ['title'],
+          },
+        },
+        childCap: { type: 'number', description: 'Lower the cap for this swarm (never above the configured cap)' },
+        parentTaskId: { type: 'string', description: 'Optional coordinator task every child hangs off' },
+        consent: { type: 'boolean', description: 'Explicit operator consent for a repo on schedule_ignore.txt (this call only)' },
+        notes: { type: 'string' },
+      },
+      required: ['repo', 'goal', 'createdBy', 'children'],
+    },
+  },
+  {
+    name: 'swarm_approve',
+    description: 'Approve a paused swarm (or resume a stopped one): every PAUSED child flips to pending and becomes claimable by any runner; children whose upstreams are not done yet stay deferred by the claim gate. The swarm goes active and is marked done on read once every child is done/review. Returns {swarm, children, approved}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        swarmId: { type: 'string', description: 'The swarm-… id from swarm_plan' },
+        approvedBy: { type: 'string', description: 'Who approved (audit trail)' },
+      },
+      required: ['swarmId'],
+    },
+  },
+  {
+    name: 'swarm_stop',
+    description: 'KILL SWITCH for a swarm: every open child (pending or working) flips to paused and the swarm goes stopped. A working child\'s live session is not killed — it finishes its current fire and then cannot be re-claimed. Done/review/blocked children are untouched. Mails every participant (each child\'s agent) and the swarm\'s creator via the durable mailbox. Re-approve with swarm_approve to resume. Returns {swarm, children, paused, mailed}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        swarmId: { type: 'string', description: 'The swarm-… id to stop' },
+        stoppedBy: { type: 'string', description: 'Who stopped it (default "operator")' },
+        reason: { type: 'string', description: 'Included in the mail to participants' },
+      },
+      required: ['swarmId'],
+    },
+  },
+  {
+    name: 'swarm_list',
+    description: 'List this tenant\'s swarms, newest first — swarm rows only (goal, repo, status planning|paused|active|stopped|done, childCount, childCap, token budget/spend, who planned/approved/stopped it). Filter by status and/or repo. Call swarm_get for one swarm\'s children. This is the read the /swarm dashboard renders.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['planning', 'paused', 'active', 'stopped', 'done'], description: 'Only swarms in this state (optional)' },
+        repo: { type: 'string', description: 'Only swarms for this repo (optional)' },
+        limit: { type: 'number', description: 'Max swarms (default 50, max 200)' },
+      },
+    },
+  },
+  {
+    name: 'swarm_live',
+    description: 'READ-ONLY live snapshot of the running swarm for the dashboard Control Room: coordinator lease(s), every lane per host with a derived state (busy = holds a claim, idle = fresh lane:<host>:<lane> presence or coordinator lease, unknown = nothing heartbeats it — never guessed), file claims, tenant-wide mail (unread + last 20), PRs (from the host-written state/swarm/prs.json snapshot — default tenant only; prsSource says snapshot|unavailable and whether it is stale), and today\'s (Australia/Sydney) work/merge/mail/claim events for the hourly timeline. Same payload as GET /api/swarm/live.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        host: { type: 'string', description: 'Report this host\'s coordinator lease as `coordinator` (optional; default = the freshest heartbeat)' },
+      },
+    },
+  },
+  {
+    name: 'swarm_action',
+    description: 'Operator write from the dashboard Control Room, one verb per call, every attempt audited (`swarm.action`, actor from the server context): tell {to:"<host>/<lane>", message} mails a lane (live-note, from dashboard/operator); ack {messageId}; release_claim {key:"claim:…", holder} frees a file claim; handoff {key:"swarm-coordinator:<host>", holder, reason, confirm:true} steps a coordinator down; stop_swarm {swarmId, reason?, confirm:true} is the kill switch. Releases are holder-scoped (no force): if another session took the lease since, nothing is deleted. The released holder is mailed. Returns {ok:true, verb, target, result} or {ok:false, code: INVALID|CONFIRM_REQUIRED|NOT_FOUND|FAILED, error}. No merge verb — merges go through the ship lock.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        verb: { type: 'string', enum: ['tell', 'ack', 'release_claim', 'handoff', 'stop_swarm'] },
+        operator: { type: 'string', description: 'The signed-in operator name (recorded in the audit detail)' },
+        to: { type: 'string', description: 'tell: lane address "<host>/<lane>"' },
+        message: { type: 'string', description: 'tell: the message (max 2000 chars)' },
+        messageId: { type: 'string', description: 'ack: the mail-… id' },
+        key: { type: 'string', description: 'release_claim / handoff: the lease key' },
+        holder: { type: 'string', description: 'release_claim / handoff: the holder shown ("<host>/<lane>/<pid>")' },
+        swarmId: { type: 'string', description: 'stop_swarm: the swarm-… id' },
+        reason: { type: 'string', description: 'Why — mailed to the lane, recorded in the audit row' },
+        confirm: { type: 'boolean', description: 'handoff / stop_swarm: must be true' },
+      },
+      required: ['verb'],
+    },
+  },
+  {
+    name: 'swarm_get',
+    description: 'One swarm with its children in plan order: each child\'s taskId, title, raw task status plus a displayStatus (paused|pending|running|done|blocked — the /swarm vocabulary), agent, priority, dependsOn edges (upstream taskIds), claimedBy and prUrl. An active swarm whose children are all done/review is marked done on this read. Returns {swarm, children}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        swarmId: { type: 'string', description: 'The swarm-… id' },
+      },
+      required: ['swarmId'],
+    },
+  },
+  {
+    name: 'swarm_update_budget',
+    description: 'Set a swarm\'s output-token BUDGET — the P5 slow-burn guardrail ceiling that pauses the whole swarm once cumulative child spend meets it. Use it to RAISE the budget on a swarm the token-budget guard already paused (bump the ceiling, then swarm_approve to resume), or to tighten one mid-flight. tokenBudget must be a positive number (floored to an integer). Tenant-scoped: an unknown swarm returns an error. Returns {swarm, children}.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        swarmId: { type: 'string', description: 'The swarm-… id' },
+        tokenBudget: { type: 'number', description: 'New output-token budget (positive integer)' },
+        by: { type: 'string', description: 'Who changed it (audit trail; default "operator")' },
+      },
+      required: ['swarmId', 'tokenBudget'],
+    },
+  },
+  // ── AGENT DISPATCH (director hands off work — AGENT_MESSAGING_DISPATCH) ──
+  {
+    name: 'dispatch_delegate',
+    description: 'The DISPATCH verb: one call for a director session to hand off work and get a handle back immediately — it never does the work itself. Routes by size/shape: >1 `children` (or mode:"swarm") plans a SWARM (swarm_plan, still paused pending operator approval — unchanged guardrail); mode:"mail" (or auto with `to` and no `repo`) sends a durable `kind:request` ask to a peer session/role; otherwise creates ONE claimable task addressed to `to`/`assignedAgent`. Returns {mode, swarmId|taskId|messageId, ...}. Use this instead of hand-rolling swarm_plan/createTask/mail_send from the director.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'The director\'s own address (host | host/repo | role) — where result/failure mail comes back to' },
+        work: { type: 'string', description: 'What the work is — becomes the task title / swarm goal / mail subject' },
+        description: { type: 'string', description: 'Longer detail (task description / mail body)' },
+        repo: { type: 'string', description: 'Repo for a task or swarm delegation' },
+        mode: { type: 'string', enum: ['auto', 'swarm', 'task', 'mail'], description: 'Explicit routing; default "auto"' },
+        to: { type: 'string', description: 'Recipient address for a task or mail delegation (host | host/repo | repo | role)' },
+        assignedAgent: { type: 'string' },
+        recommendedModel: { type: 'string' },
+        priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+        children: {
+          type: 'array',
+          description: 'For mode:"swarm" (or auto with >1 entry): child tasks in plan order',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              description: { type: 'string' },
+              assignedAgent: { type: 'string' },
+              recommendedModel: { type: 'string' },
+              priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+              dependsOnIndexes: { type: 'array', items: { type: 'number' } },
+            },
+            required: ['title'],
+          },
+        },
+        childCap: { type: 'number' },
+        consent: { type: 'boolean', description: 'Explicit operator consent for a schedule_ignore.txt repo (swarm path only)' },
+      },
+      required: ['from', 'work'],
+    },
+  },
+  {
+    name: 'mail_claim_as_task',
+    description: 'WORKER poll: drain one worker address\'s inbox and turn actionable mail (`kind:"request"`) into tasks already claimed by that worker — the mail-to-task half of agent-to-agent dispatch ("a runner asks local Ollama to summarise logs"). REFUSED for a director address (the live swarm-coordinator lane, else MYAI_DIRECTOR_LANES, else `default`; also its `claude-<lane>` profile name and the `director` role) — a director never auto-claims (director-only guardrail). Skips self-addressed mail (from === to) and caps conversions per call (default 5, max 20) as flood/loop protection. The mailbox claim is atomic, so two pollers answering the same address can never double-convert one message. Returns the list of {messageId, taskId, from, replyTo, subject} actually converted (empty if nothing actionable or everything lost the race).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        address: { type: 'string', description: 'The worker address to drain (host | host/repo | repo | role)' },
+        defaultRepo: { type: 'string', description: 'Repo to file the converted task under' },
+        claimedBy: { type: 'string', description: 'Holder identity claiming the task, e.g. "host-a/codex"' },
+        maxPerPoll: { type: 'number', description: 'Max mail converted this call (default 5, max 20)' },
+      },
+      required: ['address', 'defaultRepo', 'claimedBy'],
+    },
+  },
+  {
+    name: 'mail_task_result',
+    description: 'WORKER result: reply to a mail-derived task\'s original requester with `kind:"result"` (outcome + links) once the task is done or failed — the other half of agent-to-agent dispatch, and how the director hears back (sendMail\'s existing additive `message.received` event already reaches the push pipeline, so no separate notification call is needed). Looks up the `mail:<id> replyTo:<addr>` linkage mail_claim_as_task stamped into the task\'s notes; a no-op (returns {sent:false}) for an ordinary task that was never mail-derived, so callers can call this unconditionally at task close without checking first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'The mail-derived task that just finished' },
+        taskNotes: { type: 'string', description: 'That task\'s current `notes` field (read it via tasks_get/listTasks first — carries the mail linkage)' },
+        outcome: { type: 'string', enum: ['done', 'failed'] },
+        summary: { type: 'string', description: 'What happened, for the requester' },
+        links: { type: 'array', items: { type: 'string' }, description: 'PR / commit / log links' },
+        from: { type: 'string', description: 'This worker\'s own address (the result mail\'s `from`)' },
+      },
+      required: ['taskId', 'taskNotes', 'outcome', 'summary', 'from'],
     },
   },
   // ── DISTRIBUTED TRACING (gateway→runner→agent spans) ──────
@@ -545,7 +801,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       properties: {
         holder: { type: 'string', description: 'Runner identity, e.g. "runner-host/12345" (hostname/pid)' },
         machine: { type: 'string', description: 'Hostname, for fleet visibility (optional)' },
-        account: { type: 'string', description: 'Claude account/profile bound to this run, e.g. "claude-tech" (optional)' },
+        account: { type: 'string', description: 'Claude account/profile bound to this run, e.g. "claude-work" (optional)' },
         taskId: { type: 'string', description: 'Task being worked under this lease (optional, visibility)' },
         slots: { type: 'number', description: 'Slot-pool size override (default 2 = active accounts)' },
         leaseSeconds: { type: 'number', description: 'Lease TTL in seconds (default 3600 — covers the 45-min session cap with margin)' },
@@ -597,8 +853,63 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       type: 'object',
       properties: {
         limit: { type: 'number', description: 'Max rows to return, newest first (default 50, max 500)' },
-        account: { type: 'string', description: 'Filter to one Claude account/profile, e.g. "claude-tech"' },
+        account: { type: 'string', description: 'Filter to one Claude account/profile, e.g. "claude-work"' },
         slot: { type: 'number', description: 'Filter to one slot index' },
+      },
+    },
+  },
+  // ── KEYED LEASES (SWARM_COORDINATOR_PLAN phase 1) — named leases for
+  // coordinator election + resource claims. NOT the runner_lease_* slot pool. ──
+  {
+    name: 'lease_acquire',
+    description: 'Acquire a KEYED lease — a named, tenant-scoped lock for coordinator election (key "swarm-coordinator:<host>") or a resource claim (key "claim:<repo>:<path>"). Distinct from runner_lease_* (the runner\'s fixed N-slot concurrency pool): keyed leases never consume runner slots. Inserts when the key is free, atomically takes over a stale lease, and is idempotent for the same holder string (extends it). Expiry is judged by Mongo SERVER time, so gateways with skewed clocks agree. `holder` must be "<host>/<lane>/<pid>" — the pid makes idempotency per process, so a restarted session cannot inherit its dead predecessor\'s lease. Returns {acquired:true, lease:{…, epoch}, tookOverFrom?} or {acquired:false, heldBy}. HOLD the returned `lease.epoch` (fencing token: 1 on insert, +1 on every takeover) and pass it to lease_heartbeat / lease_release. Do not act as holder unless acquired is true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Lease name, 1-200 chars, no whitespace, e.g. "swarm-coordinator:host-a" or "claim:my-repo:src/app.ts"' },
+        holder: { type: 'string', description: 'Process identity "<host>/<lane>/<pid>", e.g. "host-a/lead/4242" (>=2 non-empty "/"-separated segments, 3-200 chars, no whitespace)' },
+        leaseSeconds: { type: 'number', description: 'Lease TTL in seconds (default 600, clamped 30-86400). Heartbeat before it lapses.' },
+        meta: { type: 'object', description: 'Small visibility metadata, e.g. {lane, pid, host, note} (max 2048 bytes as JSON; keys must not start with "$" or contain ".")' },
+      },
+      required: ['key', 'holder'],
+    },
+  },
+  {
+    name: 'lease_heartbeat',
+    description: 'Extend a held KEYED lease (leaseUntil = Mongo server now + leaseSeconds). Pass the `epoch` lease_acquire returned: the heartbeat only succeeds while the key still belongs to this holder AND (when given) the epoch matches. {ok:false, heldBy?} means the lease was taken over after going stale, or released — the caller has LOST it and must stop acting as holder (e.g. stop coordinating). Never changes the epoch. Distinct from runner_lease_heartbeat (slot pool).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Lease name passed to lease_acquire' },
+        holder: { type: 'string', description: 'Holder string that acquired the lease ("<host>/<lane>/<pid>")' },
+        epoch: { type: 'number', description: 'Fencing token from lease_acquire (recommended). Mismatch → {ok:false}.' },
+        leaseSeconds: { type: 'number', description: 'New TTL in seconds from server now (default 600, clamped 30-86400)' },
+      },
+      required: ['key', 'holder'],
+    },
+  },
+  {
+    name: 'lease_release',
+    description: 'Release a KEYED lease (coordinator step-down, claim done). Pass the `epoch` lease_acquire returned; on mismatch nothing is deleted ({released:false}). Holder-scoped: cannot free a lease another holder took over. force:true deletes regardless of holder — operator override for a wedged holder; REQUIRES the `configure` capability (plain release needs only `work`). Idempotent: an absent lease returns {released:false}. Distinct from runner_lease_release (slot pool).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Lease name to release' },
+        holder: { type: 'string', description: 'Holder string that acquired the lease (recorded in logs even with force)' },
+        epoch: { type: 'number', description: 'Fencing token from lease_acquire (recommended). Mismatch → {released:false}, also under force.' },
+        force: { type: 'boolean', description: 'Operator override: delete regardless of holder (default false; needs the configure capability)' },
+      },
+      required: ['key', 'holder'],
+    },
+  },
+  {
+    name: 'lease_list',
+    description: 'List KEYED leases for this tenant, sorted by key: key, holder, epoch, acquiredAt, heartbeatAt, leaseUntil, meta and a `stale` flag computed against Mongo server time. Filter with prefix, e.g. "swarm-coordinator:" (who is coordinator) or "claim:ai_management:" (who holds which files). limit default 200, max 1000; `truncated:true` means more matched. Read-only. Distinct from runner_lease_list (slot pool).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prefix: { type: 'string', description: 'Literal key prefix filter (not a regex), e.g. "claim:ai_management:"' },
+        limit: { type: 'number', description: 'Max leases to return (default 200, max 1000)' },
       },
     },
   },
@@ -606,12 +917,14 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
   // exists mid-session; this is "is the runner process alive at all") ──
   {
     name: 'runner_heartbeat',
-    description: 'Record one liveness pulse for a runner machine. Call once per fire, before task pickup, regardless of whether a task gets claimed — this tracks "the runner process is alive", not "there was work to do". Distinct from runner_lease_heartbeat, which only extends a held concurrency slot mid-session.',
+    description: 'Record one liveness pulse for a runner machine. Call once per fire, before task pickup, regardless of whether a task gets claimed — this tracks "the runner process is alive", not "there was work to do". Distinct from runner_lease_heartbeat, which only extends a held concurrency slot mid-session. AGENT_MESSAGING_DISPATCH: optionally also registers this runner\'s mailbox `address` + `capabilities` (lane, installed models) — the identity record a non-Claude CLI lane (agy, codex, local Ollama) has no other way to publish. Omit either to leave the previously registered value alone.',
     inputSchema: {
       type: 'object',
       properties: {
         machine: { type: 'string', description: 'Hostname the runner fired on, e.g. "runner-host"' },
         holder: { type: 'string', description: 'Runner identity for this fire, e.g. "runner-host/12345" (hostname/pid)' },
+        address: { type: 'string', description: 'Mailbox address this runner answers to (host | host/repo | role), e.g. "host-a/codex"' },
+        capabilities: { type: 'array', items: { type: 'string' }, description: 'Capability tags: lane name, installed models, skills (e.g. ["codex","review"] or ["ollama","qwen3-coder:30b"])' },
       },
       required: ['machine', 'holder'],
     },
@@ -623,6 +936,16 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       type: 'object',
       properties: {
         thresholdMinutes: { type: 'number', description: 'Liveness threshold in minutes (default 25)' },
+      },
+    },
+  },
+  {
+    name: 'worker_lane_status',
+    description: 'Tenant-scoped read: connected | down | not-configured per execution lane (the Claude runner, Claude Fable, the director-only master profile, Codex, Antigravity, Copilot, local Ollama, DeepSeek/Kimi API), joined with host + last-check from runner_heartbeat capability tags and executions in the last 24h/30d from Task.executionProvider/executionLane/routedModel. Powers the /swarm "Workers" panel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        thresholdMinutes: { type: 'number', description: 'Liveness threshold in minutes (default 25) — a lane\'s heartbeat older than this reads "down" instead of "connected".' },
       },
     },
   },
@@ -643,11 +966,33 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       required: ['consumed'],
     },
   },
+  // ── RUNNER BACKLOG CONSUMED-TITLES LEDGER (task-aa331af6) ──
+  {
+    name: 'backlog_ledger_get',
+    description: 'Read the durable runner-backlog consumed-titles ledger (task-aa331af6): every backlog line title ever positively confirmed to have a matching gateway task. Unlike a tasks_list(limit:2000) lookup, membership here never ages out as the fleet-wide task table grows — used by scripts/queue_topup.sh self-heal as a floor the corrected cursor may never rewind past.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'backlog_ledger_add',
+    description: 'Add title(s) to the durable consumed-titles ledger (task-aa331af6), idempotent set semantics. Called by scripts/queue_topup.sh whenever it positively confirms a backlog line already has a matching gateway task (exact-title dedupe match or self-heal confirmation), so the confirmation survives even after the title ages out of tasks_list\'s limit:2000 window.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        titles: { type: 'array', items: { type: 'string' }, description: 'Backlog line titles to mark as confirmed-consumed' },
+      },
+      required: ['titles'],
+    },
+  },
   // ── REPOS ─────────────────────────────────────────────
   {
     name: 'repos_list',
     description: 'List all managed repos from managed_repos.txt with health indicators (exists, is git repo, has AI/, has state + handoff).',
-    inputSchema: { type: 'object', properties: {} },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rosterTenant: { type: 'string', description: "Operator only: list just this tenant's own registered repos (no managed_repos.txt seed)." },
+      },
+    },
   },
   {
     name: 'repos_status',
@@ -1406,6 +1751,31 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
       },
     },
   },
+  // ── ACCOUNT USAGE LEDGER (multi-Mac phase 2) ─────────────
+  {
+    name: 'account_usage_record',
+    description: 'Record per-ACCOUNT Claude/agy quota usage from one Mac (multi-Mac phase 2; plan/MULTI_MAC_SWARM_BRIEF.md). `buckets`: hourly token totals per account × host × model ({account, host, hour ISO, model, output, input, cacheCreate, cacheRead}) recomputed from that Mac\'s own transcripts (deduped by message.id) — upserted with $set, so re-pushing the same hour is idempotent. `readings`: REAL quota percentages ({account, host, source statusline|agy|operator, at, fiveHourPct, fiveHourResetsAt, sevenDayPct, sevenDayResetsAt, fablePct?, opusPct?}) from Claude Code\'s statusLine rate_limits, agy\'s quota file, or an operator /usage reading. `assets`: {account, kind full_reset|cloud_credit|spend_flag, usd?, expires?, active?, note?}. Pushed by scripts/usage_push.sh and scripts/usage_reading.sh. Distinct from usage_summary (product meter) and budgets_* (gateway LLM spend).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        buckets: { type: 'array', items: { type: 'object' }, description: 'Hourly token buckets (max 5000 per call).' },
+        readings: { type: 'array', items: { type: 'object' }, description: 'Real quota readings (max 200 per call).' },
+        assets: { type: 'array', items: { type: 'object' }, description: 'Account assets: banked full reset, cloud credit, spend flag (max 50).' },
+      },
+    },
+  },
+  {
+    name: 'account_usage_status',
+    description: 'Per-ACCOUNT quota view across ALL Macs: 5-hour and weekly used % (source real = fresh statusLine/agy reading ≤15 min; anchored = last real reading + fitted cost of tokens since; estimate = fitted cost since the window reset; unknown), each account\'s own reset times, operator per-model rows (Fable/Opus), the least-squares fit (k = % per weighted token, n readings), weighted token totals (5h / 7d, per host), hot (an interactive session refreshed its statusLine ≤30 min ago), headroom after the interactive reserve (default weekly 33% / 5h 40%), assets, flags (e.g. usage credits on with no limit) and recommendations (banked full reset, expiring cloud credit) — recommendations only, nothing is ever triggered. Read-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        account: { type: 'string', description: 'Only this account (one of the lane names in this host\'s swarm config).' },
+        reserveWeekly: { type: 'number', description: 'Interactive reserve fraction for the weekly window (default 0.33).' },
+        reserveFiveHour: { type: 'number', description: 'Interactive reserve fraction for the 5-hour window (default 0.40).' },
+      },
+    },
+  },
   // ── USAGE METER (product events, read-only — ADR-014 S2) ──
   {
     name: 'usage_summary',
@@ -1522,7 +1892,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        provider: { type: 'string', description: 'Optional provider name to filter: api, deepseek, moonshot, gemini, ollama, bridge, direct' },
+        provider: { type: 'string', description: 'Optional provider name to filter: api, deepseek, moonshot, ollama, bridge, direct' },
       },
     },
   },
@@ -1532,7 +1902,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        provider: { type: 'string', description: 'Provider to reset: api, deepseek, moonshot, gemini, ollama, bridge, direct' },
+        provider: { type: 'string', description: 'Provider to reset: api, deepseek, moonshot, ollama, bridge, direct' },
       },
       required: ['provider'],
     },
@@ -1543,7 +1913,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        provider: { type: 'string', enum: ['api', 'deepseek', 'moonshot', 'gemini', 'ollama', 'bridge', 'direct'], description: 'Provider to place into maintenance: api, deepseek, moonshot, gemini, ollama, bridge, direct' },
+        provider: { type: 'string', enum: ['api', 'deepseek', 'moonshot', 'ollama', 'bridge', 'direct'], description: 'Provider to place into maintenance: api, deepseek, moonshot, ollama, bridge, direct' },
         reason: { type: 'string', description: 'Optional operator-supplied reason (e.g. "planned DeepSeek maintenance window")' },
         operator: { type: 'string', description: 'Optional operator identity, for audit' },
       },
@@ -1556,7 +1926,7 @@ export const TOOL_DEFINITIONS: McpToolDef[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        provider: { type: 'string', enum: ['api', 'deepseek', 'moonshot', 'gemini', 'ollama', 'bridge', 'direct'], description: 'Provider to resume: api, deepseek, moonshot, gemini, ollama, bridge, direct' },
+        provider: { type: 'string', enum: ['api', 'deepseek', 'moonshot', 'ollama', 'bridge', 'direct'], description: 'Provider to resume: api, deepseek, moonshot, ollama, bridge, direct' },
       },
       required: ['provider'],
     },
@@ -2328,6 +2698,20 @@ async function dispatchTool(
     case 'tasks_delete': return handleTasksDelete(tenantId, args, ctx);
     case 'tasks_restore': return handleTasksRestore(tenantId, args, ctx);
     case 'tasks_bulk': return handleTasksBulk(tenantId, args, ctx);
+    case 'mail_send': return handleMailSend(tenantId, args);
+    case 'mail_inbox': return handleMailInbox(tenantId, args);
+    case 'mail_ack': return handleMailAck(tenantId, args);
+    case 'swarm_plan': return handleSwarmPlan(tenantId, args);
+    case 'swarm_approve': return handleSwarmApprove(tenantId, args);
+    case 'swarm_stop': return handleSwarmStop(tenantId, args);
+    case 'swarm_list': return handleSwarmList(tenantId, args);
+    case 'swarm_live': return handleSwarmLive(tenantId, args);
+    case 'swarm_action': return runSwarmAction(tenantId, args, auditActorFromCtx(ctx));
+    case 'swarm_get': return handleSwarmGet(tenantId, args);
+    case 'swarm_update_budget': return handleSwarmUpdateBudget(tenantId, args);
+    case 'dispatch_delegate': return handleDispatchDelegate(tenantId, args);
+    case 'mail_claim_as_task': return handleMailClaimAsTask(tenantId, args);
+    case 'mail_task_result': return handleMailTaskResult(tenantId, args);
     case 'traces_record': return handleTracesRecord(args);
     case 'traces_list': return handleTracesList(args);
     case 'logs_record': return handleLogsRecord(tenantId, args);
@@ -2341,15 +2725,24 @@ async function dispatchTool(
     case 'runner_lease_release': return handleRunnerLeaseRelease(tenantId, args);
     case 'runner_lease_list': return handleRunnerLeaseList(tenantId, args);
     case 'runner_lease_history': return handleRunnerLeaseHistory(tenantId, args);
+    case 'lease_acquire': return handleKeyedLeaseAcquire(tenantId, args);
+    case 'lease_heartbeat': return handleKeyedLeaseHeartbeat(tenantId, args);
+    case 'lease_release': return handleKeyedLeaseRelease(tenantId, args, ctx);
+    case 'lease_list': return handleKeyedLeaseList(tenantId, args);
+    case 'account_usage_record': return handleAccountUsageRecord(tenantId, args);
+    case 'account_usage_status': return handleAccountUsageStatus(tenantId, args);
     case 'runner_heartbeat': return handleRunnerHeartbeat(tenantId, args);
     case 'runner_liveness': return handleRunnerLiveness(tenantId, args);
+    case 'worker_lane_status': return handleWorkerLaneStatus(tenantId, args);
     case 'backlog_cursor_get': return handleBacklogCursorGet(tenantId);
     case 'backlog_cursor_set': return handleBacklogCursorSet(tenantId, args);
-    case 'repos_list': return handleReposList(tenantId);
+    case 'backlog_ledger_get': return handleBacklogLedgerGet(tenantId);
+    case 'backlog_ledger_add': return handleBacklogLedgerAdd(tenantId, args);
+    case 'repos_list': return handleReposList(tenantId, args);
     case 'repos_status': return handleReposStatus(args);
     case 'repos_priority': return handleReposPriority(tenantId);
     case 'repos_scan': return handleReposScan(tenantId, args);
-    case 'repos_upsert': return handleReposUpsert(tenantId, args);
+    case 'repos_upsert': return handleReposUpsert(tenantId, args, ctx);
     case 'get_pr_impact': return handleGetPrImpact(args);
     case 'triage_prs': return handleTriagePrs(args);
     case 'get_neighbors': return handleGetNeighbors(args);
@@ -2393,7 +2786,7 @@ async function dispatchTool(
     case 'agents_invoke': return handleAgentsInvoke(tenantId, args);
     case 'skills_invoke': return handleSkillsInvoke(args);
     case 'schedules_list': return handleSchedulesList(tenantId, args);
-    case 'schedules_create': return handleSchedulesCreate(tenantId, args);
+    case 'schedules_create': return handleSchedulesCreate(tenantId, args, ctx);
     case 'schedules_update': return handleSchedulesUpdate(tenantId, args);
     case 'schedules_run_now': return handleSchedulesRunNow(ctx, args);
     case 'schedules_delete': return handleSchedulesDelete(tenantId, args);
@@ -2758,6 +3151,7 @@ async function handleTasksCreate(tenantId: string, args: Record<string, unknown>
     priority: args.priority as TaskPriority | undefined,
     assignedAgent: args.assignedAgent as string | undefined,
     recommendedModel: args.recommendedModel as string | undefined,
+    recommendedModelPreference: args.recommendedModelPreference as boolean | undefined,
     source: args.source as TaskSource | undefined,
     sourceId: args.sourceId as string | undefined,
     notes: args.notes as string | undefined,
@@ -2777,6 +3171,7 @@ async function handleTasksUpdate(tenantId: string, args: Record<string, unknown>
     priority: args.priority as TaskPriority | undefined,
     assignedAgent: args.assignedAgent as string | undefined,
     recommendedModel: args.recommendedModel as string | undefined,
+    recommendedModelPreference: args.recommendedModelPreference as boolean | undefined,
     prUrl: args.prUrl as string | undefined,
     notes: args.notes as string | undefined,
     telegramMessageId: args.telegramMessageId as number | undefined,
@@ -2791,10 +3186,14 @@ async function handleTasksUpdate(tenantId: string, args: Record<string, unknown>
     supersededBy: args.supersededBy as string | undefined,
     operatorAuthorized: args.operatorAuthorized as boolean | undefined,
     routeExhausted: args.routeExhausted as boolean | undefined,
+    noopDispatch: args.noopDispatch as boolean | undefined,
+    pacingDefer: args.pacingDefer as boolean | undefined,
+    deferSeconds: typeof args.deferSeconds === 'number' ? args.deferSeconds : undefined,
     // Empty array is meaningful (clears the graph) — only omit when absent.
     dependsOn: Array.isArray(args.dependsOn)
       ? (args.dependsOn as unknown[]).filter((d): d is string => typeof d === 'string')
       : undefined,
+    outputTokens: typeof args.outputTokens === 'number' ? args.outputTokens : undefined,
   });
   if (!task) return { error: `Task not found: ${args.taskId}` };
   return task;
@@ -2813,12 +3212,16 @@ async function handleTasksClaim(tenantId: string, args: Record<string, unknown>)
   const ignoreRepos = Array.isArray(args.ignoreRepos)
     ? (args.ignoreRepos as unknown[]).filter((r): r is string => typeof r === 'string' && r.length > 0)
     : undefined;
+  const localModels = Array.isArray(args.localModels)
+    ? (args.localModels as unknown[]).filter((m): m is string => typeof m === 'string' && m.length > 0)
+    : undefined;
   const task = await claimTask(tenantId, {
     claimedBy,
     taskId: args.taskId as string | undefined,
     repo: args.repo as string | undefined,
     ignoreRepos,
     leaseSeconds: args.leaseSeconds as number | undefined,
+    localModels,
   });
   if (!task) return { claimed: false, message: 'No claimable pending task' };
   return { claimed: true, task };
@@ -2890,6 +3293,219 @@ async function handleTasksBulk(tenantId: string, args: Record<string, unknown>, 
   } catch (err) {
     if (err instanceof BulkValidationError) return { error: err.message };
     throw err;
+  }
+}
+
+// ── MAILBOX handlers (durable swarm messaging — SWARM_MESSAGING P1) ──
+
+async function handleMailSend(tenantId: string, args: Record<string, unknown>) {
+  try {
+    const msg = await sendMail(tenantId, {
+      to: args.to as string,
+      from: args.from as string,
+      kind: args.kind as string | undefined,
+      subject: args.subject as string,
+      body: args.body as string | undefined,
+      replyTo: args.replyTo as string | undefined,
+      swarmId: args.swarmId as string | undefined,
+    });
+    return { sent: true, message: msg };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function handleMailInbox(tenantId: string, args: Record<string, unknown>) {
+  const to = args.to;
+  if (typeof to !== 'string' && !Array.isArray(to)) return { error: 'to is required (string or array of addresses)' };
+  try {
+    const { messages, unreadCount } = await inboxFor(tenantId, {
+      to: to as string | string[],
+      includeAcked: args.includeAcked === true,
+      limit: typeof args.limit === 'number' ? args.limit : undefined,
+    });
+    return { count: messages.length, unreadCount, messages };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function handleMailAck(tenantId: string, args: Record<string, unknown>) {
+  const id = args.id as string | undefined;
+  if (!id || typeof id !== 'string') return { error: 'id is required' };
+  try {
+    const msg = await ackMail(tenantId, { messageId: id, ackedBy: args.ackedBy as string | undefined });
+    if (!msg) return { error: `Message not found: ${id}` };
+    return { acked: true, message: msg };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// ── SWARM handlers (swarm task model — SWARM_MESSAGING P2) ──
+
+async function handleSwarmLive(tenantId: string, args: Record<string, unknown>) {
+  try {
+    return await buildSwarmLive(tenantId, { host: typeof args.host === 'string' && args.host ? args.host : undefined });
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function handleSwarmPlan(tenantId: string, args: Record<string, unknown>) {
+  if (!Array.isArray(args.children)) return { error: 'children is required (array of {title, ...})' };
+  try {
+    return await planSwarm(tenantId, {
+      repo: args.repo as string,
+      goal: args.goal as string,
+      createdBy: args.createdBy as string,
+      children: args.children as SwarmChildInput[],
+      childCap: typeof args.childCap === 'number' ? args.childCap : undefined,
+      parentTaskId: args.parentTaskId as string | undefined,
+      consent: args.consent === true,
+      notes: args.notes as string | undefined,
+    });
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function handleSwarmApprove(tenantId: string, args: Record<string, unknown>) {
+  const swarmId = args.swarmId as string | undefined;
+  if (!swarmId || typeof swarmId !== 'string') return { error: 'swarmId is required' };
+  try {
+    const result = await approveSwarm(tenantId, swarmId, { approvedBy: args.approvedBy as string | undefined });
+    if (!result) return { error: `Swarm not found: ${swarmId}` };
+    return result;
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function handleSwarmStop(tenantId: string, args: Record<string, unknown>) {
+  const swarmId = args.swarmId as string | undefined;
+  if (!swarmId || typeof swarmId !== 'string') return { error: 'swarmId is required' };
+  try {
+    const result = await stopSwarm(tenantId, swarmId, {
+      stoppedBy: args.stoppedBy as string | undefined,
+      reason: args.reason as string | undefined,
+    });
+    if (!result) return { error: `Swarm not found: ${swarmId}` };
+    return result;
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+const SWARM_STATUSES = new Set(['planning', 'paused', 'active', 'stopped', 'done']);
+
+async function handleSwarmList(tenantId: string, args: Record<string, unknown>) {
+  const status = args.status as string | undefined;
+  if (status !== undefined && !SWARM_STATUSES.has(status)) {
+    return { error: `status must be one of ${[...SWARM_STATUSES].join(', ')}` };
+  }
+  try {
+    const swarms = await listSwarms(tenantId, {
+      status: status as 'planning' | 'paused' | 'active' | 'stopped' | 'done' | undefined,
+      repo: typeof args.repo === 'string' && args.repo.trim() ? args.repo.trim() : undefined,
+      limit: typeof args.limit === 'number' ? args.limit : undefined,
+    });
+    return { count: swarms.length, swarms };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function handleSwarmGet(tenantId: string, args: Record<string, unknown>) {
+  const swarmId = args.swarmId as string | undefined;
+  if (!swarmId || typeof swarmId !== 'string') return { error: 'swarmId is required' };
+  try {
+    const result = await getSwarm(tenantId, swarmId);
+    if (!result) return { error: `Swarm not found: ${swarmId}` };
+    return result;
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function handleSwarmUpdateBudget(tenantId: string, args: Record<string, unknown>) {
+  const swarmId = args.swarmId as string | undefined;
+  if (!swarmId || typeof swarmId !== 'string') return { error: 'swarmId is required' };
+  const tokenBudget = args.tokenBudget;
+  if (typeof tokenBudget !== 'number') return { error: 'tokenBudget is required (a positive number)' };
+  try {
+    const result = await updateSwarmBudget(tenantId, swarmId, tokenBudget, {
+      by: args.by as string | undefined,
+    });
+    if (!result) return { error: `Swarm not found: ${swarmId}` };
+    return result;
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// ── AGENT DISPATCH handlers (AGENT_MESSAGING_DISPATCH) ────
+
+async function handleDispatchDelegate(tenantId: string, args: Record<string, unknown>) {
+  try {
+    return await delegateWork(tenantId, {
+      from: args.from as string,
+      work: args.work as string,
+      description: args.description as string | undefined,
+      repo: args.repo as string | undefined,
+      mode: args.mode as DelegateInput['mode'],
+      to: args.to as string | undefined,
+      assignedAgent: args.assignedAgent as string | undefined,
+      recommendedModel: args.recommendedModel as string | undefined,
+      priority: args.priority as TaskPriority | undefined,
+      children: args.children as DelegateInput['children'],
+      childCap: args.childCap as number | undefined,
+      consent: args.consent === true,
+    });
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function handleMailClaimAsTask(tenantId: string, args: Record<string, unknown>) {
+  const address = args.address as string | undefined;
+  const defaultRepo = args.defaultRepo as string | undefined;
+  const claimedBy = args.claimedBy as string | undefined;
+  if (!address) return { error: 'address is required' };
+  if (!defaultRepo) return { error: 'defaultRepo is required' };
+  if (!claimedBy) return { error: 'claimedBy is required' };
+  try {
+    const claimed = await claimMailAsTask(tenantId, address, {
+      defaultRepo,
+      claimedBy,
+      maxPerPoll: args.maxPerPoll as number | undefined,
+    });
+    return { count: claimed.length, claimed };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function handleMailTaskResult(tenantId: string, args: Record<string, unknown>) {
+  const taskId = args.taskId as string | undefined;
+  const outcome = args.outcome as string | undefined;
+  const summary = args.summary as string | undefined;
+  const from = args.from as string | undefined;
+  if (!taskId) return { error: 'taskId is required' };
+  if (outcome !== 'done' && outcome !== 'failed') return { error: 'outcome must be "done" or "failed"' };
+  if (!summary) return { error: 'summary is required' };
+  if (!from) return { error: 'from is required' };
+  try {
+    const result = await completeMailTask(tenantId, {
+      taskId,
+      outcome,
+      summary,
+      links: Array.isArray(args.links) ? args.links as string[] : undefined,
+      from,
+    }, args.taskNotes as string | undefined);
+    return result ? { sent: true, message: result } : { sent: false, reason: 'task has no mail linkage in notes — not mail-derived' };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -3084,16 +3700,120 @@ async function handleRunnerLeaseHistory(tenantId: string, args: Record<string, u
   }) };
 }
 
+// ── KEYED LEASE handlers (SWARM_COORDINATOR_PLAN phase 1) ─────────────
+// Validation lives in the store (KeyedLeaseValidationError); surface it as
+// { error } like every other tool's bad-input path. Anything else propagates.
+
+async function keyedLeaseCall<T>(fn: () => Promise<T>): Promise<T | { error: string }> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof KeyedLeaseValidationError) return { error: err.message };
+    throw err;
+  }
+}
+
+async function handleKeyedLeaseAcquire(tenantId: string, args: Record<string, unknown>) {
+  return keyedLeaseCall(() => acquireKeyedLease(tenantId, {
+    key: args.key as string,
+    holder: args.holder as string,
+    leaseSeconds: args.leaseSeconds as number | undefined,
+    meta: args.meta as Record<string, unknown> | undefined,
+  }));
+}
+
+async function handleKeyedLeaseHeartbeat(tenantId: string, args: Record<string, unknown>) {
+  return keyedLeaseCall(() => heartbeatKeyedLease(tenantId, {
+    key: args.key as string,
+    holder: args.holder as string,
+    leaseSeconds: args.leaseSeconds as number | undefined,
+    epoch: args.epoch as number | undefined,
+  }));
+}
+
+/**
+ * force:true is an operator override, so it needs `configure` (plain release
+ * needs only `work`, enforced at the dispatch chokepoint via TOOL_CAPS). The
+ * RBAC map is per-tool, so the per-argument check lives here. Unlike the
+ * shadow-mode chokepoint this is a HARD gate (a new capability, no prior
+ * behavior to preserve): the would-be denial is still logged/audited through
+ * assertCapability, then refused whatever RBAC_ENFORCE says. Loopback/local
+ * and system/operator principals bypass, same as assertToolCapability.
+ */
+export function canForceReleaseLease(ctx: ToolContext | undefined): boolean {
+  if (ctx?.local || ctx?.role === 'system' || ctx?.role === 'operator') return true;
+  return ctxHasCapability(ctx, 'configure');
+}
+
+async function handleKeyedLeaseRelease(tenantId: string, args: Record<string, unknown>, ctx?: ToolContext) {
+  const force = args.force === true;
+  if (force && !canForceReleaseLease(ctx)) {
+    try {
+      assertCapability(ctx, 'configure', { action: 'lease_release:force' });
+    } catch {
+      // enforce mode throws after recording the denial — refused below either way
+    }
+    return { error: 'force release requires the configure capability', code: 'FORBIDDEN' };
+  }
+  return keyedLeaseCall(() => releaseKeyedLease(tenantId, {
+    key: args.key as string,
+    holder: args.holder as string,
+    force,
+    epoch: args.epoch as number | undefined,
+  }));
+}
+
+async function handleKeyedLeaseList(tenantId: string, args: Record<string, unknown>) {
+  return keyedLeaseCall(() => listKeyedLeases(tenantId, {
+    prefix: args.prefix as string | undefined,
+    limit: args.limit as number | undefined,
+  }));
+}
+
+async function accountUsageCall<T>(fn: () => Promise<T>): Promise<T | { error: string }> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof AccountUsageValidationError) return { error: err.message };
+    throw err;
+  }
+}
+
+async function handleAccountUsageRecord(tenantId: string, args: Record<string, unknown>) {
+  const arr = (v: unknown) => (Array.isArray(v) ? v : undefined);
+  return accountUsageCall(() => recordAccountUsage(tenantId, {
+    buckets: arr(args.buckets), readings: arr(args.readings), assets: arr(args.assets),
+  }));
+}
+
+async function handleAccountUsageStatus(tenantId: string, args: Record<string, unknown>) {
+  const frac = (v: unknown) => (typeof v === 'number' && v >= 0 && v < 1 ? v : undefined);
+  return accountUsageCall(() => getAccountUsageStatus(tenantId, {
+    account: typeof args.account === 'string' ? args.account : undefined,
+    reserveWeekly: frac(args.reserveWeekly),
+    reserveFiveHour: frac(args.reserveFiveHour),
+  }));
+}
+
 async function handleRunnerHeartbeat(tenantId: string, args: Record<string, unknown>) {
   const machine = args.machine as string | undefined;
   const holder = args.holder as string | undefined;
   if (!machine || typeof machine !== 'string') return { error: 'machine is required' };
   if (!holder || typeof holder !== 'string') return { error: 'holder is required' };
-  return recordHeartbeat(tenantId, { machine, holder });
+  return recordHeartbeat(tenantId, {
+    machine,
+    holder,
+    address: args.address as string | undefined,
+    capabilities: Array.isArray(args.capabilities) ? args.capabilities as string[] : undefined,
+  });
 }
 
 async function handleRunnerLiveness(tenantId: string, args: Record<string, unknown>) {
   return getRunnerLiveness(tenantId, { thresholdMinutes: args.thresholdMinutes as number | undefined });
+}
+
+async function handleWorkerLaneStatus(tenantId: string, args: Record<string, unknown>) {
+  return getWorkerLaneStatus(tenantId, { thresholdMinutes: args.thresholdMinutes as number | undefined });
 }
 
 // ── RUNNER BACKLOG CURSOR handlers (task-e9163eb9) ─────────
@@ -3110,11 +3830,29 @@ async function handleBacklogCursorSet(tenantId: string, args: Record<string, unk
   return { consumed: await setBacklogCursor(tenantId, Math.floor(consumed)) };
 }
 
+async function handleBacklogLedgerGet(tenantId: string) {
+  return { titles: await getConfirmedTitles(tenantId) };
+}
+
+async function handleBacklogLedgerAdd(tenantId: string, args: Record<string, unknown>) {
+  const titles = args.titles;
+  if (!Array.isArray(titles) || !titles.every(t => typeof t === 'string')) {
+    return { error: 'titles is required (array of strings)' };
+  }
+  const clean = titles.filter(t => t.length > 0);
+  return { titles: await addConfirmedTitles(tenantId, clean) };
+}
+
 // ── REPO handlers ─────────────────────────────────────────
 
-async function handleReposList(tenantId: string) {
+async function handleReposList(tenantId: string, args: Record<string, unknown> = {}) {
   // ADR-021: unified roster = managed_repos.txt seed ∪ tenant's DB `repos` table.
-  const repos = await listReposUnified(tenantId);
+  // repos_list is operator-only; `rosterTenant` lets the operator's runner ask
+  // for ANOTHER tenant's own rows (no seed) to bind that tenant's task (G5 N-2).
+  const rosterTenant = typeof args.rosterTenant === 'string' && args.rosterTenant.trim() ? args.rosterTenant.trim() : '';
+  const repos = rosterTenant && rosterTenant !== tenantId
+    ? await listTenantRoster(rosterTenant)
+    : await listReposUnified(tenantId);
   return {
     total: repos.length,
     withAiFolder: repos.filter(r => r.hasAiFolder).length,
@@ -3192,6 +3930,16 @@ async function handleHandoffWrite(tenantId: string, args: Record<string, unknown
   if (!repo) return { error: 'repo is required' };
   const content = args.content as string;
   if (!content || !content.trim()) return { error: 'content is required' };
+  // The brain atom first: it is what the local stdio server (no Docker) reads,
+  // so a handoff written here survives `myai down` (v1 G2 B2, both directions).
+  let atom: { path: string; sha8: string } | undefined;
+  let atomError: string | undefined;
+  try {
+    atom = writeHandoffAtom(repo, content, brainEnvEnsured(tenantId));
+  } catch (err) {
+    atomError = (err as Error).message;
+    log.warn({ err, repo }, 'handoff_write: brain handoff atom not written — Mongo only');
+  }
   const handoff = await writeHandoff(tenantId, {
     repo,
     content,
@@ -3200,9 +3948,25 @@ async function handleHandoffWrite(tenantId: string, args: Record<string, unknown
     branch: args.branch as string | undefined,
     machine: args.machine as string | undefined,
     sessionId: args.sessionId as string | undefined,
+    ...(atom ? { metadata: { atom: atom.path } } : {}),
   });
-  if (!handoff) return { error: 'DB not connected — handoff not saved' };
-  return { saved: true, handoff };
+  if (!handoff && !atom) return { error: `DB not connected and no brain (${atomError}) — handoff not saved` };
+  return { saved: true, handoff: handoff ?? undefined, ...(atom ? { atom } : { atomError }) };
+}
+
+/**
+ * Commit a handoff as a `handoff` atom (slug `handoff`). A rewrite of content
+ * that already has an atom would dedup to the OLD file and leave a newer atom
+ * as the headline, so a stale dedup is re-written under a stamped slug; and
+ * a handoff never shares its second with the previous one (waitForFreshSecond).
+ * KEEP IN SYNC with handoffWrite in scripts/lib/mcp_local_stdio.mjs.
+ */
+function writeHandoffAtom(repo: string, content: string, env: NodeJS.ProcessEnv): { path: string; sha8: string } {
+  waitForFreshSecond(repo, env);
+  const first = writeAtom({ kind: 'handoff', repo, slug: 'handoff', content, topic: 'continuity' }, env);
+  if (first.created || brainHeadline(repo, env)?.path === first.path) return { path: first.path, sha8: first.sha8 };
+  const again = writeAtom({ kind: 'handoff', repo, slug: `handoff-${toStamp(new Date())}`, content, topic: 'continuity' }, env);
+  return { path: again.path, sha8: again.sha8 };
 }
 
 async function handleHandoffRead(tenantId: string, args: Record<string, unknown>) {
@@ -3211,8 +3975,7 @@ async function handleHandoffRead(tenantId: string, args: Record<string, unknown>
     const handoffs = await listLatestHandoffs(tenantId, (args.limit as number) || 100);
     return { count: handoffs.length, handoffs };
   }
-  const result = await readHandoff(tenantId, repo, { historyLimit: (args.history as number) || 0 });
-  return result;
+  return readHandoffReconciled(tenantId, repo, { historyLimit: (args.history as number) || 0 }, brainEnvFor(tenantId));
 }
 
 async function handleSessionExport(tenantId: string, args: Record<string, unknown>) {
@@ -3556,11 +4319,19 @@ async function handleReposScan(tenantId: string, args: Record<string, unknown>) 
   }
 }
 
-async function handleReposUpsert(tenantId: string, args: Record<string, unknown>) {
+async function handleReposUpsert(tenantId: string, args: Record<string, unknown>, ctx?: ToolContext) {
   const name = args.name as string;
   const path = args.path as string;
   if (!name) return { error: 'name is required' };
   if (!path) return { error: 'path is required' };
+  // G5 NF-1: a non-operator tenant may only register repos under its own root.
+  if (!(ctx?.local || ctx?.role === 'system' || ctx?.role === 'operator')) {
+    try {
+      assertTenantRepoPath(tenantId, name, path);
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
+  }
 
   const repo = await upsertRepo(tenantId, {
     name,
@@ -3855,7 +4626,7 @@ async function handleSchedulesList(tenantId: string, args: Record<string, unknow
   return { count: schedules.length, schedules };
 }
 
-async function handleSchedulesCreate(tenantId: string, args: Record<string, unknown>) {
+async function handleSchedulesCreate(tenantId: string, args: Record<string, unknown>, ctx?: ToolContext) {
   const name = args.name as string | undefined;
   const cronExpr = args.cronExpr as string | undefined;
   const kind = args.kind as ScheduleKind | undefined;
@@ -3869,6 +4640,12 @@ async function handleSchedulesCreate(tenantId: string, args: Record<string, unkn
 
   if (!isValidCronExpr(cronExpr)) {
     return { error: `Invalid cron expression: "${cronExpr}". Use 5-field format (min hour day month dow), e.g. "0 9 * * *".` };
+  }
+
+  // G5 N-1: the schedule may only target a tool its creator can call; it runs
+  // as the creator's tenant (scheduler/schedule-auth.ts), never as `system`.
+  if (ctx && target && kind && !scheduleTargetAllowed(ctx, kind, target)) {
+    return { error: `Tool ${scheduleToolName(kind, target)} is not available to this tenant, so it cannot be scheduled.` };
   }
 
   // Validate target exists at create-time so callers get fast feedback

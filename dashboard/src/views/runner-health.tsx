@@ -12,10 +12,13 @@
 
 import { connectDB, Task } from '@/lib/db';
 import { getActiveTenant, tenantFilter } from '@/lib/tenant';
-import { readRunnerHealth, getRunnerLiveness, getFleetRunners, getFleetMaintenanceStatus, type RunnerRepoHealth, type FleetRunnerRow } from '@/lib/runner-health';
+import { readRunnerHealth, getRunnerLiveness, getFleetRunners, getFleetMaintenanceStatus, getClaimExecutionRatio, type RunnerRepoHealth, type FleetRunnerRow, type ClaimExecutionRatio } from '@/lib/runner-health';
+import { readMongoMirrorStatus, formatReplicaSummary, type ReplicaSummary } from '@/lib/mongo-mirror';
+import { getAutoshipStatus, type AutoshipStatus } from '@/lib/autoship';
 import { timeAgo, fmtSydney } from '@/lib/format';
 import { Card, StatCard, EmptyState, THead } from '@/components/ui/card';
 import { Badge, TaskStatusBadge, RoutedBadge } from '@/components/ui/badge';
+import type { Tone } from '@/components/ui/tone';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,6 +66,37 @@ function OutcomeBadge({ outcome }: { outcome: RunnerRepoHealth['lastOutcome'] })
   return <Badge className="bg-zinc-700/40 text-[rgb(var(--text-secondary))] border border-zinc-700">running</Badge>;
 }
 
+/** Claims-vs-executions churn (task-d85ea318) — how many claims actually routed.
+ * A high ratio means the runner is claiming tasks it then releases without ever
+ * executing them (a post-claim pacing/routing gate looping on the head of the
+ * queue): wasted gateway round trips + log noise that can mask real starvation.
+ * ≤2:1 is healthy; >4:1 is the churn signature the fix targets. */
+function ChurnCard({ churn }: { churn: ClaimExecutionRatio }) {
+  const tone: Tone = churn.ratio >= 4 ? 'err' : churn.ratio >= 2 ? 'warn' : 'ok';
+  return (
+    <Card title="Claims vs executions" meta={`last ${churn.windowDays}d`}>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 p-4 md:p-5">
+        <StatCard
+          label="Churn ratio"
+          value={`${churn.ratio}:1`}
+          sub={churn.ratio >= 4 ? 'claiming without executing' : 'claims per execution'}
+          icon="alert"
+          tone={tone}
+        />
+        <StatCard label="Claims" value={churn.claims} sub="tasks claimed in window" icon="runs" tone="muted" />
+        <StatCard label="Executions" value={churn.executions} sub="actually routed" icon="status" tone={churn.executions > 0 ? 'ok' : 'muted'} />
+        <StatCard
+          label="Claimed, never routed"
+          value={churn.churnedClaims}
+          sub={churn.pacingDeferredClaims > 0 ? `${churn.pacingDeferredClaims} counted pacing-defer` : 'released before routing'}
+          icon="cross"
+          tone={churn.churnedClaims > 0 ? (tone === 'ok' ? 'warn' : tone) : 'muted'}
+        />
+      </div>
+    </Card>
+  );
+}
+
 /** Operator kill-switch banner (fleet-maintenance-store.ts) — every runner across
  * the fleet is currently refused a claim, regardless of what the queue/liveness
  * signals below say. Rendered ahead of everything else so it can never be missed. */
@@ -87,6 +121,74 @@ function MaintenanceBanner({ maintenance }: { maintenance: Awaited<ReturnType<ty
         </div>
       </div>
     </div>
+  );
+}
+
+/** Operator auto-ship kill switch (config/autoship.off, task-79a07a7c) — while
+ * this committed marker exists, scripts/runner_ship_step.sh exits before it
+ * ever opens or merges a test->main PR, fleet-wide. Previously invisible in
+ * this view; rendered ahead of the fleet/queue panels so it can't be missed,
+ * mirroring MaintenanceBanner's layout above. */
+function AutoshipBanner({ killSwitch }: { killSwitch: AutoshipStatus['killSwitch'] }) {
+  if (!killSwitch.active) return null;
+  return (
+    <div className="bg-amber-950/40 border border-amber-500/50 rounded-xl p-5">
+      <div className="flex items-start gap-3">
+        <span className="text-2xl leading-none" aria-hidden="true">⛔</span>
+        <div>
+          <h2 className="text-base font-semibold text-amber-300">AUTO-SHIP OFF — operator kill switch active</h2>
+          <p className="text-sm text-[rgb(var(--text-primary))] mt-1">
+            <code className="text-amber-200">config/autoship.off</code> is in force
+            {killSwitch.since && <> since {fmtSydney(killSwitch.since, 'date')} ({timeAgo(killSwitch.since)})</>}.
+            The runner will open and merge NO test→main PR on its own, on any machine — ship manually with the{' '}
+            <code className="text-amber-200">ship it</code> keyword. Re-enable with{' '}
+            <code className="text-amber-200">git rm config/autoship.off</code>.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Last ship-step decision (scripts/runner_ship_step.sh, task-79a07a7c) — the
+ * script used to print its verdict to stdout only (runner.out), invisible
+ * once the log rotated. It now persists the same decision to
+ * state/ship-step.json after every run; this renders that artifact via
+ * lib/autoship.ts so an operator can see WHY the last fire did or didn't
+ * ship without grepping runner.out. */
+function verdictTone(result: string): Tone {
+  if (result === 'shipped') return 'ok';
+  if (result.includes('fail')) return 'err';
+  if (result === 'autoship-off' || result.includes('pending') || result === 'pr-guard-refused') return 'warn';
+  return 'muted';
+}
+
+function LastShipVerdictCard({ verdict }: { verdict: AutoshipStatus['lastVerdict'] }) {
+  return (
+    <Card title="Last ship-step verdict" meta="scripts/runner_ship_step.sh">
+      {!verdict ? (
+        <EmptyState>No ship-step verdict recorded yet — it runs after the runner flips a task to review.</EmptyState>
+      ) : (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 p-4 md:p-5">
+          <StatCard
+            label="Result"
+            value={verdict.result}
+            sub={verdict.detail ?? undefined}
+            icon={verdict.result === 'shipped' ? 'check' : 'status'}
+            tone={verdictTone(verdict.result)}
+          />
+          <StatCard label="When" value={timeAgo(verdict.at)} sub={verdict.at ? fmtSydney(verdict.at, 'datetime') : undefined} icon="clock" tone="muted" />
+          <StatCard label="Repo / task" value={verdict.repo ?? '—'} sub={verdict.taskId ?? undefined} icon="projects" tone="muted" />
+          <StatCard
+            label="PR"
+            value={verdict.prNumber != null ? `#${verdict.prNumber}` : '—'}
+            sub={verdict.drift != null ? `drift ${verdict.drift} · review ${verdict.reviewCount ?? 0}` : undefined}
+            icon="runs"
+            tone="muted"
+          />
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -168,7 +270,7 @@ function FleetRunnersCard({ runners }: { runners: FleetRunnerRow[] }) {
                 <tr key={r.machine} className={`hover:bg-[rgb(var(--bg-hover))]/30 ${!r.online ? 'bg-red-950/10' : ''}`}>
                   <td className="m-title px-4 py-2.5">
                     <p className="text-[rgb(var(--text-primary))] font-mono text-xs">{r.machine}</p>
-                    {r.holder && <p className="text-zinc-600 text-[10px] font-mono mt-0.5">{r.holder}</p>}
+                    {r.holder && <p className="text-zinc-600 text-label font-mono mt-0.5">{r.holder}</p>}
                   </td>
                   <td data-label="Status" className="px-4 py-2.5">
                     <RunnerStatusBadge online={r.online} busy={r.busy} />
@@ -192,6 +294,57 @@ function FleetRunnersCard({ runners }: { runners: FleetRunnerRow[] }) {
   );
 }
 
+/** Local Mongo read-replica coverage (documentation/MONGO_MIRROR.md) — Atlas is
+ *  the source of truth; scripts/mongo_mirror.sh keeps the local myai-mongo as a
+ *  warm read replica and records per-run freshness + the per-collection count
+ *  delta. This surfaces the one-line "local replica: N/73 collections, last sync
+ *  Xm ago" status the operator asked for, with a RAM-pressure flag when the
+ *  replica nears the 512m slice. */
+function ReplicaCard({ replica }: { replica: ReplicaSummary | null }) {
+  return (
+    <Card title="Local Mongo replica" meta="Atlas = source of truth · local = read replica">
+      {!replica ? (
+        <EmptyState>
+          No mirror coverage recorded yet. Run{' '}
+          <code className="text-emerald-400">./scripts/mongo_mirror.sh</code> on the host — it records
+          per-collection freshness to{' '}
+          <code className="text-[rgb(var(--text-secondary))]">state/mongo-mirror-status.json</code>.
+        </EmptyState>
+      ) : (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 p-4 md:p-5">
+          <StatCard
+            label="Collections mirrored"
+            value={`${replica.mirrored}/${replica.total}`}
+            sub="Atlas → local, one-way"
+            icon="projects"
+            tone={replica.healthy ? 'ok' : 'warn'}
+          />
+          <StatCard
+            label="Last sync"
+            value={replica.lastSync}
+            sub={replica.healthy ? 'last run OK' : 'last run failed / never'}
+            icon="clock"
+            tone={replica.healthy ? 'ok' : 'err'}
+          />
+          <StatCard
+            label="RAM headroom"
+            value={replica.ramFlag ? 'tight' : 'ok'}
+            sub="vs the 512m slice"
+            icon={replica.ramFlag ? 'alert' : 'status'}
+            tone={replica.ramFlag ? 'warn' : 'muted'}
+          />
+          <StatCard
+            label="Status"
+            value={replica.label}
+            icon="status"
+            tone="muted"
+          />
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function timeAgoFromMinutes(minutes: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
@@ -201,15 +354,19 @@ function timeAgoFromMinutes(minutes: number): string {
 
 export default async function RunnerHealthView() {
   await connectDB();
-  const [health, depth, liveness, fleetRunners, maintenance, routedTasks] = await Promise.all([
-    readRunnerHealth(), queueDepth(), getRunnerLiveness(), getFleetRunners(), getFleetMaintenanceStatus(), recentRoutedTasks(),
+  const [health, depth, liveness, fleetRunners, maintenance, routedTasks, autoship, mirrorStatus, churn] = await Promise.all([
+    readRunnerHealth(), queueDepth(), getRunnerLiveness(), getFleetRunners(), getFleetMaintenanceStatus(), recentRoutedTasks(), getAutoshipStatus(), readMongoMirrorStatus(), getClaimExecutionRatio(),
   ]);
+  const replica = formatReplicaSummary(mirrorStatus);
 
   if (!health || !health.available) {
     return (
       <div className="space-y-6">
         <MaintenanceBanner maintenance={maintenance} />
+        <AutoshipBanner killSwitch={autoship.killSwitch} />
+        <ReplicaCard replica={replica} />
         <FleetRunnersCard runners={fleetRunners} />
+        <ChurnCard churn={churn} />
         <Card title="Runner Health">
           <EmptyState>
             No runner-health artifact yet. Generate it on the runner host with{' '}
@@ -218,6 +375,7 @@ export default async function RunnerHealthView() {
             <code className="text-[rgb(var(--text-secondary))]">state/runner-health.json</code>.
           </EmptyState>
         </Card>
+        <LastShipVerdictCard verdict={autoship.lastVerdict} />
         <RecentRoutingCard routedTasks={routedTasks} />
       </div>
     );
@@ -230,6 +388,7 @@ export default async function RunnerHealthView() {
   return (
     <div className="space-y-6">
       <MaintenanceBanner maintenance={maintenance} />
+      <AutoshipBanner killSwitch={autoship.killSwitch} />
       {/* ── RED runner-down banner (liveness heartbeat lapsed) ────── */}
       {!liveness.alive && (
         <div className="bg-red-950/40 border border-red-600/50 rounded-xl p-5">
@@ -274,8 +433,14 @@ export default async function RunnerHealthView() {
         </div>
       )}
 
+      {/* ── Local Mongo read-replica coverage (Atlas = source of truth) ── */}
+      <ReplicaCard replica={replica} />
+
       {/* ── Fleet — registered runners (task-c0a03fcc) ──────────── */}
       <FleetRunnersCard runners={fleetRunners} />
+
+      {/* ── Claims vs executions churn (task-d85ea318) ──────────── */}
+      <ChurnCard churn={churn} />
 
       {/* ── At-a-glance stats ───────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
@@ -283,23 +448,26 @@ export default async function RunnerHealthView() {
           label="Runner liveness"
           value={liveness.alive ? 'alive' : 'down'}
           sub={liveness.machines.length > 0 ? `${liveness.lastMachine} · ${timeAgoFromMinutes(liveness.machines[0].minutesSince)} ago` : 'no heartbeat yet'}
-          accent={liveness.alive ? 'green' : 'red'}
+          icon={liveness.alive ? 'status' : 'cross'}
+          tone={liveness.alive ? 'accent' : 'err'}
         />
         <StatCard
           label="Last fire"
           value={timeAgo(g.lastFireAt)}
           sub={g.lastRepo ? `${g.lastRepo} · ${fmtSydney(g.lastFireAt, 'time')}` : '—'}
-          accent={g.lastFireAt ? 'green' : 'gray'}
+          icon="clock"
+          tone={g.lastFireAt ? 'ok' : 'muted'}
         />
-        <StatCard label="Fires (24h)" value={g.firesLast24h} sub={`${g.totalFires} logged total`} accent="blue" />
+        <StatCard label="Fires (24h)" value={g.firesLast24h} sub={`${g.totalFires} logged total`} icon="runs" tone={g.firesLast24h > 0 ? 'ok' : 'muted'} />
         <StatCard
           label="Consecutive 0-work"
           value={g.consecutiveZeroWork}
           sub={`stall at ${health.stallThreshold}`}
-          accent={g.stall ? 'red' : g.consecutiveZeroWork > 0 ? 'yellow' : 'green'}
+          icon="alert"
+          tone={g.stall ? 'err' : g.consecutiveZeroWork > 0 ? 'warn' : 'muted'}
         />
-        <StatCard label="Queue: pending" value={pending} sub="awaiting a runner" accent={pending > 0 ? 'yellow' : 'gray'} />
-        <StatCard label="Queue: blocked" value={blocked} sub="needs unblocking" accent={blocked > 0 ? 'red' : 'gray'} />
+        <StatCard label="Queue: pending" value={pending} sub="awaiting a runner" icon="queue" tone={pending > 0 ? 'warn' : 'muted'} />
+        <StatCard label="Queue: blocked" value={blocked} sub="needs unblocking" icon="cross" tone={blocked > 0 ? 'err' : 'muted'} />
       </div>
 
       {/* ── Queue depth by status (gateway task store) ──────────── */}
@@ -313,6 +481,9 @@ export default async function RunnerHealthView() {
           ))}
         </div>
       </Card>
+
+      {/* ── Last ship-step verdict (task-79a07a7c) ──────────────── */}
+      <LastShipVerdictCard verdict={autoship.lastVerdict} />
 
       {/* ── Per-repo runner activity (runner.out) ───────────────── */}
       <Card

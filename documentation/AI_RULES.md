@@ -131,7 +131,7 @@ routines, others ad-hoc `SCHEDULE.md` files) fragments the view and/or bills tok
   (→ dashboard `/plan`), schedules tasks via `AI/scripts/schedule_task.sh`, then auto
   `ship it` + `wrap up -u`.
 * **The runner is the only executor** — the launchd `com.myai.cli-task-runner` (Opus 4.8,
-  `claude-tech`, subscription-billed / 0 API tokens) pulls tasks from the **gateway queue** by priority.
+  `claude-<runner-profile>`, subscription-billed / 0 API tokens) pulls tasks from the **gateway queue** by priority.
 * **The runner is PER-MACHINE — install it on every Mac that should drain the queue.** The queue is
   shared (Atlas) but the runner is a *worker*: `launchd` is a local macOS facility (no central
   scheduler) and it needs that Mac's Claude CLI + logged-in profile + Docker/gateway + checked-out
@@ -169,8 +169,8 @@ routines, others ad-hoc `SCHEDULE.md` files) fragments the view and/or bills tok
   + `wrap up`. Run standalone any time: `./scripts/reconcile_review_tasks.sh [--dry-run] [--repo X]`.
 * **The runner must be robust to a poison task — never let one bad task starve the queue.**
   The launchd runner picks tasks from the queue head by priority. A single task whose repo can't be
-  resolved to a **buildable git checkout** (e.g. a misfiled `content_api` task pointing at the
-  `POWERHOUSE/CONTENT_API` *workspace* dir, which has no `.git`) must **NOT** abort the fire. The
+  resolved to a **buildable git checkout** (e.g. a misfiled `some_app` task pointing at the
+  `WORKSPACE/APP` *workspace* dir, which has no `.git`) must **NOT** abort the fire. The
   runner loops candidates and, on an unresolvable one, **marks it `blocked`** (with a re-point/discard
   note) and moves to the next — so a poison item leaves `pending` and can never head-of-line-block the
   whole queue. This is the structural fix for the recurring `RUNNER-QUEUE-STARVED` class (3 incidents:
@@ -275,7 +275,7 @@ repos. The clean separation that MUST always hold:
   10-day plans, schedules — all come from the operator's `config/managed_repos.txt` + the gateway
   DB. They are whatever *that* operator manages.
 * **NEVER hardcode the current operator's repos** (e.g. your product or managed repos,
-  job-hunter, azure, …) into framework code, dashboard components, or shipped docs. Drive
+  the operator's own repo names, …) into framework code, dashboard components, or shipped docs. Drive
   everything from live config/DB. Any repo name in code/docs must be a clearly-labelled *example*,
   never assumed present.
 * **Grand product framing:** agentflow (idea→app) and connect (helpdesk) are *capabilities/modules*
@@ -333,6 +333,38 @@ working-branch pushes (`test`/`codeclot`/feature) must produce **zero** deployme
 * **Do NOT buy Vercel Pro to escape the cap** — the gate makes it irrelevant. Pro only for genuine
   >60s functions / production-scale needs.
 
+### 11a. `vercel.json` must live in the Vercel project's **Root Directory** (MANDATORY)
+
+Vercel reads `vercel.json` (or `vercel.ts`) from the project's configured **Root Directory ONLY** —
+**not necessarily the repo root.** If the Root Directory is a subdir (e.g. a turbo/monorepo with
+`apps/web`) but `vercel.json` sits at the repo root, the **entire file is silently ignored in
+production** — no error, no warning. Both of §11's safeguards vanish at once:
+
+* the `git.deploymentEnabled` prod-gate stops applying (the repo can go rogue / burn quota), **and**
+* every **cron** (`crons`) and rewrite/header/function setting is dropped — the cron shows
+  *"not deployed"* in `vercel crons list` and never fires.
+
+This bit one fleet repo (2026-10-01): Root Directory `apps/web`, `vercel.json` at the repo root → the
+`/api/warm` cron logged **zero calls in 24h** and the CI-thrift gate was never live. Fixed with
+`git mv vercel.json apps/web/vercel.json`.
+
+* **The rule:** place `vercel.json` in whatever the Vercel project's **Root Directory** is. Repo root
+  for a single-app repo; the app subdir for a monorepo. When in doubt, resolve it — `vercel project
+  inspect <project>` → "Root Directory", or the project API `rootDirectory`; **empty ⇒ repo root.**
+* **Automation already does this for you:** `scripts/lib/vercel_root.sh` → `vercel_root_dir <repo>`
+  resolves the Root Directory (offline `.vercel/project.json` `settings.rootDirectory` first, then
+  `vercel project inspect`, falling back to the repo root). `rollout_ci_thrift.sh gate_vercel()` writes
+  the gate **into** that directory and **moves** a misplaced repo-root `vercel.json` there
+  (`git mv`); web-ness is detected at the Root Directory so a monorepo app is never mis-gated
+  `main:false`.
+* **Enforcement:** `health_check.sh` audits every Vercel-linked repo — a `vercel.json` at the repo
+  root while the Root Directory is a subdir is a **FAIL** ("deploy-gate + crons SILENTLY IGNORED").
+  Opt-in `HEALTH_VERCEL_CRONS=1` additionally runs `vercel crons list` and fails on any *"not
+  deployed"* row.
+* **Verify after any fix:** after the **next production deploy**, `vercel crons list` must show every
+  cron as **deployed** (not "not deployed"). A deploy-gate-only change is not confirmed until the
+  crons flip to deployed.
+
 ## 12. Dropbox — never sync node_modules / build artifacts (fleet-wide, MANDATORY)
 
 Many machines keep the dev workspace **inside Dropbox**. Dropbox then tries to index and sync every
@@ -346,7 +378,7 @@ waste. **No machine may sync `node_modules` to Dropbox. Build artifacts — and 
   For regenerable artifact dirs this is reversible: `xattr -d com.dropbox.ignored <dir>`.
   **`.git` is the exception — NOT reversible in practice.** Marking `.git` ignored PURGES it
   from the Dropbox **server** as a sync-config change, not a user delete — there is no rewind
-  point once it's gone. This is what stranded runner-host on 2026-08-27/28: it hadn't
+  point once it's gone. This is what stranded home-mac on 2026-08-27/28: it hadn't
   synced since early July, another machine had already ignored its repos' `.git` dirs (the
   2026-08-26 fleet sweep), and every managed repo's `.git` was simply gone with no Dropbox
   restore possible. GitHub — not Dropbox — is the source of truth for `.git`; recovery used
@@ -356,7 +388,7 @@ waste. **No machine may sync `node_modules` to Dropbox. Build artifacts — and 
   but never descended into.
 * **`.git` is covered by the SAME rule but handled by a DIFFERENT, gated tool.** `.git` must never
   sync (thousands of churning objects; already replicated per machine via GitHub; Dropbox racing two
-  machines' writes into the same `.git` corrupts it — measured on exo 2026-09-04: `git status` 0.02s
+  machines' writes into the same `.git` corrupts it — measured on one repo 2026-09-04: `git status` 0.02s
   but GitLens ops up to 6.3s, and outright corruption + unreadable unpushed commits on 2026-07-17).
   **But marking `.git` ignored is DESTRUCTIVE across machines** (deletes it from every other synced
   Mac, taking local-only commits with it — the 2026-08-27/28 strand). So `.git` is NEVER marked by
@@ -379,6 +411,16 @@ waste. **No machine may sync `node_modules` to Dropbox. Build artifacts — and 
     dir that reappeared (e.g. after an `npm install`) in the current repo. Registered in
     `.claude/settings.json`. Propagated fleet-wide via `update_all.sh` → enforced on **every machine**.
     (It never marks `.git` — that stays deliberate/gated per above.)
+  * **HARD RULE, every repo, every Mac (operator directive 2026-10-02):** *"from now onwards I can
+    easily and openly go to any repo and download node_modules knowing it will never ever sync to
+    Dropbox."* The session hook covers only the repo a session starts in, so an install anywhere else
+    synced until a manual `--all`. Now `scripts/setup_dropbox_ignore_schedule.sh` installs a per-Mac
+    launchd agent (`com.myai.dropbox-ignore`) that runs `dropbox_ignore_artifacts.sh --all --quiet`
+    every 15 min and at load (~35 s, low-priority IO). `boot_sync.sh` (re)installs it at session start
+    on any Mac where it is missing or stale, `new_mac_setup.sh` checks it, and the 08:00 `boot` records
+    a **"node_modules Dropbox-ignored"** phase that reads back `com.dropbox.ignored=1` on every
+    `node_modules` under the Dropbox root (WARN with the count still syncing). Worst case a fresh
+    `node_modules` syncs for ≤15 min — never longer.
 * **Disk hygiene:** host `node_modules` shouldn't normally exist anyway — `hooks/pre-tool/05-no-local-npm.sh`
   blocks host npm (Docker-only). Stale ones can be deleted outright (regenerable):
   `find ~/code -type d -name node_modules -prune -exec rm -rf {} +`.
@@ -413,7 +455,7 @@ our output must be eliminated at the source.
 * **Banned:** `\033[32m` / `\033[0;32m` / `\033[1;32m` / `\033[92m` (bright green) / `tput setaf 2` /
   256-color greens (`38;5;{2,10,22,28,34,40,46,70,76,82,118,154}`).
 * **Use instead:** **orange `\033[1;38;5;208m`** (or `38;5;214` gold-orange where a second distinct
-  orange is needed, e.g. the `claude-personal` statusline vs `claude-museum`'s 208). Success/OK states
+  orange is needed, e.g. the `claude-<personal-profile>` statusline vs `claude-<master-profile>`'s 208). Success/OK states
   that were green → orange; the palette is orange (good) / yellow `38;5;220` (warn) / red `38;5;196`
   (bad) / cyan `38;5;45/51` (info) — all colour-blind-safe, no green.
 * **Applies to:** statusline (`org-statusline.sh` + deployed `~/.claude-org-statusline.sh`), every
@@ -583,12 +625,12 @@ accumulate on `test`. If a merge is genuinely urgent, verify locally (`local-ci.
 ## 18. Claude profile allocation + session-boot cost ceiling (fleet-wide, MANDATORY)
 
 > Operator is running 3 Claude profiles simultaneously and hit budget pain on all 3 at once
-> (2026-07-07): `claude-tech` weekly allowance 97% used (resets Saturday), `claude-museum`
+> (2026-07-07): `claude-<runner-profile>` weekly allowance 97% used (resets Saturday), `claude-<master-profile>`
 > burned $1050 in 2 days, and the personal `claude` (Pro subscription) profile has limited
 > interactive runway. All three burning at once means the allocation below is not optional.
 
 **1. Profile roles — do not blur them.**
-- **`claude-tech`** — the **runner profile**. Idle/after-hours + weekend autonomous work
+- **`claude-<runner-profile>`** — the **runner profile**. Idle/after-hours + weekend autonomous work
   only. **Runner defaults to `claude-sonnet-5`, Sonnet-tier fallback chain, NO speculative
   Opus/Fable** (enforced in `cli_task_runner.sh` + `machine_selfheal.sh`, PR #352).
   **Failure-gated Opus escalation (2026-07-11):** Opus is reached ONLY as a capped last
@@ -600,7 +642,7 @@ accumulate on `test`. If a merge is genuinely urgent, verify locally (`local-ci.
   This is the durable fix for the weekend Fable/Opus burn that torched a week of credit —
   Opus never runs speculatively, only after Sonnet has demonstrably failed. Tests:
   `scripts/tests/test_runner_escalation.sh` (17 cases).
-- **`claude-museum`** — **mobile/remote-control of the master repo (`ai_management`) only** —
+- **`claude-<master-profile>`** — **mobile/remote-control of the master repo (`ai_management`) only** —
   i.e. instructing/directing work from a phone, not running heavy autonomous multi-agent
   work itself. Treat it as a light dispatch channel, not a compute profile.
 - **`claude`** (default/personal, Pro subscription) — the **fallback profile**, used when the
@@ -635,7 +677,7 @@ reactive credit-exhaustion cooldown (i.e. the wall). That let a deep queue front
 whole week's credit on a free weekend and starve weekday interactive sessions. Fixed with a
 dual-cap pacing throttle in `cli_task_runner.sh` (config: `config/runner_budget.conf`,
 Dropbox-synced): a **DAILY spread cap** (a weekend can spend at most 2× the daily cap, never
-the week) and a **WEEKLY reserve cap** (runner gets ~1/3 of the weekly `claude-tech`
+the week) and a **WEEKLY reserve cap** (runner gets ~1/3 of the weekly `claude-<runner-profile>`
 allowance; 2/3 is protected for interactive). Caps run in **session-count** (always on, each
 Sonnet session bounded by `MAX_MINUTES`) and **output-token** units (precision layer, set
 `AUTO_WEEKLY_TOKEN_BUDGET` from `/usage`); per-session tokens are measured precisely via
@@ -681,7 +723,7 @@ CLI never invoked — distinct from the unit-level classifier/resource-guard che
 ## 19. Framework CLI install — registry-only `npm i -g ai-management`, NO EXCEPTION (fleet-wide, MANDATORY)
 
 > Operator directive (2026-07-22): a Mac was found running the framework CLI from a **local
-> tarball** (`@knofler/ai-management@0.2.0`, scoped, installed via `npm i -g ./*.tgz`) instead
+> tarball** (`@<owner>/ai-management@0.2.0`, scoped, installed via `npm i -g ./*.tgz`) instead
 > of the published registry package. Tarball/scoped/link installs drift per-machine, silently
 > lag the module, and defeat the myAI-native propagation model (CLAUDE.md "After Any Framework
 > Change"). Every Mac must be **byte-identical**.
@@ -692,7 +734,7 @@ npm i -g ai-management      # bare name, from the public npm registry — nothin
 ```
 **No exception.** Explicitly FORBIDDEN as the framework install path:
 - ❌ local tarball (`npm i -g ./ai-management-*.tgz`, `npm i -g <path>.tgz`)
-- ❌ the scoped name `@knofler/ai-management` (it is **not published** — a tarball-only artifact)
+- ❌ the scoped name `@<owner>/ai-management` (it is **not published** — a tarball-only artifact)
 - ❌ `npm link` / `npm i -g <local-dir>` / editable installs
 - ❌ hand-copying `AI/` folders as the propagation path (that is legacy `update_all.sh`, dormant repos only)
 
@@ -712,7 +754,7 @@ one install path, one management surface, identical on every Mac.
 
 ## 20. Branch-protection required checks must be PRODUCIBLE for that branch's base (fleet-wide, MANDATORY)
 
-> Operator incident (2026-09-05, task-4140bc8c): `knofler/ai_management`'s **`test`** branch
+> Operator incident (2026-09-05, task-4140bc8c): `<owner>/<repo>`'s **`test`** branch
 > protection listed **`Enforce branch policy`** as a required status check. That check is only
 > ever produced by `merge-gate.yml`, declared `on: pull_request: branches: [main]`. A PR whose
 > **base is `test`** therefore NEVER triggers the workflow, the check is never created, and the
@@ -746,7 +788,7 @@ that branch AND a `job … name:` (or step-emitted check) matching the context s
 must come from a `ci.yml` whose `pull_request` trigger includes `test`. New repos scaffolded from the
 blueprint inherit shape (b) for CI; do not require `merge-gate`'s check on `test`.
 
-**Fleet audit (2026-09-05).** Swept every non-archived `knofler/*` repo with a protected `test`
+**Fleet audit (2026-09-05).** Swept every non-archived `<owner>/*` repo with a protected `test`
 branch, cross-checking each required context against its workflow triggers:
 
 | Repo | test required checks | base=test producer | Verdict |
@@ -769,3 +811,77 @@ The 6 PHANTOM repos share ai_management's bug but their checks are **real CI** m
 so the correct remedy is **(b)** — extend each repo's ci.yml `pull_request` trigger to `[main, test]`
 (a code commit in each repo; out of scope for this ai_management-only task). Tracked here for a
 follow-up fleet pass; until fixed, non-admin PRs into those repos' `test` branch hang `Expected`.
+
+**Re-verification + root cause (2026-09-09, task-00d053c1).** Re-swept all 12 repos against live
+GitHub state: every verdict above still holds (ai_management `test` required list empty, `main` still
+requires `Enforce branch policy`; the 6 OK repos still trigger `[main, test]`; the 6 PHANTOM repos
+unchanged). Root cause of the phantoms found and fixed **in the master**: the CI-Thrift v1 trigger
+shape was the vector. `rollout_ci_thrift.sh`'s `THRIFTY_ON` block, `templates/ci.yml`,
+`templates/blueprint/.github/workflows/ci.yml`, CLAUDE.md rule 8 (+ `templates/CLAUDE_TEMPLATE.md`),
+and `documentation/POLICY_CI.md` all codified `pull_request: [main]`-only — thrifting a repo
+**stripped `test` from its PR trigger and manufactured the phantom**, and a rollout re-run would have
+broken the 6 currently-OK repos too (they still carry `push:` triggers, so `rewrite_ci` fires on
+them). All six surfaces now say `pull_request: [main, test]` — base=`test` PRs are rare (normal flow
+is direct push to `test`), so keeping `test` in the trigger costs ~zero runs while keeping the
+required checks producible; thrift's target was per-push runs, never base=`test` PRs. `rewrite_ci`
+also gained an in-place upgrade path (keyed on the v1 "PR-to-main only" comment marker) so re-running
+`./scripts/rollout_ci_thrift.sh <repo> --apply` on the 4 already-thrifted phantoms (repo-8, repo-9,
+repo-10, repo-12) now repairs them instead of skipping.
+Still owed by the follow-up fleet pass: apply + ship that rewrite in the 5 repos with a ci.yml, add
+`test` to repo-11's `app-ci.yml` pull_request trigger, and create a `ci.yml` from
+`templates/ci.yml` in repo-13 (it has no CI workflow at all yet its `test` requires
+Lint/Type-check/Test).
+
+## 21. Self-hosted runners only — except exempt orgs (fleet-wide, MANDATORY)
+
+> Operator directive (2026-10-02, brain atom `34f5bee9`, pinned): GitHub-HOSTED Actions
+> runners (`ubuntu-latest`, `windows-latest`, `macos-*`) cost money — every minute is metered
+> on private repos, and Windows/macOS carry a 2×/10× multiplier. A single local self-hosted
+> runner verifies the same gates for **zero billable minutes**.
+
+**THE RULE.** Every repo whose GitHub owner is **NOT an exempt org** (an org whose hosted minutes a team pays for) MUST run its CI jobs on the
+local self-hosted runner — `runs-on: [self-hosted, myai-local]` — and MUST NOT carry a `push:`
+trigger (PR + `workflow_dispatch` only, per §16/§17 and CLAUDE.md rule 8). Repos owned by an exempt org
+are **EXEMPT**: the org's hosted Actions minutes belong to the team, so hosted runners are allowed
+there and the tooling skips them (owner resolved from `origin`; an unknown owner is treated as
+NON-exempt — a personal/unknown repo must use self-hosted).
+
+**Why per-repo registration.** Personal GitHub accounts have **no org-level runners** (only GitHub
+orgs do), so a runner registered against `<owner>/repo-A` cannot pick up jobs for `<owner>/repo-B` —
+each repo needs its OWN registration. `scripts/runner_selfhosted.sh up <owner/repo> [--count N]`
+starts (registering if new) N runners for that repo.
+
+**One project, N runners (2026-10-22).** Every runner, for every repo, is one of the generic slot
+services `gh-runner-1..8` in `docker-compose.yml`, in compose project **`myai`** — never a second compose
+file or project (a runner defined outside that file is an orphan of it, and `down --remove-orphans`
+destroys it). Each slot has its own never-activated profile, so `--profile ci up`, the app `up` and boot
+never start one; every script call targets exactly one slot (`docker compose -p myai … up -d
+gh-runner-<n>`), never a project-wide up/down. The per-host map `~/.myai/runners/slots.<host>` (never
+Dropbox) says which slot holds which repo/instance: container `myai-gh-runner-<repo>[-N]`, registration
+volume `<repo>-gh-runner-config[-N]` (instance 1 keeps the volume that already holds its registration),
+runner name `myai-<host>[-N]`; instance N copies instance 1's custom labels. **Sizing:**
+`config/gh_runner_mem.txt` is the host's TOTAL runner budget, split across its runners by weight from
+`config/gh_runners.txt` (`<host|*> <owner/repo> <count> [weight]`; operator data, not shipped — see
+`config/gh_runners.txt.example`); live runners get `docker update` (`runner_selfhosted.sh rebalance`),
+never a recreate. **Migration** from the pre-slot layout (`gh-runner` service, per-repo projects
+`myai-runner-<repo>`): `runner_selfhosted.sh migrate [--dry-run]` drains each runner (custom labels →
+`myai-draining`, restored by a trap), waits until GitHub reports `busy=false`, stops it, starts its slot
+on the SAME volume (no re-registration), waits for `Listening for Jobs` + Online, restores the labels,
+then removes the old container; any failure rolls back. A stopped runner moves without being started.
+`runner_selfhosted.sh check` prints one OK/WARN line per runner (boot phase 8b, `health_check.sh` 15b,
+`check_selfhosted_runners.sh`); local-ci picks a free runner of the repo under test. The runner image is
+the Linux/ARM64 container in `ci/runner/` (CI infra, excluded from the 2 GB app-stack RAM guard).
+
+**Rollout.** `scripts/rollout_selfhosted_runner.sh` (dry-run default; `--apply` to edit,
+`--apply --commit` to commit per repo) walks `config/managed_repos.txt`, SKIPS exempt-org repos,
+and for each other repo rewrites direct `ubuntu-*` `runs-on` → `[self-hosted, myai-local]` (Linux →
+Linux is safe) and strips `push:` triggers. It does **NOT** silently rewrite `windows-*`/`macos-*` or
+matrix `os` runners — those cannot run on the Linux self-hosted runner and need a human decision
+(keep a Windows/macOS self-hosted runner, or drop the job) — it FLAGS them instead. Idempotent and
+comment-preserving (`scripts/lib/selfhosted_rewrite.py`).
+
+**Enforcement.** `scripts/check_selfhosted_runners.sh` (also wired into `health_check.sh` as check
+15) FAILS any workflow outside an exempt org still naming a hosted runner image. Reference
+implementation done manually in one managed repo on 2026-10-02 (all workflows switched to
+`[self-hosted, myai-local]`). Do not move jobs back to hosted runners
+outside the exempt org.

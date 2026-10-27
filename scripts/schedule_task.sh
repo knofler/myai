@@ -2,7 +2,7 @@
 # schedule_task.sh — the STANDARD way to schedule autonomous work in ANY repo.
 #
 # Pushes a task into the myAI gateway task queue (http://localhost:3100/mcp).
-# The launchd CLI task runner (every few hours, claude-tech subscription —
+# The launchd CLI task runner (every few hours, runner-profile subscription —
 # Sonnet/Fable/Opus per its capability x cost x availability router, Fable a
 # standing part of the Max 20x allocation) pulls the highest-priority pending
 # task and works it on a `test` branch, then flips it to "Needs Review" for a
@@ -43,7 +43,7 @@ GATEWAY_HEALTH_BASE=${GATEWAY_HEALTH_BASE:-$(printf '%s' "${GATEWAY_MCP%/mcp}" |
 DASH=${DASH_URL:-http://localhost:3210}
 FABLE_FREE_UNTIL=${FABLE_FREE_UNTIL:-20260622}
 
-REPO=""; TITLE=""; DESC=""; PRIORITY="P2"; AGENT=""; MODEL=""; NOTES=""; ACTION="create"
+REPO=""; TITLE=""; DESC=""; PRIORITY="P2"; AGENT=""; MODEL=""; NOTES=""; ACTION="create"; MODEL_PREF="false"
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo)      shift; REPO="${1:?}";;
@@ -52,6 +52,12 @@ while [ $# -gt 0 ]; do
     --priority)  shift; PRIORITY="${1:?}";;
     --agent)     shift; AGENT="${1:?}";;
     --model)     shift; MODEL="${1:?}";;
+    # Preference, not a pin (task-972913b7): marks --model as a demotable
+    # suggestion the runner policy MAY demote to the free local tier for
+    # mechanical docs/summarize/triage work, instead of an absolute pin always
+    # honored as-is. Use this from automated backlog seeding (queue_topup.sh);
+    # a human running this by hand wants their --model choice kept — omit it.
+    --model-preference) MODEL_PREF="true";;
     --notes)     shift; NOTES="${1:?}";;
     --list)      ACTION="list";;
     --list-all)  ACTION="list-all";;
@@ -158,7 +164,7 @@ for x in sorted(tasks.values(),key=lambda r:(r.get('priority','P9'),r.get('repo'
 print(f'  -- {len(tasks)} open --')
 if counts:
     print('  by status: ' + ', '.join(f'{k}={v}' for k,v in sorted(counts.items())))
-" "${RESPONSES[@]}"
+" ${RESPONSES[@]+"${RESPONSES[@]}"}
   echo "Dashboard: $DASH/tasks   ·   $DASH/schedule"
   exit 0
 fi
@@ -192,9 +198,10 @@ a={'repo':sys.argv[1],'title':sys.argv[2],'priority':sys.argv[4],'source':'manua
 if sys.argv[3]: a['description']=sys.argv[3]
 if sys.argv[5]: a['assignedAgent']=sys.argv[5]
 if sys.argv[6]: a['recommendedModel']=sys.argv[6]
+if sys.argv[6] and sys.argv[8] == 'true': a['recommendedModelPreference']=True
 if sys.argv[7]: a['notes']=sys.argv[7]
 print(json.dumps(a))
-" "$REPO" "$TITLE" "$DESC" "$PRIORITY" "$AGENT" "$MODEL" "$NOTES")
+" "$REPO" "$TITLE" "$DESC" "$PRIORITY" "$AGENT" "$MODEL" "$NOTES" "$MODEL_PREF")
 
 mcp_call tasks_create "$ARGS" | python3 -c "
 import sys,json

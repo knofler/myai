@@ -10,9 +10,14 @@ export const dynamic = 'force-dynamic';
 export default function ReferralsPage() {
   return (
     <div className="max-w-3xl mx-auto">
+      {/* §5.1: the answer first. This shell loads nothing (ReferralPanel
+          fetches the link and its stats client-side), so the sentence says
+          what the page is FOR rather than quoting a signup count. */}
       <PageHeader
+        icon="revenue"
         title="Referrals"
-        subtitle="Share your tracked invite link. When someone signs up through it, you both get credits."
+        summary="Share your tracked invite link. When someone signs up through it, you both get credits."
+        subtitle="Your link, the signups it has brought in, and the credits they earned you."
       />
       <div className="mt-6">
         <ReferralPanel />

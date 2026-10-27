@@ -1,11 +1,27 @@
-# Local Mongo Mirror — memory + registry resilience
+# Local Mongo Mirror — Atlas is the source of truth, local is a read replica
 
-> Closes a resilience hole: when the gateway runs on a shared **Atlas** cluster,
-> the local `myai-mongo` container is unused by it, so RAG memory, the agent/
-> skill/repo registry, tasks, handoffs, and budgets live **only in Atlas**.
-> Atlas-down or offline ⇒ no memory/registry on localhost. (The **brain** is
-> git-backed at `~/.myai/brain` + its configured private remote, so it already
-> has a local copy — memory/registry did NOT.)
+> **Posture (operator, 2026-10-02): "keep all myai data on local mongo and Atlas
+> in both; Atlas is the true source, and localhost will be a replica."**
+>
+> - **Atlas (`cluster0…`) is the SOURCE OF TRUTH.** Every gateway **write** goes
+>   to Atlas — always. The gateway's `MONGODB_URI` points at Atlas; nothing in
+>   the normal path writes to the local store.
+> - **Local `myai-mongo` is a WARM READ REPLICA.** `scripts/mongo_mirror.sh`
+>   streams Atlas → local on a schedule so a full local copy is always on disk
+>   for read-side failover (`MYAI_DB_FAILOVER=local`, below) when Atlas is
+>   unreachable. The replica is refreshed by overwrite, never promoted silently.
+> - **One-way only.** The mirror is **Atlas → local**. The reverse direction
+>   (local → Atlas) exists but is guarded behind `--reverse --yes`; routine
+>   operation never pushes local data up, so the replica can never corrupt the
+>   source of truth.
+>
+> This closes a resilience hole: when the gateway runs on a shared **Atlas**
+> cluster, the local `myai-mongo` container is otherwise unused by it, so RAG
+> memory, the agent/skill/repo registry, tasks, swarms, mailbox_messages,
+> handoffs, and budgets would live **only in Atlas**. Atlas-down or offline ⇒ no
+> memory/registry on localhost. (The **brain** is git-backed at `~/.myai/brain`
+> + its configured private remote, so it already has a local copy — the rest did
+> NOT.)
 
 ## What it does
 
@@ -21,11 +37,38 @@ It runs inside a **throwaway `mongo:7` container** (which bundles `mongodump`/
 tools required** (Docker-only, AI_RULES §1). Direction is **Atlas → local by
 default** (a backup/mirror); the reverse (local → Atlas) is guarded.
 
+## What gets mirrored — full replica minus a justified deny-list
+
+The default whole-db mirror copies **every collection in the `myai` database**
+(all ~73 — including `swarms`, `mailbox_messages`, `tasks`, `vectors`, `agents`,
+`repos`, …) **except** a short, explicitly justified **deny-list** of genuinely
+ephemeral / high-churn collections whose stale copy would be useless or
+misleading in a replica. The list is dump-side (`mongodump --excludeCollection`)
+so denied collections never transfer — keeping the replica lean under the 512m
+RAM slice (see **RAM budget**). Default `MIRROR_DENY_COLLECTIONS`:
+
+| Collection | Why it's denied |
+|---|---|
+| `runner_heartbeats` | Liveness pings — every machine every ~10 min. A frozen heartbeat after failover is worthless (ephemeral, high churn). |
+| `runner_leases` | Current task locks. A stale lease in the replica would actively mislead a reader into thinking a task is held. (ephemeral) |
+| `gatewaysessions` | Gateway session store, regenerated on next login. No value frozen in a replica. (ephemeral) |
+
+Everything **not** on this list is mirrored. Override per run or per host:
+
+```bash
+MIRROR_DENY_COLLECTIONS="" myai mirror                 # mirror LITERALLY everything
+MIRROR_DENY_COLLECTIONS="usageevents,stripeevents" myai mirror  # trim more under disk/RAM pressure
+myai mirror --collections vectors,agents,skills,repos  # or an explicit allow-list (deny-list ignored)
+```
+
+An explicit `--collections` allow-list and the guarded `--reverse` push both
+bypass the deny-list — it only applies to the default Atlas → local whole-db run.
+
 ## Usage
 
 ```bash
-myai mirror                       # Atlas → local, whole db (default)
-myai mirror --dry-run             # show the resolved plan, touch nothing
+myai mirror                       # Atlas → local, full db minus the deny-list (default)
+myai mirror --dry-run             # show the resolved plan + deny-list, touch nothing
 myai mirror --collections vectors,agents,skills,repos,aipatterns   # scope it
 myai mirror --src "mongodb+srv://…" --dst "mongodb://…"            # explicit
 myai mirror --reverse --yes       # local → Atlas (DANGEROUS — guarded)
@@ -58,6 +101,67 @@ docker exec myai-mongo mongosh -u "$MGU" -p "$MGP" --authenticationDatabase admi
   --quiet --eval 'const d=db.getSiblingDB("myai"); \
   ["agents","vectors","tasks","aipatterns","notifications"].forEach(c=>print(c+": "+d.getCollection(c).countDocuments({})))'
 ```
+
+## Per-run freshness + the dashboard replica row
+
+Every successful Atlas → local run records **freshness + the per-collection
+count delta (Atlas vs the replica)** so coverage is observable, not assumed:
+
+1. `scripts/mongo_mirror.sh` → `capture_coverage()` runs `mongosh` against both
+   sides (in the same throwaway tools container, URIs passed via env so no
+   credential lands in `docker` process args) and writes
+   `~/.myai/mongo-mirror-counts.json`:
+
+   ```json
+   {
+     "capturedAt": 1696200000,
+     "mirroredCollections": 70,
+     "totalCollections": 73,
+     "deniedCollections": ["runner_heartbeats", "runner_leases", "gatewaysessions"],
+     "localDataSizeBytes": 123456789,
+     "ramWarnBytes": 419430400,
+     "ramFlag": false,
+     "perCollection": [{ "name": "tasks", "atlas": 17936, "local": 17936, "delta": 0 }, …]
+   }
+   ```
+
+   `delta` is `atlas − local` per collection: `0` for a healthy mirrored
+   collection, the full Atlas count for a denied one, and a non-zero value flags
+   unexpected drift. This step is **best-effort** — a counting failure never
+   fails the mirror itself.
+
+2. `scripts/mongo_mirror_status_snapshot.sh` folds that object into
+   `state/mongo-mirror-status.json` as `coverage` (the host → repo bridge the
+   gateway/dashboard already read off the mount — same pattern as
+   `runner_health.sh`). The existing `installed` / `intervalSec` / `last` fields
+   are unchanged, so `mongo-mirror-alerter.ts` and `myai doctor` keep working.
+
+3. The dashboard reads it via `dashboard/src/lib/mongo-mirror.ts` and renders a
+   **"Local Mongo replica"** card on **System → Runner Health**, showing the
+   one-line status:
+
+   ```
+   local replica: 70/73 collections, last sync 4m ago
+   ```
+
+   plus a **RAM headroom** tile that turns amber when `ramFlag` is set.
+
+## RAM budget (the 512m slice)
+
+The local `myai-mongo` is capped at **512 MB RAM** by the app-stack ceiling
+(`CLAUDE.md` § On Session Start → "2 GB RAM ceiling"; the suggested split is app
+1 GB + db 512 MB + sidecars 512 MB). WiredTiger clamps its cache to the
+container's memory, so a replica whose working set grows past the slice risks
+cache thrash. The mirror records the replica's on-disk `dataSize` each run and
+sets `ramFlag: true` once it reaches `MIRROR_RAM_WARN_BYTES` (default ~400 MiB) —
+surfaced as an amber tile on the dashboard and a `c_warn` in the run log.
+
+**If the replica no longer fits:** widen the deny-list
+(`MIRROR_DENY_COLLECTIONS="…,usageevents,stripeevents"` — the biggest
+append-only/metering collections are the usual culprits), or raise the db's
+`mem_limit` per host. A fleet-wide ceiling bump is tracked per host
+(per-host limits); this mirror only **flags** the condition, it never changes the
+cap on its own.
 
 ## Scheduling a periodic mirror (optional)
 

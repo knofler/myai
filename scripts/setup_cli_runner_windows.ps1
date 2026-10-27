@@ -33,7 +33,7 @@
       deliberately NOT used here; if that's all you have, use the WSL2 path)
     • The myAI gateway reachable at http://localhost:3100 (Docker Desktop)
     • The Claude CLI installed and logged in inside Git Bash
-      (profile: ~/.claude-tech — the runner sets CLAUDE_CONFIG_DIR itself)
+      (profile: the configured runner profile — runner.conf; the runner sets CLAUDE_CONFIG_DIR itself)
 
 .PARAMETER EveryMinutes
   Fire cadence in minutes (default 10, max 1439). Mirrors --every-minutes.

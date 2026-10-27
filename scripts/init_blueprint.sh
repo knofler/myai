@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Powerhouse Blueprint provisioner.
+# myAI Blueprint provisioner.
 #
-# Spawns a new project from the canonical reference (knofler/todo-blueprint)
-# with the full stack pre-wired: AI framework + Next.js 15 + TS + Tailwind v4
-# + Mongo (Docker) + Anthropic SDK + Sentry + GH Actions + Vercel-ready.
+# Spawns a new project from the canonical reference ($TEMPLATE_REPO, below)
+# with the full stack pre-wired: AI framework + Next.js 16 + TS 6 + Tailwind v4
+# + Mongo (Docker) + Anthropic SDK + Sentry + GH Actions + Renovate + Vercel-ready.
 #
 # Usage:
 #   init_blueprint.sh <target-path> [options]
 #
 # Options:
 #   --name <name>           Project name (default: basename of target-path)
-#   --gh-create <slug>      gh repo create <slug> (e.g. knofler/my-app) + push
+#   --gh-create <slug>      gh repo create <slug> (e.g. <owner>/my-app) + push
 #   --gh-private            Create the GH repo as private (default public)
-#   --vercel                vercel link + deploy after gh push (scope: knoflers-projects)
+#   --vercel                vercel link + deploy after gh push (scope: $VERCEL_SCOPE, else the CLI default)
 #   --no-ai                 Skip init_ai.sh (just the app stack)
 #   --mode <local|clone|template> Provisioning mode (default: local)
 #                           local    — copy templates/blueprint/* from THIS repo (offline,
 #                                      no network; the canonical self-contained scaffold)
-#                           clone    — git clone knofler/todo-blueprint, strip .git, re-init
+#                           clone    — git clone $TEMPLATE_REPO, strip .git, re-init
 #                           template — gh repo create --template (requires --gh-create)
 #
 # Examples:
@@ -25,13 +25,13 @@
 #   init_blueprint.sh ~/code/cms-app
 #
 #   # Full provisioning (local scaffold + GitHub repo + Vercel)
-#   init_blueprint.sh ./new-app --name new-app --gh-create knofler/new-app --gh-private --vercel
+#   init_blueprint.sh ./new-app --name new-app --gh-create <owner>/new-app --gh-private --vercel
 #
 #   # Clone the live reference repo instead of the bundled templates
-#   init_blueprint.sh ./new-app --mode clone --gh-create knofler/new-app
+#   init_blueprint.sh ./new-app --mode clone --gh-create <owner>/new-app
 #
 #   # Fastest path (GitHub Template API + auto Vercel deploy)
-#   init_blueprint.sh ./new-app --mode template --gh-create knofler/new-app --gh-private --vercel
+#   init_blueprint.sh ./new-app --mode template --gh-create <owner>/new-app --gh-private --vercel
 #
 # Reads the framework's Docker-only mandate (memory:
 # feedback_blueprint_docker_only.md) — the produced repo NEVER assumes
@@ -40,7 +40,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AI_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-TEMPLATE_REPO="knofler/todo-blueprint"
+# The reference repo for --mode clone|template (<owner>/<repo>); not needed for
+# the default --mode local, which copies the bundled templates/blueprint/.
+TEMPLATE_REPO="${BLUEPRINT_TEMPLATE_REPO:-}"
 TEMPLATE_BRANCH="main"
 BLUEPRINT_DIR="$AI_ROOT/templates/blueprint"
 
@@ -90,6 +92,10 @@ if [[ "$MODE" != "local" && "$MODE" != "clone" && "$MODE" != "template" ]]; then
   echo "ERROR: --mode must be 'local', 'clone', or 'template' (got '$MODE')"
   exit 1
 fi
+if [[ "$MODE" != "local" && -z "$TEMPLATE_REPO" ]]; then
+  echo "ERROR: --mode $MODE needs a reference repo: set BLUEPRINT_TEMPLATE_REPO=<owner>/<repo>"
+  exit 1
+fi
 if [[ "$MODE" == "template" && -z "$GH_SLUG" ]]; then
   echo "ERROR: --mode template requires --gh-create <owner/name>"
   exit 1
@@ -101,7 +107,7 @@ if [[ "$MODE" == "local" && ! -d "$BLUEPRINT_DIR" ]]; then
 fi
 
 echo "──────────────────────────────────────────────────"
-echo "  Powerhouse Blueprint init"
+echo "  myAI Blueprint init"
 echo "──────────────────────────────────────────────────"
 echo "  target:      $TARGET"
 echo "  project:     $NAME"
@@ -112,7 +118,7 @@ else
   echo "  template:    https://github.com/$TEMPLATE_REPO (branch: $TEMPLATE_BRANCH)"
 fi
 [[ -n "$GH_SLUG" ]] && echo "  gh repo:     $GH_SLUG $GH_PRIVATE"
-[[ -n "$DO_VERCEL" ]] && echo "  vercel:      will deploy (scope: knoflers-projects)"
+[[ -n "$DO_VERCEL" ]] && echo "  vercel:      will deploy (scope: ${VERCEL_SCOPE:-your Vercel CLI default})"
 echo "──────────────────────────────────────────────────"
 echo
 
@@ -126,7 +132,7 @@ if [[ "$MODE" == "local" ]]; then
   chmod +x "$TARGET/dev" 2>/dev/null || true
 elif [[ "$MODE" == "template" ]]; then
   echo "→ gh repo create --template ${TEMPLATE_REPO} → ${GH_SLUG}…"
-  gh repo create "$GH_SLUG" --template "$TEMPLATE_REPO" $GH_PRIVATE --clone --description "Generated from Powerhouse Blueprint — $NAME" 2>&1 | tail -3
+  gh repo create "$GH_SLUG" --template "$TEMPLATE_REPO" $GH_PRIVATE --clone --description "Generated from myAI Blueprint — $NAME" 2>&1 | tail -3
   # gh clones into ./<repo-name> next to cwd; move into target if different
   CLONED_DIR="$(pwd)/$(basename "$GH_SLUG")"
   if [[ "$CLONED_DIR" != "$TARGET" ]]; then
@@ -223,7 +229,7 @@ if [[ "$MODE" == "local" || "$MODE" == "clone" ]]; then
   git config user.name "$LOGIN"
   git add -A
   if [[ "$MODE" == "local" ]]; then SOURCE_DESC="bundled blueprint templates (templates/blueprint/)"; else SOURCE_DESC="$TEMPLATE_REPO@$TEMPLATE_BRANCH"; fi
-  git commit -q -m "chore: initialise from Powerhouse Blueprint
+  git commit -q -m "chore: initialise from myAI Blueprint
 
 Generated by AI/scripts/init_blueprint.sh (mode: $MODE)
 Source:  $SOURCE_DESC
@@ -249,7 +255,7 @@ fi
 if [[ -n "$GH_SLUG" && ( "$MODE" == "local" || "$MODE" == "clone" ) ]]; then
   echo "→ gh repo create ${GH_SLUG} ${GH_PRIVATE}…"
   gh repo create "$GH_SLUG" $GH_PRIVATE --source="$TARGET" --remote=origin \
-    --description "Generated from Powerhouse Blueprint — $NAME" 2>&1 | tail -3
+    --description "Generated from myAI Blueprint — $NAME" 2>&1 | tail -3
   git push -u origin main 2>&1 | tail -2
   git push -u origin test 2>&1 | tail -2
 elif [[ -n "$GH_SLUG" && "$MODE" == "template" ]]; then
@@ -259,11 +265,13 @@ elif [[ -n "$GH_SLUG" && "$MODE" == "template" ]]; then
 fi
 
 # ── 6. Optional: Vercel link + deploy ────────────────────────────────
-# Defaults to the user's PERSONAL scope (knoflers-projects). The
-# Powerhouse Enterprise team has SSO/Deployment Protection on by default
-# which makes preview URLs unviewable. Test repos belong on personal.
-# Override with --vercel-scope <team> when you specifically want a team.
-VERCEL_SCOPE="${VERCEL_SCOPE:-knoflers-projects}"
+# Scope: $VERCEL_SCOPE when set, else the Vercel CLI's default (usually your
+# personal scope). An Enterprise Vercel team usually has SSO/Deployment
+# Protection on by default, which makes preview URLs unviewable, so test repos
+# belong on a personal scope; set VERCEL_SCOPE=<team> only when you want a team.
+VERCEL_SCOPE="${VERCEL_SCOPE:-}"
+VERCEL_SCOPE_ARGS=()
+[[ -n "$VERCEL_SCOPE" ]] && VERCEL_SCOPE_ARGS=(--scope "$VERCEL_SCOPE")
 # Pull personal Sentry DSN from master .env if available (gitignored, never committed).
 # This bakes error tracking into the first deploy. For persistence across future
 # deploys, the user runs `scripts/setup_sentry.sh --vercel` after `vercel link`.
@@ -273,8 +281,8 @@ if [[ -f "$AI_ROOT/.env" ]]; then
 fi
 if [[ -n "$DO_VERCEL" ]]; then
   if command -v vercel >/dev/null 2>&1; then
-    echo "→ vercel deploy (scope: $VERCEL_SCOPE)…"
-    vercel deploy --yes --prod=false --scope "$VERCEL_SCOPE" \
+    echo "→ vercel deploy (scope: ${VERCEL_SCOPE:-CLI default})…"
+    vercel deploy --yes --prod=false ${VERCEL_SCOPE_ARGS[@]+"${VERCEL_SCOPE_ARGS[@]}"} \
       --build-env MONGODB_URI=mongodb://stub \
       --build-env "NEXT_PUBLIC_SENTRY_DSN=${MASTER_SENTRY_DSN}" 2>&1 | tail -5
     if [[ -n "$MASTER_SENTRY_DSN" ]]; then

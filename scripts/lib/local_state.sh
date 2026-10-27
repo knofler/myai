@@ -49,7 +49,7 @@ local_state_suffix() {
 }
 
 # local_state_path BASE_PATH — BASE_PATH with the per-machine suffix appended,
-# e.g. local_state_path "state/.session-metrics" -> ".session-metrics.runner-host"
+# e.g. local_state_path "state/.session-metrics" -> ".session-metrics.home-mac"
 # Idempotent no-op on an empty argument (callers that pass through an
 # unresolved path shouldn't get a bare ".suffix" file).
 local_state_path() {

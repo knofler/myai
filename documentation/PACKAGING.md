@@ -54,8 +54,10 @@ Two layers of defence-in-depth keep operator context out (plan §2a):
      — operator **fleet-orchestration** scripts that encode the operator's own
      repo inventory. A downloader builds *their own* fleet; these are not part
      of a clean framework.
-   - `!documentation/{POWERHOUSE_KEYWORDS,MULTI_ORG_WORKFLOW}.md` —
-     operator-personal documentation.
+   - `!documentation/operator/**` — operator-personal documentation lives in
+     `documentation/operator/` and is excluded by this ONE generic line, so the
+     published package.json never names an operator doc. (One legacy per-file
+     line remains until that doc moves there too.)
 2. **Publish leak-scanner (verify, layer 2)** — `scripts/publish_guard.sh`
    runs `npm pack`, extracts the real tarball, and FAILS (exit 1) on any
    operator home path, the operator Dropbox dev root, operator email, known operator repo name,

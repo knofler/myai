@@ -94,7 +94,7 @@ export function WhatsNewWidget() {
       >
         <span className="text-base leading-none">🎁</span>
         {unread > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 flex items-center justify-center rounded-full bg-brand-orange text-[10px] font-bold text-zinc-950">
+          <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 flex items-center justify-center rounded-full bg-[rgb(var(--warn))] text-label font-bold text-zinc-950">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
@@ -116,11 +116,11 @@ export function WhatsNewWidget() {
                 <div key={r.version} className="px-4 py-3 hover:bg-[rgb(var(--bg-hover))]/40 transition-colors">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold text-[rgb(var(--text-primary))]">v{r.version}</span>
-                    {r.date && <span className="text-[10px] text-[rgb(var(--text-muted))]">{r.date}</span>}
+                    {r.date && <span className="text-label text-[rgb(var(--text-muted))]">{r.date}</span>}
                   </div>
                   <ul className="mt-1.5 space-y-1">
                     {r.sections.flatMap((s) => s.items).slice(0, 4).map((item, i) => (
-                      <li key={i} className="text-[11px] text-[rgb(var(--text-secondary))] leading-snug line-clamp-2">
+                      <li key={i} className="text-label text-[rgb(var(--text-secondary))] leading-snug line-clamp-2">
                         {item}
                       </li>
                     ))}
@@ -135,7 +135,7 @@ export function WhatsNewWidget() {
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => setOpen(false)}
-            className="block px-4 py-2.5 text-center text-[11px] text-[rgb(var(--text-secondary))] hover:text-teal-300 border-t border-[rgb(var(--border-subtle))] transition-colors"
+            className="block px-4 py-2.5 text-center text-label text-[rgb(var(--text-secondary))] hover:text-teal-300 border-t border-[rgb(var(--border-subtle))] transition-colors"
           >
             Full changelog →
           </Link>

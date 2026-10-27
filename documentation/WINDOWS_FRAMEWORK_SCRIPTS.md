@@ -21,7 +21,7 @@ on a real Windows runner.
 |---|---|---|
 | Provided by | Git for Windows (`git` is already required) | `wsl --install -d Ubuntu` |
 | Environment | MSYS2 bash on top of Windows | real Linux userland |
-| Coverage | **CI-tested** — `.github/workflows/windows-framework-ci.yml` runs the exact three scripts through `bash.exe` on `windows-latest` | same code path as Linux — see `WINDOWS_RUNNER.md` Path A |
+| Coverage | **Not CI-tested on Windows** — the hosted `windows-latest` lane was removed 2026-10-03 (no Windows operators; rule 9). The same suite runs on macOS + Linux bash | same code path as Linux — see `WINDOWS_RUNNER.md` Path A |
 | When to pick | one-off `init_ai.sh` on a new project, occasional `health_check.sh` | doing framework dev, running `update_all.sh` regularly, or anything that shells out to Python |
 
 ## Running the scripts (Git Bash)
@@ -39,12 +39,13 @@ Windows-specific (no `schtasks`, no registry, no ACLs).
 
 ## CI coverage
 
-`.github/workflows/windows-framework-ci.yml` runs
-`scripts/tests/test_windows_framework_scripts.sh` through `bash.exe` on a real
-`windows-latest` GitHub Actions runner (Git Bash is preinstalled there — same
-one an operator gets from Git for Windows). It's PR-triggered only, scoped by
-`paths:` to the three scripts + the libs they share, per the fleet's
-CI/Vercel Thrift Policy (no per-push tax). The suite:
+`scripts/tests/test_windows_framework_scripts.sh` runs in `scripts/tests/run_all.sh`
+on macOS (every boot) and Linux (self-hosted CI). The hosted `windows-latest`
+workflows (`windows-framework-ci.yml`, `windows-runner-ci.yml`) were deleted on
+2026-10-03: nobody runs myAI on Windows, hosted runners are disallowed outside
+`<exempt-org>` (CLAUDE.md rule 9), and they failed every PR on billing. If a
+Windows operator appears, restore them from git history (`git log --diff-filter=D
+-- .github/workflows/windows-*`) onto a self-hosted Windows runner. The suite:
 
 1. `bash -n` syntax-parses all three scripts plus `lib/merge_json.sh` and
    `lib/sync_guard.sh` — catches a bash-dialect break immediately.
@@ -56,8 +57,7 @@ CI/Vercel Thrift Policy (no per-push tax). The suite:
 4. Runs `health_check.sh` against the fixture and asserts it completes with a
    defined exit code (0/1/2 by design) and prints its Summary section.
 
-Run it locally on any platform: `./scripts/tests/test_windows_framework_scripts.sh`
-(it's picked up automatically by `./scripts/tests/run_all.sh` too).
+Run it locally on any platform: `./scripts/tests/test_windows_framework_scripts.sh`.
 
 ## Known limitation — the `/usr/bin/python3` convention
 
@@ -77,5 +77,4 @@ MSYS2's `pacman -S python`), or use WSL2.
 ---
 
 *Related: `documentation/WINDOWS_RUNNER.md` (autonomous CLI runner on
-Windows) · `scripts/tests/test_windows_framework_scripts.sh` ·
-`.github/workflows/windows-framework-ci.yml`.*
+Windows) · `scripts/tests/test_windows_framework_scripts.sh`.*

@@ -8,7 +8,7 @@
 // the one gateway fetch. The plan byte caps mirror hosted-brain.ts HOSTED_QUOTA_BYTES
 // — kept in lock-step the same way billing.ts mirrors the gateway's billing.ts.
 
-import { callGateway } from './gateway';
+import { cachedGatewayRead } from './server-cache';
 import { hasHostedBrain } from './plan-limits';
 import type { TenantPlan } from './plan-limits';
 
@@ -29,7 +29,7 @@ export interface HostedBrainInfo {
 
 /** This tenant's hosted-brain status from the gateway (null if unreachable). */
 export function fetchHostedBrainInfo(): Promise<HostedBrainInfo | null> {
-  return callGateway<HostedBrainInfo>('brain_host_status');
+  return cachedGatewayRead<HostedBrainInfo>('brain_host_status');
 }
 
 // ── per-plan hosted-repo byte caps (mirror of hosted-brain.ts HOSTED_QUOTA_BYTES) ──

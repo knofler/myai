@@ -62,7 +62,7 @@ export function HostedBrainUpgrade({ nextPlan, over }: { nextPlan: TenantPlan; o
       >
         {busy ? 'Starting…' : `Upgrade to ${planLabel(nextPlan)}`}
       </button>
-      {error && <p className="text-xs text-rose-400">{error}</p>}
+      {error && <p role="alert" className="text-xs text-rose-400">{error}</p>}
     </div>
   );
 }

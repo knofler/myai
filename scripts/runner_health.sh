@@ -5,9 +5,17 @@
 # WHY: the dashboard runs in Docker and reads MongoDB + the repo (mounted RO at
 # AI_ROOT). It cannot see ~/.ai-cli-runner/runner.out, which lives on the host
 # outside the repo. This host-side script bridges that gap: it parses runner.out
-# and writes state/runner-health.json INTO the repo, where the dashboard reads it
-# via AI_ROOT. Queue-depth-by-status comes straight from the gateway task store
-# (Mongo) in the dashboard — this artifact carries the runner-fire signal only.
+# and writes state/runner-health.<host>.json INTO the repo, where the dashboard
+# reads it via AI_ROOT (readRunnerHealth merges all hosts, freshest live wins).
+# Queue-depth-by-status comes straight from the gateway task store (Mongo) in
+# the dashboard — this artifact carries the runner-fire signal only.
+#
+# PER-HOST BY NAME (task-1eba9e51, operator directive 2026-09-28): universal
+# boot runs this on EVERY Mac daily, and the repo working tree is Dropbox-
+# synced across Macs. Two machines rewriting the same state/runner-health.json
+# is a guaranteed Dropbox conflict copy, and Mac B clobbering Mac A's runner
+# signal was a correctness bug besides. Each Mac now writes its own
+# state/runner-health.<host>.json — no shared filename, no race.
 #
 # Emits per-repo: last fire time, last RESULT, fire/zero-work counts, and the
 # trailing consecutive-zero-work streak. Emits a global zero-work STALL flag when
@@ -28,8 +36,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 RUNNER_OUT="${RUNNER_OUT:-$HOME/.ai-cli-runner/runner.out}"
-RUNNER_HEALTH_OUT="${RUNNER_HEALTH_OUT:-$REPO_ROOT/state/runner-health.json}"
 RUNNER_STALL_N="${RUNNER_STALL_N:-3}"
+
+# Per-host artifact name (see header). local_state_suffix comes from the same
+# lib the hooks use; inline fallback keeps this script standalone-safe.
+for _lslib in "$REPO_ROOT/scripts/lib/local_state.sh" "$REPO_ROOT/AI/scripts/lib/local_state.sh"; do
+  # shellcheck disable=SC1090
+  [ -f "$_lslib" ] && . "$_lslib" && break
+done
+if ! command -v local_state_suffix >/dev/null 2>&1; then
+  local_state_suffix() {
+    h="$(hostname -s 2>/dev/null)"; [ -n "$h" ] || h="$(hostname 2>/dev/null)"
+    [ -n "$h" ] || h="unknown-host"
+    printf '%s' "$h" | tr -c 'A-Za-z0-9_.-' '_'
+  }
+fi
+if [ -z "${RUNNER_HEALTH_OUT:-}" ]; then
+  RUNNER_HEALTH_OUT="$REPO_ROOT/state/runner-health.$(local_state_suffix).json"
+  # Default path only (never on an env override — tests point OUT elsewhere):
+  # retire the pre-per-host shared-name artifact so the fleet converges on
+  # per-host files only (gitignored; the dashboard no longer reads it).
+  rm -f -- "$REPO_ROOT/state/runner-health.json" 2>/dev/null || true
+fi
 
 mkdir -p "$(dirname "$RUNNER_HEALTH_OUT")"
 
@@ -125,7 +153,9 @@ with open(log_path, encoding="utf-8", errors="replace") as fh:
         m = RE_LOG.search(line)
         if m and cur["fireAt"] is None:
             try:
-                dt = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+                # Log-name stamps are UTC (see runner_repo_staleness.sh).
+                dt = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S") \
+                    .replace(tzinfo=timezone.utc)
                 cur["fireAt"] = dt.astimezone().isoformat(timespec="seconds")
             except ValueError:
                 pass

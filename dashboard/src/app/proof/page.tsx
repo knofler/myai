@@ -149,7 +149,7 @@ export default async function ProofPage() {
       <main className="max-w-5xl mx-auto px-5 md:px-8 pt-10 pb-20">
         <div className="text-center max-w-2xl mx-auto">
           <p className="text-xs uppercase tracking-[0.2em] text-[rgb(var(--text-muted))] font-semibold">Proof, not promises</p>
-          <h1 className="text-3xl md:text-4xl font-bold tracking-tight mt-2">
+          <h1 className="text-title font-bold tracking-tight mt-2">
             We woke up to shipped work — every night.
           </h1>
           <p className="mt-4 text-[rgb(var(--text-secondary))]">
@@ -178,7 +178,7 @@ export default async function ProofPage() {
                 const isToday = d.date === series[series.length - 1]?.date;
                 return (
                   <div key={d.date} className="flex-1 flex flex-col items-center gap-1 group">
-                    <span className="text-[10px] font-mono text-[rgb(var(--text-muted))] group-hover:text-[rgb(var(--text-primary))]">
+                    <span className="text-label font-mono text-[rgb(var(--text-muted))] group-hover:text-[rgb(var(--text-primary))]">
                       {d.count > 0 ? d.count : ''}
                     </span>
                     <div className="w-full flex items-end justify-center" style={{ height: '84px' }}>
@@ -187,7 +187,7 @@ export default async function ProofPage() {
                         style={{ height: `${Math.max(h, d.count > 0 ? 4 : 0)}%` }}
                       />
                     </div>
-                    <span className={`text-[9px] font-mono ${isToday ? 'text-teal-400' : 'text-zinc-600'}`}>
+                    <span className={`text-label font-mono ${isToday ? 'text-teal-400' : 'text-zinc-600'}`}>
                       {d.date.slice(5)}
                     </span>
                   </div>

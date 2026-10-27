@@ -4,6 +4,7 @@
 import { getRegistryCounts } from '@/lib/registry-cache';
 import { TabBar, resolveTab } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/page-header';
+import { plural, joinClauses } from '@/lib/summary';
 import AgentsView from '@/views/agents';
 import SkillsView from '@/views/skills';
 import HooksView from '@/views/hooks';
@@ -19,6 +20,26 @@ const SUBTITLES: Record<string, string> = {
   rules: 'Governance & routing documents.',
   patterns: 'SONA learned patterns with confidence scores.',
 };
+
+/** The one-line answer (DESIGN_LANGUAGE §5.1) — what your AI is actually made
+ *  of, in words, built only from the counts this page already loads. Reads
+ *  correctly at zero and when the registry cache falls back to all-zeroes
+ *  because Atlas was unreachable. */
+function registrySummary(c: { agents: number; skills: number; hooks: number; rules: number; patterns: number }): string {
+  const capabilities = joinClauses([
+    c.agents > 0 && plural(c.agents, 'specialist agent'),
+    c.skills > 0 && plural(c.skills, 'skill'),
+    c.hooks > 0 && plural(c.hooks, 'hook'),
+    c.rules > 0 && plural(c.rules, 'rule'),
+  ]);
+  const learned = c.patterns > 0 ? ` It has also learned ${plural(c.patterns, 'pattern')} from past work.` : '';
+  if (!capabilities) {
+    return c.patterns > 0
+      ? `No agents, skills, hooks or rules are registered yet, but your AI has already learned ${plural(c.patterns, 'pattern')} from past work.`
+      : 'Nothing is registered yet. A framework sync fills this catalog with the agents, skills, hooks and rules your AI runs on.';
+  }
+  return `Your AI runs on ${capabilities}.${learned}`;
+}
 
 export default async function RegistryPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const { tab: requested } = await searchParams;
@@ -38,7 +59,12 @@ export default async function RegistryPage({ searchParams }: { searchParams: Pro
 
   return (
     <div className="max-w-7xl mx-auto">
-      <PageHeader title="Registry" subtitle={SUBTITLES[tab]} />
+      <PageHeader
+        icon="registry"
+        title="Registry"
+        summary={registrySummary(counts)}
+        subtitle={SUBTITLES[tab]}
+      />
       {/* prefetch: sibling tab payloads load in the background (server side is
           already cached), so a tab tap is an instant client-side swap. */}
       <TabBar base="/registry" tabs={tabs} active={tab} prefetch />

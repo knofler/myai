@@ -379,6 +379,24 @@ if [ "$MODE" = "greenfield" ]; then
       0:unchanged) c_info ".mcp.json already current — left untouched" ;;
       *)           c_warn ".mcp.json left untouched ($_mcp_out)" ;;
     esac
+    # Default = myai + context7 only. Other servers (templates/mcp-optional.json:
+    # shadcn-ui, playwright, dropbox, github, vercel) are opt-in, one name per
+    # line (or `all`) in ~/.myai/mcp-optional.conf (task-b1287c56).
+    # shellcheck source=scripts/lib/mcp_optional.sh
+    . "$SCRIPT_DIR/lib/mcp_optional.sh"
+    _mcp_opt="$(mktemp -t mcp-optional.XXXXXX)"
+    if mcp_optional_overlay "$TEMPLATES_DIR/mcp-optional.json" "$_mcp_opt"; then
+      _mcp_rc=0
+      _mcp_out=$(/usr/bin/python3 "$SCRIPT_DIR/lib/json_merge.py" "$MCP_DST" "$_mcp_opt" 2>&1) || _mcp_rc=$?
+      case "${_mcp_rc}:${_mcp_out}" in
+        0:changed|0:created) c_ok ".mcp.json: opt-in servers added from $(mcp_optional_conf)" ;;
+        0:unchanged)         : ;;
+        *)                   c_warn ".mcp.json opt-in servers not added ($_mcp_out)" ;;
+      esac
+    else
+      c_info ".mcp.json servers: myai + context7 (more: \`myai mcp add --list\`, or list names in $(mcp_optional_conf) for every new repo)"
+    fi
+    rm -f "$_mcp_opt"
   fi
 
   # 5d. Self-register into the caller's tenant `repos` DB roster (ADR-021

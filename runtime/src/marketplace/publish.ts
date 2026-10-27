@@ -258,7 +258,11 @@ export function validateSemverImmutability(
 // it is a "must-justify-in-changelog" warning; this server-side re-run
 // enforces that literally: an unjustified hit fails the check, a hit whose
 // changelog acknowledges it passes with the warning still surfaced.
-const ALLOWED_DOC_DOMAINS = ['github.com', 'knofler.dev'];
+// Extra doc domains (comma-separated) come from MARKETPLACE_DOC_DOMAINS.
+const ALLOWED_DOC_DOMAINS = [
+  'github.com',
+  ...(process.env.MARKETPLACE_DOC_DOMAINS ?? '').split(',').map((d) => d.trim().toLowerCase()).filter(Boolean),
+];
 const INJECTION_PATTERNS: Array<{ label: string; re: RegExp }> = [
   { label: 'raw bash code fence', re: /```\s*bash/i },
   { label: 'eval()', re: /\beval\s*\(/i },

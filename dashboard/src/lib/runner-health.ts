@@ -1,10 +1,12 @@
 // Reader for the CLI task-runner health artifact.
 //
 // scripts/runner_health.sh (host-side) parses ~/.ai-cli-runner/runner.out into
-// state/runner-health.json inside the repo. The dashboard container mounts the
-// repo read-only at AI_ROOT, so we read the artifact straight off the filesystem
-// — the same pattern as lib/docs.ts. runner.out lives outside the repo and is
-// not mounted, so this artifact is the only bridge to the runner-fire signal.
+// state/runner-health.<host>.json inside the repo (per-host by name — every
+// Mac writes its own file, task-1eba9e51). The dashboard container mounts the
+// repo read-only at AI_ROOT, so we read the artifacts straight off the
+// filesystem — the same pattern as lib/docs.ts. runner.out lives outside the
+// repo and is not mounted, so these artifacts are the only bridge to the
+// runner-fire signal.
 
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -178,16 +180,133 @@ export async function getFleetMaintenanceStatus(): Promise<FleetMaintenanceStatu
   };
 }
 
-/** Read state/runner-health.json from AI_ROOT. Returns null when absent/malformed. */
+// ── Claims-vs-executions churn ratio (task-d85ea318) ────────────────────────
+// The "runner churn" incident: 14,746 tasks carried a claimedAt inside a 30-day
+// window but only 595 ever routed/executed (a 24:1 ratio) — a post-claim pacing/
+// routing gate was claiming the head-of-queue task atomically, then releasing it
+// straight back to pending before it ever stamped routedProfile/routedModel, so
+// the SAME task was re-claimed on the next fire. Each wasted claim is a gateway
+// round trip + log noise and can hide genuine starvation. This surfaces the same
+// ratio the Atlas evidence was gathered with (claimedAt in-window vs those
+// carrying a routed stamp) directly on the runner_health report, so the churn is
+// visible instead of only findable with an ad-hoc query.
+
+export interface ClaimExecutionRatio {
+  windowDays: number;
+  /** Tasks whose (last) claimedAt falls inside the window — one per distinct doc. */
+  claims: number;
+  /** Of those, how many actually routed (carry a routedProfile/routedModel). */
+  executions: number;
+  /** claims − executions: claimed but never routed — the churn. */
+  churnedClaims: number;
+  /** Of the churned, how many are attributed to a counted pacing-defer release
+   *  (pacingDeferCount > 0) — the share this fix makes self-explaining. */
+  pacingDeferredClaims: number;
+  /** claims / max(executions, 1), rounded to 1 decimal. 24.8 ⇒ "24.8:1". */
+  ratio: number;
+}
+
+export interface ClaimExecStamp {
+  claimedAt?: Date | string | null;
+  routedModel?: string | null;
+  routedProfile?: string | null;
+  pacingDeferCount?: number | null;
+}
+
+/**
+ * Pure churn computation — reproduces the Atlas-evidence methodology exactly:
+ * count docs whose claimedAt is inside the window (claims), of which the ones
+ * carrying a routed stamp are executions. Kept pure (no DB) so it is hermetically
+ * testable; getClaimExecutionRatio() is the thin DB wrapper.
+ */
+export function computeClaimExecutionRatio(
+  stamps: ClaimExecStamp[],
+  opts: { now?: Date; windowDays?: number } = {},
+): ClaimExecutionRatio {
+  const windowDays = opts.windowDays ?? 30;
+  const now = opts.now ?? new Date();
+  const cutoff = now.getTime() - windowDays * 86_400_000;
+  let claims = 0;
+  let executions = 0;
+  let pacingDeferredClaims = 0;
+  for (const s of stamps) {
+    const t = s.claimedAt ? new Date(s.claimedAt).getTime() : NaN;
+    if (!Number.isFinite(t) || t < cutoff) continue;
+    claims++;
+    const routed =
+      String(s.routedModel ?? '').trim() !== '' || String(s.routedProfile ?? '').trim() !== '';
+    if (routed) {
+      executions++;
+    } else if ((s.pacingDeferCount ?? 0) > 0) {
+      pacingDeferredClaims++;
+    }
+  }
+  const churnedClaims = claims - executions;
+  const ratio = Math.round((claims / Math.max(executions, 1)) * 10) / 10;
+  return { windowDays, claims, executions, churnedClaims, pacingDeferredClaims, ratio };
+}
+
+/**
+ * DB wrapper for computeClaimExecutionRatio: reads the tenant's tasks whose
+ * claimedAt falls inside the window (projecting only the four stamp fields — the
+ * window keeps the scan bounded) and returns the churn ratio. claimedAt is a
+ * single overwritten field, so this counts DISTINCT docs last claimed in-window,
+ * which is exactly what the "claimedAt in last 30d = N docs" evidence counted.
+ */
+export async function getClaimExecutionRatio(windowDays = 30): Promise<ClaimExecutionRatio> {
+  await connectDB();
+  const tenantId = await getActiveTenant();
+  const cutoff = new Date(Date.now() - windowDays * 86_400_000);
+  const docs = await Task.find(
+    { ...tenantFilter(tenantId), claimedAt: { $gte: cutoff } },
+    { claimedAt: 1, routedModel: 1, routedProfile: 1, pacingDeferCount: 1 },
+  ).lean<ClaimExecStamp[]>();
+  return computeClaimExecutionRatio(docs, { windowDays });
+}
+
+/**
+ * Read the runner-health artifact(s) from AI_ROOT.
+ *
+ * Per-host by name since task-1eba9e51: every Mac's runner_health.sh writes
+ * its own state/runner-health.<host>.json (the legacy shared
+ * state/runner-health.json is still read during rollout). With several hosts
+ * present, prefer artifacts with available:true (a Mac without a runner.out
+ * writes available:false and must not mask a live runner elsewhere), then the
+ * freshest generatedAt among those. Returns null when nothing parses.
+ */
+const RUNNER_HEALTH_FILE_RE = /^runner-health(\.[A-Za-z0-9_.-]+)?\.json$/;
+
 export async function readRunnerHealth(): Promise<RunnerHealth | null> {
-  const resolved = path.resolve(path.join(AI_ROOT, 'state', 'runner-health.json'));
-  if (!resolved.startsWith(path.resolve(AI_ROOT))) return null; // containment guard
+  const stateDir = path.resolve(path.join(AI_ROOT, 'state'));
+  if (!stateDir.startsWith(path.resolve(AI_ROOT))) return null; // containment guard
+  let names: string[];
   try {
-    const stat = await fs.stat(resolved);
-    if (!stat.isFile() || stat.size > 2_000_000) return null;
-    const raw = await fs.readFile(resolved, 'utf-8');
-    return JSON.parse(raw) as RunnerHealth;
+    names = await fs.readdir(stateDir);
   } catch {
     return null;
   }
+  let best: RunnerHealth | null = null;
+  let bestTime = -Infinity;
+  for (const name of names) {
+    if (!RUNNER_HEALTH_FILE_RE.test(name)) continue;
+    const resolved = path.resolve(path.join(stateDir, name));
+    if (!resolved.startsWith(stateDir)) continue;
+    try {
+      const stat = await fs.stat(resolved);
+      if (!stat.isFile() || stat.size > 2_000_000) continue;
+      const parsed = JSON.parse(await fs.readFile(resolved, 'utf-8')) as RunnerHealth;
+      if (!parsed || typeof parsed !== 'object') continue;
+      const t = Date.parse(String(parsed.generatedAt ?? ''));
+      const time = Number.isNaN(t) ? -Infinity : t;
+      const beatsOnAvailability = Boolean(parsed.available) && !best?.available;
+      const losesOnAvailability = !parsed.available && Boolean(best?.available);
+      if (best === null || beatsOnAvailability || (!losesOnAvailability && time > bestTime)) {
+        best = parsed;
+        bestTime = time;
+      }
+    } catch {
+      // Skip malformed/racing files; another host's artifact may still parse.
+    }
+  }
+  return best;
 }

@@ -1,0 +1,14 @@
+# gh_runners.txt — how many self-hosted runners each repo gets on each host,
+# and each runner's weight in the host's runner budget. Copy to
+# config/gh_runners.txt. The budget itself is config/gh_runner_mem.txt
+# (<host> <mem> <cpus> = the host's TOTAL for all its runners), split by weight.
+#
+# Format: <hostname-or-*> <owner/repo> <count> [weight] [stopped]
+#   weight default 1; the exact host row wins over *; a trailing `stopped`
+#   marks that repo's runners stopped BY CHOICE there (check shows OK).
+#
+# Example: a build box runs 2 runners for the main repo (heavier: weight 2)
+# and 1 for a smaller one; every other host runs 1 for the main repo.
+build-box   <owner>/<main-repo>    2   2
+build-box   <owner>/<small-repo>   1   1
+*           <owner>/<main-repo>    1   1

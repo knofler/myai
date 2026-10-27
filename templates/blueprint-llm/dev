@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# dev — the ONLY way you run anything in this project.
+#
+# Framework rule: never `pip`, `python`, `pytest` or `npm` on the host. Every
+# command here executes inside a container, so your machine stays clean and the
+# thing that works for you works for everyone.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+[ -f .env ] || { echo "→ no .env yet; copying env.example"; cp env.example .env; }
+# shellcheck disable=SC1091
+set -a; . ./.env; set +a
+
+DC="docker compose"
+usage() {
+  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+  cat <<'USAGE'
+
+  ./dev up                 build + start train, serve, ui
+  ./dev down               stop everything
+  ./dev logs [svc]         follow logs
+  ./dev test [args]        pytest in the train container (the stage suite)
+  ./dev train              run the training loop
+  ./dev sample "prompt"    generate from the current checkpoint
+  ./dev eval               held-out perplexity
+  ./dev stage              which stage am I on, and what is next
+  ./dev shell [svc]        a shell in the container (default: train)
+  ./dev rebuild            rebuild images from scratch
+USAGE
+}
+
+case "${1:-}" in
+  up)
+    $DC up -d --build
+    echo
+    echo "  serve  → http://localhost:${SERVE_PORT:-8000}/health"
+    echo "  chat   → http://localhost:${UI_PORT:-8080}"
+    echo
+    exec "$0" stage
+    ;;
+  down)    shift; exec $DC down "$@" ;;
+  logs)    shift; exec $DC logs -f "${@:-}" ;;
+  test)    shift; exec $DC exec -T train python -m pytest "$@" ;;
+  train)   shift; exec $DC exec -T train python -m llm.train "$@" ;;
+  sample)  shift; exec $DC exec -T train python -m llm.sample "$@" ;;
+  eval)    shift; exec $DC exec -T train python -m llm.eval "$@" ;;
+  stage)   exec $DC exec -T train python -m llm.stages ;;
+  shell)   shift; exec $DC exec "${1:-train}" /bin/sh ;;
+  rebuild) exec $DC build --no-cache ;;
+  ""|-h|--help) usage ;;
+  *) echo "dev: unknown command: $1" >&2; echo; usage; exit 2 ;;
+esac

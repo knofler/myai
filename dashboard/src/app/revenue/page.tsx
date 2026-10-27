@@ -25,6 +25,7 @@ import { historicalMrrAsOf, type MrrSnapshotPoint } from '@/lib/mrr-snapshots';
 import type { TenantPlan, SubscriptionStatus } from '@/lib/billing';
 import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
+import { plural, joinClauses, cap } from '@/lib/summary';
 import AutoRefresh from '@/components/auto-refresh';
 import Link from 'next/link';
 import { dbUnreachableHint } from '@/lib/db-hint';
@@ -49,6 +50,36 @@ function pct(n: number): string {
   return `${(n * 100).toFixed(1)}%`;
 }
 
+/* ── The one-line answer (§5.1) ─────────────────────── */
+
+function revenueSummary(args: {
+  mrr: number;
+  arr: number;
+  activeLogos: number;
+  totalTenants: number;
+  newLogos: number;
+  churnedLogos: number;
+  hasCohort: boolean;
+  churnHealthy: boolean;
+}): string {
+  const { mrr, arr, activeLogos, totalTenants, newLogos, churnedLogos, hasCohort, churnHealthy } = args;
+  if (activeLogos === 0) {
+    if (totalTenants === 0) return 'No tenants have signed up yet. Revenue appears here the moment someone subscribes.';
+    if (totalTenants === 1) return 'Your one tenant is not paying yet. Revenue appears here the moment someone subscribes through Stripe checkout.';
+    return `None of your ${totalTenants} tenants is paying yet. Revenue appears here the moment someone subscribes through Stripe checkout.`;
+  }
+  const head = `You are making ${fmtUsd(mrr)} a month from ${plural(activeLogos, 'paying account')}, which is ${fmtUsd(arr)} a year.`;
+  const moves = joinClauses([
+    newLogos > 0 && `${plural(newLogos, 'account')} signed up`,
+    churnedLogos > 0 && `${churnedLogos} churned`,
+  ]);
+  const tail = moves
+    ? ` ${cap(moves)} in the last ${WINDOW_DAYS} days.`
+    : ` Nobody signed up or churned in the last ${WINDOW_DAYS} days.`;
+  const warn = hasCohort && !churnHealthy ? ' Logo churn is above the 2 percent target.' : '';
+  return `${head}${tail}${warn}`;
+}
+
 export default async function RevenuePage() {
   let dbError = false;
   try {
@@ -60,7 +91,12 @@ export default async function RevenuePage() {
   if (dbError) {
     return (
       <div className="max-w-7xl mx-auto">
-        <PageHeader title="Revenue" subtitle="MRR, ARR, retention, churn, and LTV across all tenants." />
+        <PageHeader
+          icon="revenue"
+          title="Revenue"
+          summary="Revenue cannot be read right now because the database is unreachable."
+          subtitle="MRR, ARR, retention, churn, and LTV across all tenants."
+        />
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
           {dbUnreachableHint('revenue metrics')}
         </div>
@@ -159,8 +195,19 @@ export default async function RevenuePage() {
     <div className="max-w-7xl mx-auto">
       <AutoRefresh seconds={60} />
       <PageHeader
+        icon="revenue"
         title="Revenue"
-        subtitle="MRR · ARR · net-revenue-retention · logo churn · blended LTV — aggregated across all tenants (operator view)."
+        summary={revenueSummary({
+          mrr: summary.mrr,
+          arr: summary.arr,
+          activeLogos: summary.activeLogos,
+          totalTenants,
+          newLogos,
+          churnedLogos,
+          hasCohort: retention.startingLogos > 0,
+          churnHealthy,
+        })}
+        subtitle={`Aggregated across all tenants, operator view · retention over the last ${WINDOW_DAYS} days`}
       >
         <Link href="/revenue/nrr" className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 rounded-lg px-3 py-1.5">
           NRR cohorts →
@@ -169,17 +216,41 @@ export default async function RevenuePage() {
 
       {/* Headline metrics */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard label="MRR" value={fmtUsd(summary.mrr)} sub={`${summary.activeLogos} paying ${summary.activeLogos === 1 ? 'logo' : 'logos'}`} accent="green" />
-        <StatCard label="ARR" value={fmtUsd(summary.arr)} sub="MRR × 12" accent="green" />
-        <StatCard label="ARPA" value={fmtUsd(summary.arpa)} sub="avg revenue / account" accent="blue" />
-        <StatCard label="Blended LTV" value={ltv === null ? '—' : fmtUsd(ltv)} sub={lifetimeMonths === null ? 'no churn yet' : `~${lifetimeMonths.toFixed(0)} mo lifetime`} accent="blue" />
+        <StatCard label="MRR" value={fmtUsd(summary.mrr)} sub={`${summary.activeLogos} paying ${summary.activeLogos === 1 ? 'logo' : 'logos'}`} icon="revenue" tone={summary.mrr > 0 ? 'ok' : 'muted'} />
+        <StatCard label="ARR" value={fmtUsd(summary.arr)} sub="MRR × 12" icon="revenue" tone={summary.arr > 0 ? 'ok' : 'muted'} />
+        <StatCard label="Revenue per account" value={fmtUsd(summary.arpa)} sub="ARPA" icon="billing" tone="muted" />
+        <StatCard label="Blended LTV" value={ltv === null ? '—' : fmtUsd(ltv)} sub={lifetimeMonths === null ? 'no churn yet' : `~${lifetimeMonths.toFixed(0)} mo lifetime`} icon="analytics" tone="muted" />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard label={`Net revenue retention (${WINDOW_DAYS}d)`} value={retention.startingMrr > 0 ? pct(retention.netRevenueRetention) : '—'} sub={nrrHealthy ? 'net expansion' : 'net contraction'} accent={nrrHealthy ? 'green' : 'yellow'} />
-        <StatCard label={`Logo churn (${WINDOW_DAYS}d)`} value={retention.startingLogos > 0 ? pct(retention.logoChurnRate) : '—'} sub={`${retention.churnedLogos} of ${retention.startingLogos} · target <2%`} accent={churnHealthy ? 'green' : 'yellow'} />
-        <StatCard label={`Gross rev. churn (${WINDOW_DAYS}d)`} value={retention.startingMrr > 0 ? pct(retention.grossRevenueChurnRate) : '—'} sub={fmtUsd(retention.churnedMrr) + ' lost'} accent={retention.grossRevenueChurnRate <= 0.02 ? 'green' : 'yellow'} />
-        <StatCard label={`New logos (${WINDOW_DAYS}d)`} value={newLogos} sub={`${churnedLogos} churned · ${(paidShare * 100).toFixed(0)}% of ${totalTenants} tenants paid`} accent="green" />
+        <StatCard
+          label={`Net revenue retention (${WINDOW_DAYS}d)`}
+          value={retention.startingMrr > 0 ? pct(retention.netRevenueRetention) : '—'}
+          sub={nrrHealthy ? 'net expansion' : 'net contraction'}
+          icon="analytics"
+          tone={retention.startingMrr === 0 ? 'muted' : nrrHealthy ? 'ok' : 'warn'}
+        />
+        <StatCard
+          label={`Logo churn (${WINDOW_DAYS}d)`}
+          value={retention.startingLogos > 0 ? pct(retention.logoChurnRate) : '—'}
+          sub={`${retention.churnedLogos} of ${retention.startingLogos} · target <2%`}
+          icon="alert"
+          tone={retention.startingLogos === 0 ? 'muted' : churnHealthy ? 'ok' : 'warn'}
+        />
+        <StatCard
+          label={`Gross rev. churn (${WINDOW_DAYS}d)`}
+          value={retention.startingMrr > 0 ? pct(retention.grossRevenueChurnRate) : '—'}
+          sub={fmtUsd(retention.churnedMrr) + ' lost'}
+          icon="billing"
+          tone={retention.startingMrr === 0 ? 'muted' : retention.grossRevenueChurnRate <= 0.02 ? 'ok' : 'warn'}
+        />
+        <StatCard
+          label={`New logos (${WINDOW_DAYS}d)`}
+          value={newLogos}
+          sub={`${churnedLogos} churned · ${(paidShare * 100).toFixed(0)}% of ${totalTenants} tenants paid`}
+          icon="sessions"
+          tone={newLogos > 0 ? 'ok' : 'muted'}
+        />
       </div>
 
       {/* MRR by plan */}
@@ -203,7 +274,7 @@ export default async function RevenuePage() {
                     <div className="h-4 bg-[rgb(var(--bg-page))] rounded overflow-hidden">
                       <div className="h-full rounded bg-gradient-to-r from-teal-500/80 to-emerald-400/80" style={{ width: `${Math.max(w, 2)}%` }} />
                     </div>
-                    <p className="text-[10px] text-zinc-600 mt-1 font-mono">
+                    <p className="text-label text-zinc-600 mt-1 font-mono">
                       list {fmtUsd(DEFAULT_PRICING.monthly[p.plan])}/mo · {fmtUsd(DEFAULT_PRICING.annual[p.plan])}/yr
                     </p>
                   </div>

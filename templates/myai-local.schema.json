@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://knofler.dev/schemas/myai-local.schema.json",
+  "$id": "myai-local.schema.json",
   "title": ".myai-local",
   "description": "Gitignored per-repo myAI pointer file dropped by `myai init` (ADR-016 §0.2/§4). Carries repo/namespace identity, a gateway-discovery hint, and a short cached identity blurb for degraded boot. NEVER carries state, history, or secrets — those live in the brain and the gateway, never in the code repo.",
   "type": "object",

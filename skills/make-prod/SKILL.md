@@ -58,6 +58,8 @@ Report findings to user before proceeding. Ask:
 
 ### 2. MongoDB Atlas — Provision Database
 
+**Which Atlas account?** If you use more than one Atlas account, the committed table `AI/config/atlas_profiles.txt` routes repo → Atlas CLI profile (+ existing project / cluster to reuse). `./AI/scripts/atlas_profile.sh --list` shows the routing; `./AI/scripts/setup_atlas.sh` reads it and runs every `atlas` call with `--profile`. Unlisted repos use the `default` profile. A repo that fails with "profile missing" needs `atlas auth login --profile <name>` in a real terminal tab (interactive picker). Never work around a missing profile by provisioning under `default`.
+
 **Prerequisites:** Atlas account, existing cluster (or create one).
 
 **Using Atlas Admin API (if `MONGODB_ATLAS_PUBLIC_KEY` and `MONGODB_ATLAS_PRIVATE_KEY` env vars exist):**
@@ -94,10 +96,20 @@ curl -s -u "$MONGODB_ATLAS_PUBLIC_KEY:$MONGODB_ATLAS_PRIVATE_KEY" \
 cd <project-root>
 vercel link -p <project-name>
 
-# Step 2: Set environment variables (use printf to avoid trailing newline)
+# Step 2: Set environment variables across EVERY target — agent-driven, value never read.
+# A var set only on `production` (or only `production` + `preview`) leaves any CUSTOM
+# Vercel environment on a stale value. An app that deploys its `test` branch to a custom
+# env named "test" and has an API key updated only on Preview gets a 401 on every route
+# that uses it. vercel_env_sync.sh enumerates production +
+# preview + development + every custom environment from `vercel env ls` and pipes each
+# value from the repo's .env via stdin, so you never read or echo the secret — and the
+# operator never has to run `vercel env add` by hand.
+#
+# Put the values in .env first, then (one var, or several):
+./scripts/vercel_env_sync.sh MONGODB_URI JWT_SECRET NODE_ENV   # --dry-run to preview targets
+#
+# Single-var / single-target fallback (e.g. a value you can't put in .env):
 printf "<value>" | vercel env add MONGODB_URI production
-printf "<value>" | vercel env add JWT_SECRET production
-printf "<value>" | vercel env add NODE_ENV production
 
 # Step 3: Create .vercelignore
 cat > .vercelignore << 'EOF'

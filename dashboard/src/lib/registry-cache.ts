@@ -14,25 +14,32 @@ import { connectDB, Agent, Skill, Hook, Rule, Pattern } from '@/lib/db';
 
 const REVALIDATE = 60; // 1 min — a framework sync shows up fast; warm taps still never touch Atlas
 
-export const getRegistryCounts = unstable_cache(
+// The DB error is thrown INSIDE the cached function so unstable_cache never
+// stores it: returning zeros from in here cached a transient Atlas blip as
+// "0 agents" for a full REVALIDATE window. The zeros fallback lives outside.
+const registryCountsCached = unstable_cache(
   async () => {
-    try {
-      await connectDB();
-      const [agents, skills, hooks, rules, patterns] = await Promise.all([
-        Agent.countDocuments(),
-        Skill.countDocuments(),
-        Hook.countDocuments(),
-        Rule.countDocuments(),
-        Pattern.countDocuments(),
-      ]);
-      return { agents, skills, hooks, rules, patterns };
-    } catch {
-      return { agents: 0, skills: 0, hooks: 0, rules: 0, patterns: 0 };
-    }
+    await connectDB();
+    const [agents, skills, hooks, rules, patterns] = await Promise.all([
+      Agent.countDocuments(),
+      Skill.countDocuments(),
+      Hook.countDocuments(),
+      Rule.countDocuments(),
+      Pattern.countDocuments(),
+    ]);
+    return { agents, skills, hooks, rules, patterns };
   },
   ['registry-counts'],
   { revalidate: REVALIDATE }
 );
+
+export async function getRegistryCounts() {
+  try {
+    return await registryCountsCached();
+  } catch {
+    return { agents: 0, skills: 0, hooks: 0, rules: 0, patterns: 0 };
+  }
+}
 
 export const getAgentsCached = unstable_cache(
   async () => {

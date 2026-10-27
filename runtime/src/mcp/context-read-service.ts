@@ -22,7 +22,8 @@ import { resolve } from 'node:path';
 import { getConfig } from '../shared/config.js';
 import { createChildLogger } from '../shared/logger.js';
 import { prioritizeRepos, type RepoPriorityEntry } from '../repos/repo-registry.js';
-import { readHandoff, type ReadHandoffResult } from '../repos/handoff-store.js';
+import { type ReadHandoffResult } from '../repos/handoff-store.js';
+import { readHandoffReconciled } from '../repos/handoff-reconcile.js';
 import { listPlan, type PlanDayView } from '../repos/plan-store.js';
 import { searchVectors, type VectorSearchResult } from '../memory/vector-store.js';
 import { brainEnvFor, brainMainSha, brainManifest, readCompiledBrief } from '../core/distill.js';
@@ -105,7 +106,9 @@ export const defaultContextReadService: ContextReadService = {
   },
 
   readHandoff(tenantId: string, repo: string): Promise<ReadHandoffResult> {
-    return readHandoff(tenantId, repo);
+    // The newer of the Mongo entry and the brain headline (v1 G2 B2), so a
+    // handoff written offline by the local stdio server is what boots next.
+    return readHandoffReconciled(tenantId, repo, {}, brainEnvFor(tenantId));
   },
 
   listPlan(tenantId: string, repo: string): Promise<PlanDayView[]> {

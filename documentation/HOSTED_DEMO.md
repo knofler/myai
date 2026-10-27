@@ -18,12 +18,34 @@ read-only showroom (see `dashboard/src/lib/demo.ts`):
 Local dev and the real hosted dashboard leave the flag unset — everything
 compiles away to a no-op.
 
+## Guided tour (GRAND_PRODUCT §7.4)
+
+Demo mode also renders `<DemoGuide />` (`src/components/demo-guide.tsx`) — a
+floating card that walks a prospect through the full loop in five stops, each
+on a page the seeder populates:
+
+| Stop | Beat | Page |
+|---|---|---|
+| 1 | Idea | `/work` — seeded 10-day plan + task queue |
+| 2 | App | `/apps` — repo health per connected repo |
+| 3 | Schedule | `/system` — schedules + off-hours runner |
+| 4 | Ops | `/fleet` — repo directory (seeded ok/warn/error cards) |
+| 5 | Support | `/ask` — put a question to a specialist agent |
+
+The current stop is derived purely from the pathname (no stored progress), the
+last stop's CTA is the install link, and the only persisted state is a
+per-visit sessionStorage dismiss flag — a fresh visit gets a fresh tour, the
+same reset-on-load contract as the data (the mutation gate means nothing a
+visitor does survives them leaving). Stop data + path matching live in
+`src/lib/demo-guide.ts`; `demo-guide.test.ts` pins the loop order and fails if
+any stop's page is moved or deleted.
+
 ## Creating the demo Vercel project
 
 The demo is a **second Vercel project** on the same repo (the existing hosted
 dashboard project keeps its own env). One-time setup in the Vercel UI:
 
-1. **New project** → import `knofler/ai_management`, name it `myai-demo`.
+1. **New project** → import your copy of the myAI repo (`<owner>/myai` or a fork), name it `myai-demo`.
 2. **Root Directory:** `dashboard` (framework preset: Next.js).
 3. **Environment variables (Production):**
    - `NEXT_PUBLIC_DEMO_MODE=true`

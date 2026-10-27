@@ -129,7 +129,7 @@ export function DataTable({
                   <div className="mt-2.5 pl-1 space-y-1.5 border-t border-[rgb(var(--border-subtle))]/60 pt-2.5">
                     {details.map((d, i) => (
                       <div key={i} className="flex items-baseline justify-between gap-3 text-xs">
-                        <span className="text-[10px] uppercase tracking-wider text-zinc-600 shrink-0">{d.col?.label}</span>
+                        <span className="text-label uppercase tracking-wider text-zinc-600 shrink-0">{d.col?.label}</span>
                         <span className="text-right text-[rgb(var(--text-primary))] min-w-0">{d.c}</span>
                       </div>
                     ))}
@@ -143,7 +143,7 @@ export function DataTable({
         <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-[11px] text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
+              <tr className="text-left text-label text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
                 {columns.map((c) => (
                   <th
                     key={c.label}
@@ -154,7 +154,7 @@ export function DataTable({
                     tabIndex={c.sortKey ? 0 : undefined}
                     role={c.sortKey ? 'button' : undefined}
                     aria-sort={c.sortKey && sortKey === c.sortKey ? (desc ? 'descending' : 'ascending') : undefined}
-                    className={`px-4 py-2.5 font-medium select-none ${c.sortKey ? 'cursor-pointer hover:text-[rgb(var(--text-primary))] focus:outline-none focus:text-teal-300' : ''} ${
+                    className={`px-4 py-2.5 font-medium select-none ${c.sortKey ? 'cursor-pointer hover:text-[rgb(var(--text-primary))] focus:outline-none focus:text-teal-300 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500/50 rounded' : ''} ${
                       c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : ''
                     } ${c.className ?? ''}`}
                   >

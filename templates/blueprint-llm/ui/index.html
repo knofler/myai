@@ -1,0 +1,97 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>LLM from scratch</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--line:#262b36;--fg:#e6e8ee;--dim:#9aa3b2;--accent:#ff8700;--warn:#3a2a12}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 ui-sans-serif,system-ui,-apple-system,sans-serif}
+  .wrap{max-width:780px;margin:0 auto;padding:32px 16px 64px}
+  h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}
+  .warn{background:var(--warn);border-color:#6b4a18}
+  label{display:block;font-size:12px;color:var(--dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em}
+  textarea,input,button{font:inherit;color:inherit;background:#0f1218;border:1px solid var(--line);border-radius:8px;padding:10px}
+  textarea{width:100%;min-height:80px;resize:vertical}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+  .row>div{flex:1;min-width:110px}
+  input{width:100%}
+  button{background:var(--accent);color:#1a1205;border:0;font-weight:640;cursor:pointer;padding:11px 20px;margin-top:14px}
+  button:disabled{opacity:.5;cursor:default}
+  pre{white-space:pre-wrap;word-break:break-word;margin:0;font:13px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace}
+  .stages{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:0;padding:0;list-style:none}
+  .stages li{font-size:12px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;color:var(--dim)}
+  .stages li.done{color:var(--fg);border-color:var(--accent)}
+</style>
+<div class="wrap">
+  <h1>LLM from scratch</h1>
+  <div class="sub">The pipeline is finished. The model is yours to build.</div>
+
+  <div id="banner" class="card warn" hidden></div>
+
+  <div class="card">
+    <label for="p">Prompt</label>
+    <textarea id="p">Once upon</textarea>
+    <div class="row">
+      <div><label for="n">Max tokens</label><input id="n" type="number" value="80" min="1" max="2000"></div>
+      <div><label for="t">Temperature</label><input id="t" type="number" value="0.8" step="0.1" min="0.1" max="5"></div>
+      <div><label for="k">Top-k</label><input id="k" type="number" placeholder="off" min="1"></div>
+    </div>
+    <button id="go">Generate</button>
+  </div>
+
+  <div class="card"><label>Output</label><pre id="out">—</pre></div>
+  <div class="card"><label>Curriculum</label><ul class="stages" id="st"></ul></div>
+</div>
+<script>
+  // The API port is configurable in .env; 8000 is the default.
+  const API = `http://${location.hostname}:8000`;
+  const $ = id => document.getElementById(id);
+
+  async function loadStages() {
+    try {
+      const [h, s] = await Promise.all([
+        fetch(`${API}/health`).then(r => r.json()),
+        fetch(`${API}/stages`).then(r => r.json()),
+      ]);
+      $('st').innerHTML = s.stages
+        .map(x => `<li class="${x.implemented ? 'done' : ''}">${x.implemented ? '✓' : '○'} ${x.n}. ${x.title}</li>`)
+        .join('');
+      if (!h.checkpoint?.trained) {
+        $('banner').hidden = false;
+        $('banner').textContent =
+          `Untrained model — ${h.stages_complete} stages implemented. Output below is meaningless by design. Run ./dev stage to see what is next.`;
+      }
+    } catch {
+      $('st').innerHTML = '<li>API unreachable — is ./dev up running?</li>';
+    }
+  }
+
+  $('go').onclick = async () => {
+    const btn = $('go');
+    btn.disabled = true;
+    $('out').textContent = 'generating…';
+    try {
+      const body = {
+        prompt: $('p').value,
+        max_new_tokens: +$('n').value,
+        temperature: +$('t').value,
+      };
+      if ($('k').value) body.top_k = +$('k').value;
+      const r = await fetch(`${API}/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      $('out').textContent = d.completion ?? JSON.stringify(d, null, 2);
+    } catch (e) {
+      $('out').textContent = `error: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  loadStages();
+</script>

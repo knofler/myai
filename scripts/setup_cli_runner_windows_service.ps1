@@ -30,7 +30,7 @@
                                                  / myai-cli-task-runner)
     Start type   : SERVICE_AUTO_START — starts at boot, survives logoff
     Account      : YOUR user account (prompted) — the runner needs your $HOME
-                   (~/.claude-tech login, ~/.ai-cli-runner, git credentials).
+                   (the runner profile's login, ~/.ai-cli-runner, git credentials).
                    nssm grants the "Log on as a service" right automatically.
     Process tree : nssm → powershell.exe service-loop.ps1 (forever loop:
                    fire + Start-Sleep N) → service-task.cmd → Git Bash →
@@ -55,7 +55,7 @@
       truly logged-off worker either point the runner at a gateway on another
       machine or enable Docker Desktop's "start on boot" Windows-service mode.
     • The Claude CLI installed and logged in inside Git Bash
-      (profile: ~/.claude-tech — the runner sets CLAUDE_CONFIG_DIR itself)
+      (profile: the configured runner profile — runner.conf; the runner sets CLAUDE_CONFIG_DIR itself)
 
 .PARAMETER EveryMinutes
   Fire cadence in minutes (default 10, max 1439). Mirrors --every-minutes.

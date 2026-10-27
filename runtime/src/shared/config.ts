@@ -3,6 +3,7 @@ import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import type { GatewayConfig } from './types.js';
+import { DEFAULT_CLAUDE_MODEL, RETIRED_CLAUDE_MODELS } from '../llm/claude-models.js';
 
 /**
  * The GATEWAY_LOCAL_TOKEN fallback docker-compose.yml, .mcp.json and the
@@ -15,11 +16,56 @@ import type { GatewayConfig } from './types.js';
  * deployment reachable beyond loopback.
  */
 export const KNOWN_DEFAULT_LOCAL_TOKEN = 'myai-local-bridge-dev';
+/** The JWT_SECRET the compose files used to default to — printed in the package, so not a secret. */
+export const KNOWN_DEFAULT_JWT_SECRET = 'myai-dev-jwt-secret-change-me';
+/** Every JWT_SECRET default that has appeared in a file this repo publishes. */
+export const KNOWN_DEFAULT_JWT_SECRETS: readonly string[] = [KNOWN_DEFAULT_JWT_SECRET, 'changeme-jwt-secret'];
+
+/**
+ * v1 gate G5: refuse to start with the published JWT_SECRET. Anyone could sign
+ * an owner session with it. Only the published values are refused; an unset
+ * secret still falls back to an ephemeral one (user-auth.ts).
+ */
+export function assertJwtSecretNotPublished(env: NodeJS.ProcessEnv = process.env): void {
+  if (!env.JWT_SECRET || !KNOWN_DEFAULT_JWT_SECRETS.includes(env.JWT_SECRET)) return;
+  // eslint-disable-next-line no-console
+  console.error(
+    '\n' + '='.repeat(78) + '\n' +
+    'SECURITY: JWT_SECRET is the published default value — it is printed in the\n' +
+    'npm package, so anyone could forge a login session with it. Refusing to start.\n' +
+    'Fix: run `myai up` (it writes a generated JWT_SECRET into .env), or set\n' +
+    'JWT_SECRET to the output of `openssl rand -hex 32` in .env, then restart.\n' +
+    '='.repeat(78) + '\n',
+  );
+  throw new Error('JWT_SECRET is the published default — refusing to start (see the message above)');
+}
+
+/** GATEWAY_LOCAL_TOKEN placeholders that appear in files this repo publishes. */
+export const KNOWN_DEFAULT_LOCAL_TOKENS: readonly string[] = ['changeme-bridge-token'];
+
+/**
+ * G5 re-verify (RV-4): the local token grants full operator trust, so a
+ * published placeholder is refused like the JWT default.
+ */
+export function assertLocalTokenNotPublished(env: NodeJS.ProcessEnv = process.env): void {
+  if (!env.GATEWAY_LOCAL_TOKEN || !KNOWN_DEFAULT_LOCAL_TOKENS.includes(env.GATEWAY_LOCAL_TOKEN)) return;
+  // eslint-disable-next-line no-console
+  console.error(
+    '\nSECURITY: GATEWAY_LOCAL_TOKEN is a published placeholder; anyone could use it to act\n' +
+    'as the operator. Refusing to start. Set it to the output of `openssl rand -hex 32`.\n',
+  );
+  throw new Error('GATEWAY_LOCAL_TOKEN is a published placeholder — refusing to start');
+}
+
+/** Self-serve signup is on unless SIGNUP_ENABLED=false (the local compose files set false). */
+export function isSignupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (env.SIGNUP_ENABLED ?? '').trim().toLowerCase() !== 'false';
+}
 
 const DEFAULTS: GatewayConfig = {
   server: { httpPort: 3200, wsPort: 3201, host: '0.0.0.0' },
   database: {
-    uri: 'mongodb://admin:password@localhost:27017/myai?authSource=admin',
+    uri: 'mongodb://localhost:27017/myai', // credentials come from MONGODB_URI (G5: no published password)
     name: 'myai',
     // Read-side failover to the local `myai mirror` copy (MONGO_MIRROR.md).
     // Off by default — never an automatic/silent swap (2026-07-04 split-brain
@@ -40,7 +86,7 @@ const DEFAULTS: GatewayConfig = {
     bridgeUrl: 'http://host.docker.internal:3202',
     timeoutMs: 180_000,
     apiKey: undefined,
-    model: 'claude-sonnet-4-20250514',
+    model: DEFAULT_CLAUDE_MODEL,
     deepseekApiKey: undefined,
     deepseekModel: 'deepseek-chat',
     moonshotApiKey: undefined,
@@ -49,8 +95,6 @@ const DEFAULTS: GatewayConfig = {
     openrouterApiKey: undefined,
     openrouterModel: 'moonshotai/kimi-k2:free',
     openrouterBaseUrl: undefined,
-    geminiApiKey: undefined,
-    geminiModel: 'gemini-2.0-flash',
     ollamaBaseUrl: 'http://host.docker.internal:11434/v1',
     ollamaModel: 'kimi-k2.6:cloud',
     promptCacheEnabled: true,
@@ -116,6 +160,8 @@ function deepMerge(target: any, source: any): any {
 }
 
 export function loadConfig(configPath?: string): GatewayConfig {
+  assertJwtSecretNotPublished();
+  assertLocalTokenNotPublished();
   let fileConfig: Partial<GatewayConfig> = {};
 
   const paths = [
@@ -159,9 +205,19 @@ export function loadConfig(configPath?: string): GatewayConfig {
   if (process.env.LOG_LEVEL) config.logging.level = process.env.LOG_LEVEL;
   if (process.env.EMBEDDING_PROVIDER) config.memory.embedding.provider = process.env.EMBEDDING_PROVIDER as 'local' | 'openai';
   if (process.env.LLM_ENABLED === 'true' || process.env.LLM_ENABLED === '1') config.llm.enabled = true;
-  if (process.env.LLM_MODE) config.llm.mode = process.env.LLM_MODE as 'bridge' | 'direct' | 'api' | 'deepseek' | 'moonshot' | 'gemini' | 'ollama';
+  if (process.env.LLM_MODE) config.llm.mode = process.env.LLM_MODE as 'bridge' | 'direct' | 'api' | 'deepseek' | 'moonshot' | 'ollama';
   if (process.env.ANTHROPIC_API_KEY) { config.llm.apiKey = process.env.ANTHROPIC_API_KEY; if (!process.env.LLM_MODE) config.llm.mode = 'api'; }
-  if (process.env.LLM_MODEL) config.llm.model = process.env.LLM_MODEL;
+  if (process.env.LLM_MODEL) {
+    if (RETIRED_CLAUDE_MODELS.has(process.env.LLM_MODEL)) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `LLM_MODEL=${process.env.LLM_MODEL} is retired by Anthropic (404) — using ${DEFAULT_CLAUDE_MODEL}. ` +
+        'Update LLM_MODEL in your .env.',
+      );
+    } else {
+      config.llm.model = process.env.LLM_MODEL;
+    }
+  }
   if (process.env.DEEPSEEK_API_KEY) { config.llm.deepseekApiKey = process.env.DEEPSEEK_API_KEY; if (!process.env.LLM_MODE && !process.env.ANTHROPIC_API_KEY) config.llm.mode = 'deepseek'; }
   if (process.env.DEEPSEEK_MODEL) config.llm.deepseekModel = process.env.DEEPSEEK_MODEL;
   if (process.env.MOONSHOT_API_KEY) { config.llm.moonshotApiKey = process.env.MOONSHOT_API_KEY; if (!process.env.LLM_MODE && !process.env.ANTHROPIC_API_KEY && !process.env.DEEPSEEK_API_KEY) config.llm.mode = 'moonshot'; }
@@ -172,8 +228,6 @@ export function loadConfig(configPath?: string): GatewayConfig {
   if (process.env.OPENROUTER_API_KEY) { config.llm.openrouterApiKey = process.env.OPENROUTER_API_KEY; if (!process.env.LLM_MODE && !process.env.ANTHROPIC_API_KEY && !process.env.DEEPSEEK_API_KEY && !process.env.MOONSHOT_API_KEY) config.llm.mode = 'moonshot'; }
   if (process.env.OPENROUTER_MODEL) config.llm.openrouterModel = process.env.OPENROUTER_MODEL;
   if (process.env.OPENROUTER_BASE_URL) config.llm.openrouterBaseUrl = process.env.OPENROUTER_BASE_URL;
-  if (process.env.GEMINI_API_KEY) { config.llm.geminiApiKey = process.env.GEMINI_API_KEY; if (!process.env.LLM_MODE && !process.env.ANTHROPIC_API_KEY && !process.env.DEEPSEEK_API_KEY && !process.env.MOONSHOT_API_KEY && !process.env.OPENROUTER_API_KEY) config.llm.mode = 'gemini'; }
-  if (process.env.GEMINI_MODEL) config.llm.geminiModel = process.env.GEMINI_MODEL;
   if (process.env.OLLAMA_BASE_URL) config.llm.ollamaBaseUrl = process.env.OLLAMA_BASE_URL;
   if (process.env.OLLAMA_MODEL) config.llm.ollamaModel = process.env.OLLAMA_MODEL;
   if (process.env.LLM_BRIDGE_URL) config.llm.bridgeUrl = process.env.LLM_BRIDGE_URL;

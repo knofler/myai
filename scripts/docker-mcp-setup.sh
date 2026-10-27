@@ -16,6 +16,14 @@ CATALOG_NAME="myai"
 PROFILE_ID="myai"
 DOCKER_MCP_CATALOGS_DIR="$HOME/.docker/mcp/catalogs"
 
+# Per-host gateway mem cap (config/stack_limits.txt, keyed by `hostname -s`;
+# compose default 1g). Resolved here so the "Start the gateway" hint printed at
+# the end pins this host's size (mirrors gh_runner_mem.txt); nothing
+# host-specific leaks via .env/Dropbox.
+# shellcheck source=scripts/lib/stack_limits.sh
+. "$REPO_ROOT/scripts/lib/stack_limits.sh"
+GATEWAY_MEM_LIMIT="${GATEWAY_MEM_LIMIT:-$(resolve_gateway_mem)}"
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker CLI not found — install Docker Desktop first." >&2
   exit 1
@@ -72,8 +80,9 @@ cat <<EOF
 
 Setup complete. myAI is registered as Docker MCP Toolkit profile '$PROFILE_ID'.
 
-Start the gateway (if not already running):
-  docker compose up -d gateway
+Start the gateway (if not already running — sized for this host from
+config/stack_limits.txt):
+  GATEWAY_MEM_LIMIT=$GATEWAY_MEM_LIMIT docker compose up -d gateway
 
 Connect a client (adds a single MCP_DOCKER entry to .mcp.json, merged with
 existing entries — it does not remove the manual "myai" entry, do that by

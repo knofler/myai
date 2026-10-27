@@ -57,8 +57,8 @@ cat /etc/wsl.conf   # want:  [boot]\nsystemd=true
 
 - Clone/access the repo inside WSL (a native path like `~/ci-workspaces/ai_management`
   is much faster than `/mnt/c/...`).
-- Install the Claude CLI and log in with the **claude-tech** profile
-  (`CLAUDE_CONFIG_DIR=~/.claude-tech` — the runner sets this itself).
+- Install the Claude CLI and log in with the **runner** profile
+  (`CLAUDE_CONFIG_DIR=~/.claude-<runner-profile>` — the runner sets this itself).
 - Gateway reachability: with the gateway on Docker Desktop, `localhost:3100`
   resolves from WSL2 out of the box (localhost forwarding). Verify:
   `curl -sf http://localhost:3100/health && echo OK`.
@@ -102,7 +102,7 @@ fired by a `schtasks` job that mirrors the launchd/systemd cadence.
   deliberately not used — if that's what you have, use Path A).
 - **Docker Desktop** with the myAI gateway up at `http://localhost:3100`.
 - **Claude CLI** installed and logged in *inside Git Bash*
-  (`~/.claude-tech` profile).
+  (`~/.claude-<runner-profile>` profile).
 - `python3` resolvable in Git Bash (the runner parses gateway JSON with it).
 
 ### Install / manage
@@ -183,7 +183,7 @@ even without nssm on PATH.
 - **Administrator PowerShell** for install/uninstall (`-Status` works
   unelevated).
 - **Your account password** — the service must run as *your* user (the runner
-  needs your `~/.claude-tech` login, `~/.ai-cli-runner`, git credentials).
+  needs your `~/.claude-<runner-profile>` login, `~/.ai-cli-runner`, git credentials).
   Prompted via `Get-Credential`, never taken from the command line; nssm
   grants the "Log on as a service" right automatically. (`-RunAsLocalSystem`
   exists but is discouraged — SYSTEM's profile has no Claude login.)

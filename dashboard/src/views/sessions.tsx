@@ -103,25 +103,29 @@ export default async function SessionsPage() {
           label="Total vectors"
           value={numFmt.format(totalVectors)}
           sub={`${sourceCount} source type${sourceCount !== 1 ? 's' : ''} across ${repoCount} repo${repoCount !== 1 ? 's' : ''}`}
-          accent={totalVectors > 0 ? 'green' : 'gray'}
+          icon="memory"
+          tone={totalVectors > 0 ? 'ok' : 'muted'}
         />
         <StatCard
           label="Source types"
           value={String(sourceCount)}
           sub={sourceNames.slice(0, 4).join(', ') + (sourceNames.length > 4 ? ` +${sourceNames.length - 4} more` : '') || 'none indexed'}
-          accent={sourceCount > 0 ? 'blue' : 'gray'}
+          icon="registry"
+          tone={sourceCount > 0 ? 'ok' : 'muted'}
         />
         <StatCard
           label="Repos indexed"
           value={String(repoCount)}
           sub={byRepo.map((r) => r._id || '(unknown)').slice(0, 3).join(', ') || 'none'}
-          accent={repoCount > 0 ? 'green' : 'gray'}
+          icon="fleet"
+          tone={repoCount > 0 ? 'ok' : 'muted'}
         />
         <StatCard
           label="Latest indexed"
           value={latestIndexed ? new Date(latestIndexed).toLocaleDateString() : 'n/a'}
           sub={latestIndexed ? new Date(latestIndexed).toLocaleTimeString() : 'no vectors yet'}
-          accent={latestIndexed ? 'green' : 'gray'}
+          icon="clock"
+          tone={latestIndexed ? 'ok' : 'muted'}
         />
       </div>
 

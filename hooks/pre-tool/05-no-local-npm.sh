@@ -30,14 +30,14 @@ fi
 # GLOBAL npm operations — the sanctioned framework-CLI path is `npm i -g ai-management`
 # (AI_RULES §19). The host-npm block targets PROJECT-LOCAL deps (Docker mandate); global
 # CLI tools are a host concern. But §19 says registry-only, NO EXCEPTION — so this guard
-# also ENFORCES that: a global INSTALL of a forbidden form (tarball .tgz, the unpublished
-# scoped @knofler/ai-management) is blocked. Cleanup (uninstall/remove) of ANY global
+# also ENFORCES that: a global INSTALL of a forbidden form (tarball .tgz, any unpublished
+# scoped @<scope>/ai-management) is blocked. Cleanup (uninstall/remove) of ANY global
 # package stays allowed — that is how a machine is migrated OFF a bad install.
 if echo "$COMMAND" | grep -qE '^[[:space:]]*npm[[:space:]]' && echo "$COMMAND" | grep -qE '(^|[[:space:]])(-g|--global)([[:space:]]|$)'; then
   if echo "$COMMAND" | grep -qE '\b(install|i|add)\b' \
-     && echo "$COMMAND" | grep -qE '\.tgz([[:space:]"'"'"']|$)|@knofler/ai-management'; then
+     && echo "$COMMAND" | grep -qE '\.tgz([[:space:]"'"'"']|$)|@[^/[:space:]]+/ai-management'; then
     echo "BLOCKED (AI_RULES §19): the framework CLI installs ONLY as the bare registry" >&2
-    echo "package — no tarball (.tgz), no scoped @knofler/ai-management, no npm link." >&2
+    echo "package — no tarball (.tgz), no scoped @<scope>/ai-management, no npm link." >&2
     echo "  Use exactly:  npm i -g ai-management" >&2
     exit 2
   fi

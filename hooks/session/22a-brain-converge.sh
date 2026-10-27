@@ -24,8 +24,12 @@ set +e
 # merge, never reset --hard/clean/force-push, auto-resolve ONLY the regenerable
 # distiller outputs, and abort + escalate LOUD on any real atom conflict.
 
-# host-only (the brain is a host-side git repo)
-if [ -f /.dockerenv ] || [ -n "$MYAI_IN_CONTAINER" ]; then
+# host-only (the brain is a host-side git repo). MYAI_BOOT_SYNC_ALLOW_CONTAINER
+# is the same test-only override scripts/boot_sync.sh documents and
+# test_boot_sync.sh uses — test_boot_sync_resolve.sh needs this hook to
+# actually run (against a throwaway brain + MYAI_BOOT_SYNC_STATE_DIR) inside a
+# containerized CI runner to exercise the RESOLVED handoff end-to-end.
+if { [ -f /.dockerenv ] || [ -n "$MYAI_IN_CONTAINER" ]; } && [ -z "${MYAI_BOOT_SYNC_ALLOW_CONTAINER:-}" ]; then
   exit 0
 fi
 
@@ -48,5 +52,23 @@ if command -v timeout >/dev/null 2>&1; then
 else
   BC() { brain_converge; }
 fi
-BC
+
+# 09a-boot-sync (scripts/boot_sync.sh) runs before this hook and already tries
+# to push an ahead-only brain, retrying once on failure. If that retry STILL
+# fails it drops "BOOT SYNC — needs operator" and leaves a marker at
+# state/.brain-push-needs-operator. brain_converge below re-tries the very
+# same push (it never knows the first attempt happened) and, on a transient
+# blip, often succeeds — which used to surface as a second, silently
+# contradictory "brain: converged -N (pushed)" line with no acknowledgement
+# of the earlier alarm. When the marker is present and this run's push
+# succeeds, say so explicitly instead of leaving two disagreeing verdicts.
+MARKER="${MYAI_BOOT_SYNC_STATE_DIR:-$ROOT/state}/.brain-push-needs-operator"
+OUT="$(BC 2>&1)"
+if [ -n "$OUT" ]; then
+  printf '%s\n' "$OUT"
+fi
+if [ -f "$MARKER" ] && printf '%s' "$OUT" | grep -qE 'brain: converged (-[0-9]+ \(pushed\)|\(clean auto-merge|\(auto-resolved)'; then
+  echo "RESOLVED: brain pushed — an earlier push attempt this boot failed and needed the operator; brain is now pushed and up to date with origin/main."
+  rm -f "$MARKER" 2>/dev/null
+fi
 exit 0

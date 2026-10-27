@@ -107,7 +107,7 @@ export function FeedbackWidget() {
                       key={c.value}
                       type="button"
                       onClick={() => setCategory(c.value)}
-                      className={`px-2.5 py-1 rounded-full text-[11px] border transition ${
+                      className={`px-2.5 py-1 rounded-full text-label border transition ${
                         category === c.value
                           ? 'border-teal-600 text-teal-300 bg-teal-950/40'
                           : 'border-[rgb(var(--border-subtle))] text-[rgb(var(--text-muted))]'

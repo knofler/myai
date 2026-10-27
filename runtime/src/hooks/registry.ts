@@ -70,7 +70,14 @@ export function addBashHook(
         resolve();
       });
 
-      // Send context as JSON on stdin
+      // Send context as JSON on stdin. A hook that exits WITHOUT reading stdin
+      // closes the pipe; the write then fails with EPIPE, and an 'error' event
+      // with no listener crashes the whole gateway process (CI two-tenant E2E,
+      // 2026-10-03, twice: #480 and #484). The hook's own result still arrives
+      // through the execFile callback — this only swallows the pipe error.
+      child.stdin?.on('error', (err: NodeJS.ErrnoException) => {
+        log.debug({ hook: name, code: err.code }, 'Bash hook closed stdin before reading context');
+      });
       if (child.stdin) {
         child.stdin.write(JSON.stringify({
           event: ctx.event,

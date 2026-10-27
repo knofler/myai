@@ -74,7 +74,7 @@ export function MarketplaceReviewActions({ listingId, version }: { listingId: st
       >
         {pending === 'reject' ? 'Rejecting…' : 'Reject'}
       </button>
-      {error && <span className="text-xs text-red-400">{error}</span>}
+      {error && <span role="alert" className="text-xs text-red-400">{error}</span>}
     </div>
   );
 }

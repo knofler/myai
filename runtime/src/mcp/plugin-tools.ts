@@ -38,6 +38,7 @@ import {
 } from '../shared/scoped-query.js';
 import { recordAuditEvent, auditActorFromCtx, type AuditActor } from '../core/audit-log.js';
 import type { ToolContext } from '../core/tenant-context.js';
+import { assertPublicDestination, isBlockedHostLiteral, privateOutboundAllowed } from '../shared/url-guard.js';
 
 const log = createChildLogger({ module: 'plugin-tools' });
 
@@ -115,6 +116,9 @@ export function validateHandlerUrl(raw: unknown): string {
     u = new URL(raw);
   } catch {
     throw new Error('handlerUrl must be a valid absolute URL');
+  }
+  if (isBlockedHostLiteral(u.hostname) && !privateOutboundAllowed()) {
+    throw new Error('handlerUrl must not be a private or loopback address (MYAI_ALLOW_PRIVATE_OUTBOUND=1 to allow)');
   }
   const isLoopback = /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(u.hostname);
   if (u.protocol === 'https:' || (u.protocol === 'http:' && isLoopback)) return u.href;
@@ -313,8 +317,10 @@ async function proxyToHandler(
   args: Record<string, unknown>,
 ): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
   try {
+    await assertPublicDestination(plugin.handlerUrl);
     const res = await fetch(plugin.handlerUrl, {
       method: 'POST',
+      redirect: 'manual',
       headers: {
         'content-type': 'application/json',
         'x-myai-plugin-tool': plugin.name,
@@ -326,6 +332,9 @@ async function proxyToHandler(
     const text = await res.text();
     if (text.length > MAX_RESPONSE_BYTES) {
       return { ok: false, error: `plugin response too large (> ${MAX_RESPONSE_BYTES} bytes)` };
+    }
+    if (res.status >= 300 && res.status < 400) {
+      return { ok: false, error: `plugin handler redirected (HTTP ${res.status}); redirects are not followed` };
     }
     if (!res.ok) {
       return { ok: false, error: `plugin handler returned HTTP ${res.status}` };

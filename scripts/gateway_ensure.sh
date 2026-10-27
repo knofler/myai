@@ -70,6 +70,18 @@ if ! docker info >/dev/null 2>&1; then
   exit 4
 fi
 
+# ── gateway memory cap ───────────────────────────────────────────────────────
+# Every `compose up` of the gateway must carry this Mac's cap, or compose falls
+# back to its 1g default: this freshness rebuild (every session start) used to
+# recreate office-mac's gateway at 1g right after the boot had set 2g (found by
+# `fleet_role.sh doctor`, 2026-10-05). Host row → fleet-role profile → `*` row
+# (scripts/lib/stack_limits.sh); an explicit GATEWAY_MEM_LIMIT still wins.
+# shellcheck source=scripts/lib/stack_limits.sh
+[ -f "$ROOT/scripts/lib/stack_limits.sh" ] && . "$ROOT/scripts/lib/stack_limits.sh"
+if command -v resolve_gateway_mem >/dev/null 2>&1; then
+  export GATEWAY_MEM_LIMIT="${GATEWAY_MEM_LIMIT:-$(resolve_gateway_mem 2>/dev/null)}"
+fi
+
 # ── compose command ──────────────────────────────────────────────────────────
 if docker compose version >/dev/null 2>&1; then DC="docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then DC="docker-compose"

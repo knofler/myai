@@ -64,25 +64,25 @@ export function SavingsHero({ trend }: { trend: SavingsTrend }) {
       <div className="p-4 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
         {/* Headline: tokens saved this week */}
         <div className="md:col-span-1">
-          <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider">Tokens saved (7d)</p>
+          <p className="text-label text-[rgb(var(--text-muted))] uppercase tracking-wider">Tokens saved (7d)</p>
           <p className="text-3xl font-bold mt-1 text-[rgb(var(--ok))] font-mono tabular-nums">{fmtTokens(week.tokens)}</p>
           <div className="mt-1"><TrendPill deltaPct={trend.deltaPct} /></div>
         </div>
         {/* Sessions boosted */}
         <div className="md:col-span-1">
-          <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider">Sessions boosted</p>
+          <p className="text-label text-[rgb(var(--text-muted))] uppercase tracking-wider">Sessions boosted</p>
           <p className="text-2xl font-bold mt-1 text-[rgb(var(--text-primary))] font-mono tabular-nums">{week.boots.toLocaleString()}</p>
           <p className="text-xs text-[rgb(var(--text-muted))] mt-1">context served, not re-taught</p>
         </div>
         {/* Cost avoided */}
         <div className="md:col-span-1">
-          <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider">Cost avoided</p>
+          <p className="text-label text-[rgb(var(--text-muted))] uppercase tracking-wider">Cost avoided</p>
           <p className="text-2xl font-bold mt-1 text-[rgb(var(--ok))] font-mono tabular-nums">{fmtUsd(week.usd)}</p>
           <p className="text-xs text-[rgb(var(--text-muted))] mt-1">@ ${trend.usdPerMTokens}/M input tokens</p>
         </div>
         {/* Trend sparkline */}
         <div className="md:col-span-1">
-          <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Last 7 days</p>
+          <p className="text-label text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Last 7 days</p>
           <Sparkline daily={trend.daily} />
         </div>
       </div>

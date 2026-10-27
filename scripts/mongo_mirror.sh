@@ -7,7 +7,7 @@
 # container is unused by it. So RAG memory (vectors/patterns), the agent/skill/
 # repo REGISTRY, tasks, handoffs, budgets — everything except the brain — live
 # ONLY in Atlas. Atlas-down or offline => no memory/registry on localhost. (The
-# brain is git-backed at ~/.myai/brain + knofler/myai-brain, so it already has a
+# brain is git-backed at ~/.myai/brain + <owner>/myai-brain, so it already has a
 # local copy; memory/registry do NOT.) This script periodically dumps those
 # collections from Atlas and restores them into the local mongo, so a warm local
 # mirror is always on disk. Read-side local-first failover is a separate,
@@ -58,6 +58,28 @@ LOCAL_MONGO_NETWORK_DEFAULT="myai_myai-net"
 # hardened local store. Not real secrets — kept out of any hardcoded URI literal.
 LOCAL_MONGO_USER="${LOCAL_MONGO_USER:-admin}"
 LOCAL_MONGO_PASS="${LOCAL_MONGO_PASS:-password}"
+
+# ── Deny-list: collections NOT mirrored into the local read-replica ───────────
+# Atlas is the SOURCE OF TRUTH; local is a WARM READ REPLICA for failover
+# (documentation/MONGO_MIRROR.md). The mirror copies EVERY collection in the db
+# EXCEPT a short, justified deny-list of genuinely ephemeral / high-churn ones
+# whose stale copy is useless (or actively misleading) in a replica — keeping
+# the local store lean under the 512m app-stack RAM cap (CLAUDE.md § On Session
+# Start → "2 GB RAM ceiling"; myai-mongo's slice is 512m). Each entry justified:
+#   runner_heartbeats — liveness pings, every machine every ~10 min; a stale
+#                       heartbeat after failover is worthless. (ephemeral/churn)
+#   runner_leases     — current task locks; a stale lease in the replica would
+#                       actively mislead a reader. (ephemeral)
+#   gatewaysessions   — gateway session store, regenerated on next login; no
+#                       value frozen in a replica. (ephemeral)
+# Override with MIRROR_DENY_COLLECTIONS="a,b,c"; an EMPTY string mirrors
+# literally every collection (use `${VAR-default}` so "" disables the list).
+MIRROR_DENY_COLLECTIONS="${MIRROR_DENY_COLLECTIONS-runner_heartbeats,runner_leases,gatewaysessions}"
+
+# Flag the replica when its on-disk dataSize nears the 512m RAM slice (WiredTiger
+# clamps its cache to the container memory, so a working set above this risks
+# thrash). Default ~400 MiB; override with MIRROR_RAM_WARN_BYTES.
+MIRROR_RAM_WARN_BYTES="${MIRROR_RAM_WARN_BYTES:-419430400}"
 
 # ── Colours (no green — AI_RULES §13) ─────────────────────────────────────────
 ORANGE=$'\033[1;38;5;208m'; YELLOW=$'\033[38;5;220m'; RED=$'\033[38;5;196m'
@@ -122,6 +144,76 @@ build_ns_includes() {
   printf '%s' "${out# }"
 }
 
+# ── build_excludes CSV → mongodump --excludeCollection flags for the deny-list ─
+# Empty CSV → nothing (mirror every collection). Dump-side exclude so huge /
+# ephemeral collections are never transferred or written locally (cheaper than
+# restore-side --nsExclude and keeps the replica small under the RAM cap).
+build_excludes() {
+  local csv="${1:-}" out="" c
+  [ -z "$csv" ] && { printf ''; return 0; }
+  for c in $(printf '%s' "$csv" | tr ',' ' '); do
+    [ -z "$c" ] && continue
+    out="$out --excludeCollection=$c"
+  done
+  printf '%s' "${out# }"
+}
+
+# ── mirror_ram_flag SIZE_BYTES WARN_BYTES → "true"/"false" ────────────────────
+# true when the local replica's on-disk dataSize is at/over the warn threshold
+# (so the dashboard/doctor can surface "replica approaching the 512m RAM slice").
+# Non-numeric inputs are treated as 0; WARN=0 disables the check (always false).
+mirror_ram_flag() {
+  local size="${1:-0}" warn="${2:-0}"
+  case "$size" in ''|*[!0-9]*) size=0 ;; esac
+  case "$warn" in ''|*[!0-9]*) warn=0 ;; esac
+  if [ "$warn" -gt 0 ] && [ "$size" -ge "$warn" ]; then printf 'true'; else printf 'false'; fi
+}
+
+# ── mirror_coverage_json builds the per-run coverage artifact (pure) ───────────
+# Args: ATLAS_TSV LOCAL_TSV DENY_CSV CAPTURED_EPOCH LOCAL_DATASIZE RAM_WARN_BYTES
+# ATLAS_TSV / LOCAL_TSV = one "name<TAB>count" line per collection (source vs
+# the local replica). Emits one JSON object recording freshness + the
+# per-collection count delta Atlas-vs-local, consumed by the dashboard replica
+# row and `myai doctor`:
+#   {capturedAt, mirroredCollections, totalCollections, deniedCollections[],
+#    localDataSizeBytes, ramWarnBytes, ramFlag,
+#    perCollection:[{name,atlas,local,delta}]}
+mirror_coverage_json() {
+  local atlas_tsv="${1:-}" local_tsv="${2:-}" deny_csv="${3:-}" captured="${4:-0}" datasize="${5:-0}" ramwarn="${6:-0}"
+  case "$captured" in ''|*[!0-9]*) captured=0 ;; esac
+  case "$datasize" in ''|*[!0-9]*) datasize=0 ;; esac
+  case "$ramwarn"  in ''|*[!0-9]*) ramwarn=0  ;; esac
+  local ramflag deny_json="[]" denyitems="" c
+  ramflag="$(mirror_ram_flag "$datasize" "$ramwarn")"
+  if [ -n "$deny_csv" ]; then
+    for c in $(printf '%s' "$deny_csv" | tr ',' ' '); do
+      [ -z "$c" ] && continue
+      denyitems="$denyitems,\"$c\""
+    done
+    deny_json="[${denyitems#,}]"
+  fi
+  # The two TSVs are fed on stdin separated by a sentinel line: a multi-line
+  # value in `awk -v` is rejected by BSD/macOS awk ("newline in string"), so
+  # only scalars go through -v. Collection names are [a-z0-9_] → no JSON escaping.
+  { printf '%s\n' "$atlas_tsv"; printf '%s\n' '@@MIRROR_SEP@@'; printf '%s\n' "$local_tsv"; } | \
+  awk -v captured="$captured" -v datasize="$datasize" -v ramwarn="$ramwarn" \
+      -v ramflag="$ramflag" -v denyjson="$deny_json" '
+  function emit(n, a, l,   d) {
+    d = a - l;
+    per = per sprintf("%s{\"name\":\"%s\",\"atlas\":%d,\"local\":%d,\"delta\":%d}", (per == "" ? "" : ","), n, a, l, d);
+  }
+  BEGIN { sec = 0; ac = 0; per = "" }
+  $0 == "@@MIRROR_SEP@@" { sec = 1; next }
+  sec == 0 && $0 != "" { split($0, f, "\t"); acount[f[1]] = f[2] + 0; if (!(f[1] in aseen)) { aorder[++ac] = f[1]; aseen[f[1]] = 1 } }
+  sec == 1 && $0 != "" { split($0, g, "\t"); lcount[g[1]] = g[2] + 0; lseen[g[1]] = 1 }
+  END {
+    mirrored = 0; for (k in lseen) mirrored++;
+    for (i = 1; i <= ac; i++) { n = aorder[i]; emit(n, acount[n], (n in lcount) ? lcount[n] : 0); }
+    for (n in lseen) { if (!(n in aseen)) emit(n, 0, lcount[n]); }
+    printf("{\"capturedAt\":%d,\"mirroredCollections\":%d,\"totalCollections\":%d,\"deniedCollections\":%s,\"localDataSizeBytes\":%d,\"ramWarnBytes\":%d,\"ramFlag\":%s,\"perCollection\":[%s]}\n", captured, mirrored, ac, denyjson, datasize, ramwarn, ramflag, per);
+  }'
+}
+
 # ── write_last_run RC DIRECTION DB COLLECTIONS → record the run's outcome ─────
 # $MYAI_HOME/mongo-mirror.last (default ~/.myai) as key=value lines. Read by
 # `myai doctor` (mongo mirror schedule check) and --schedule-status. Best-effort
@@ -148,6 +240,54 @@ env_from_file() {
   local file="$1" key="$2"
   [ -f "$file" ] || { printf ''; return 0; }
   grep -E "^${key}=" "$file" 2>/dev/null | tail -1 | sed -E "s/^${key}=//" | sed -E 's/^"(.*)"$/\1/'
+}
+
+# ── collection_counts URI DB → "name<TAB>count" line per collection ───────────
+# Runs mongosh inside the throwaway tools container (which bundles it). The URI
+# is passed via env (not argv) so credentials never land in `docker` process
+# args. Best-effort: on any failure prints nothing (caller treats as "unknown").
+collection_counts() {
+  local uri="$1" db="$2"
+  docker run --rm --network "$NETWORK" -e U="$uri" -e DBN="$db" "$MONGO_TOOLS_IMAGE" \
+    sh -c 'mongosh "$U" --quiet --eval "const d=db.getSiblingDB(process.env.DBN);const T=String.fromCharCode(9);d.getCollectionNames().forEach(function(c){try{print(c+T+d.getCollection(c).countDocuments({}))}catch(e){}});"' \
+    2>/dev/null || true
+}
+
+# ── db_datasize URI DB → total dataSize in bytes for the db, or 0 ─────────────
+db_datasize() {
+  local uri="$1" db="$2" out
+  out="$(docker run --rm --network "$NETWORK" -e U="$uri" -e DBN="$db" "$MONGO_TOOLS_IMAGE" \
+    sh -c 'mongosh "$U" --quiet --eval "print(db.getSiblingDB(process.env.DBN).stats().dataSize)"' \
+    2>/dev/null | tr -dc '0-9')"
+  printf '%s' "${out:-0}"
+}
+
+# ── capture_coverage FROM TO DB DENY → write the per-run coverage artifact ─────
+# Atlas→local only. Best-effort: never fails the mirror. Records last-success
+# freshness + the per-collection count delta (source vs replica) to
+# $MYAI_HOME/mongo-mirror-counts.json, which mongo_mirror_status_snapshot.sh
+# folds into state/mongo-mirror-status.json for the dashboard replica row.
+capture_coverage() {
+  local from="$1" to="$2" db="$3" deny="$4"
+  local home="${MYAI_HOME:-$HOME/.myai}" atlas_tsv local_tsv datasize json
+  atlas_tsv="$(collection_counts "$from" "$db")"
+  if [ -z "$atlas_tsv" ]; then
+    c_warn "coverage: could not read source collection counts — skipping coverage artifact"
+    return 0
+  fi
+  local_tsv="$(collection_counts "$to" "$db")"
+  datasize="$(db_datasize "$to" "$db")"
+  json="$(mirror_coverage_json "$atlas_tsv" "$local_tsv" "$deny" "$(date +%s)" "$datasize" "$MIRROR_RAM_WARN_BYTES")"
+  mkdir -p "$home" 2>/dev/null || return 0
+  printf '%s\n' "$json" > "$home/mongo-mirror-counts.json" 2>/dev/null || true
+  local mirrored total
+  mirrored="$(printf '%s' "$json" | sed -E 's/.*"mirroredCollections":([0-9]+).*/\1/')"
+  total="$(printf '%s' "$json" | sed -E 's/.*"totalCollections":([0-9]+).*/\1/')"
+  c_info "coverage: local replica ${mirrored}/${total} collections (deny-list: ${deny:-none})"
+  if printf '%s' "$json" | grep -q '"ramFlag":true'; then
+    c_warn "coverage: local replica dataSize is near the 512m RAM slice — consider widening the deny-list or raising the cap (see documentation/MONGO_MIRROR.md → RAM budget)"
+  fi
+  return 0
 }
 
 # ── resolve_src → the source (dump-from) MONGODB_URI ──────────────────────────
@@ -253,11 +393,22 @@ fi
 NETWORK="$(resolve_network)"
 NS_INCLUDES="$(build_ns_includes "$DB" "$COLLECTIONS")"
 
+# Deny-list applies ONLY to the default whole-db mirror in the safe Atlas→local
+# direction: an explicit --collections allow-list already scopes the set, and
+# --reverse is an operator-driven push we never silently trim.
+DUMP_EXCLUDES=""
+ACTIVE_DENY=""
+if [ "$REVERSE" != 1 ] && [ -z "$COLLECTIONS" ]; then
+  ACTIVE_DENY="$MIRROR_DENY_COLLECTIONS"
+  DUMP_EXCLUDES="$(build_excludes "$ACTIVE_DENY")"
+fi
+
 # ── Report the plan ───────────────────────────────────────────────────────────
 echo "== mongo_mirror =="
 c_info "direction:   $DIRECTION"
 c_info "database:    $DB"
 c_info "collections: ${COLLECTIONS:-<all>}"
+c_info "deny-list:   ${ACTIVE_DENY:-<none>}"
 c_info "from:        $(mask_uri "$FROM_URI")"
 c_info "to:          $(mask_uri "$TO_URI")"
 c_info "network:     $NETWORK"
@@ -268,7 +419,9 @@ c_info "tools image: $MONGO_TOOLS_IMAGE"
 # NOT pass mongodump --db: the source URI already carries the database path
 # (mongodump errors if --db is given alongside a db in the connection string),
 # and --nsInclude on restore scopes exactly which collections land.
-PIPE="mongodump --uri=\"\$FROM\" --archive --gzip --quiet | mongorestore --uri=\"\$TO\" --archive --gzip --drop $NS_INCLUDES --quiet"
+# --excludeCollection (dump side) drops the deny-listed ephemeral collections so
+# they never transfer into the replica.
+PIPE="mongodump --uri=\"\$FROM\" --archive --gzip --quiet $DUMP_EXCLUDES | mongorestore --uri=\"\$TO\" --archive --gzip --drop $NS_INCLUDES --quiet"
 
 if [ "$DRY_RUN" = 1 ]; then
   echo
@@ -285,6 +438,11 @@ if docker run --rm --network "$NETWORK" \
     "$MONGO_TOOLS_IMAGE" sh -c "$PIPE"; then
   write_last_run 0 "$DIRECTION" "$DB" "$COLLECTIONS"
   c_ok "mirror complete — local copy of '$DB' refreshed (${COLLECTIONS:-all collections})"
+  # Record per-run freshness + per-collection count delta (Atlas vs replica) for
+  # the dashboard replica row. Atlas→local only — never measure a reverse push.
+  if [ "$REVERSE" != 1 ]; then
+    capture_coverage "$FROM_URI" "$TO_URI" "$DB" "$ACTIVE_DENY"
+  fi
 else
   rc=$?
   write_last_run "$rc" "$DIRECTION" "$DB" "$COLLECTIONS"

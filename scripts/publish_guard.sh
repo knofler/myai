@@ -29,6 +29,21 @@
 #   scripts/publish_guard.sh            # pack → extract → scan; exit 1 on leak
 #   scripts/publish_guard.sh --keep     # leave the extracted tarball for inspection
 #   scripts/publish_guard.sh --quiet    # only print the verdict + findings
+#   scripts/publish_guard.sh --dir <d>  # scan an already-extracted tree (no
+#                                       # npm pack) — hermetic tests, CI mirrors
+#   env LEAK_PATTERNS_FILE=<f>          # seed list (default config/leak_patterns.txt)
+#
+# RUN IT AS THE PUBLISHER, NOT AS ROOT. The scan adds the CURRENT user's $HOME,
+# /Users/$(whoami) and /home/$(whoami) as literal leak patterns (§3b). Run as
+# root inside a container (HOME=/root) and every legitimate container path in
+# the package — /root/.myai in docker-compose.yml and friends — is flagged: a
+# FALSE RED (2026-10-27: 41 findings as root vs 29 as the publisher on the same
+# tree). For a count that matches a real `npm publish`, run on the publishing
+# machine, or in a container as a user with the publisher's name and
+# HOME=/Users/<name>, e.g.
+#   docker run --rm -v "$PWD":/src:ro node:24 bash -c \
+#     'useradd -m -d /Users/<name> <name>; cp -r /src /Users/<name>/w; chown -R <name> /Users/<name>/w;
+#      su <name> -c "cd /Users/<name>/w && HOME=/Users/<name> bash scripts/publish_guard.sh"'
 #
 # Exit codes: 0 = clean (safe to publish) · 1 = LEAK DETECTED (publish blocked)
 #             2 = scanner error (npm/pack failure)
@@ -36,21 +51,24 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 2
 
-KEEP=0; QUIET=0
-for arg in "$@"; do
-  case "$arg" in
+KEEP=0; QUIET=0; SCAN_DIR=""
+while [ $# -gt 0 ]; do
+  case "$1" in
     --keep)  KEEP=1 ;;
     --quiet) QUIET=1 ;;
-    *) echo "Unknown flag: $arg" >&2; exit 2 ;;
+    --dir)   SCAN_DIR="${2:-}"; shift
+             [ -d "$SCAN_DIR" ] || { echo "publish_guard: --dir needs a directory" >&2; exit 2; } ;;
+    *) echo "Unknown flag: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 say()  { [ "$QUIET" = "1" ] || echo "$@"; }
 hr()   { say "────────────────────────────────────────────────────────────────"; }
 
-if [ ! -f package.json ]; then
+if [ -z "$SCAN_DIR" ] && [ ! -f package.json ]; then
   echo "publish_guard: no package.json at repo root — nothing to pack." >&2
   exit 2
 fi
@@ -67,7 +85,7 @@ hr
 # README/SHOWCASE/package.json hardcode "NN agents / NN skills / NN MCP tools"
 # in ~30 places; v0.6.2 reconciled them by hand and still shipped a wrong
 # agent count. A release must not ship stale numbers.
-if [ -x "$ROOT/scripts/check_capability_counts.sh" ]; then
+if [ -z "$SCAN_DIR" ] && [ -x "$ROOT/scripts/check_capability_counts.sh" ]; then
   say "capability counts: checking README/SHOWCASE/package.json against shipped truth…"
   if COUNTS_OUT="$("$ROOT/scripts/check_capability_counts.sh" 2>&1)"; then
     say "capability counts: in sync."
@@ -89,6 +107,12 @@ fi
 # npm_config_dry_run=true into this script's env — which would turn the nested
 # `npm pack` into a dry-run that produces no tarball. Strip it: the guard must
 # always pack a real tarball to scan, regardless of the outer command's mode.
+PKG="$WORK/extract"
+mkdir -p "$PKG"
+if [ -n "$SCAN_DIR" ]; then
+  cp -R "$SCAN_DIR/." "$PKG/"
+  say "scanning directory: $SCAN_DIR"
+else
 TARBALL=""
 if ! TARBALL="$(env -u npm_config_dry_run npm pack --pack-destination "$WORK" 2>"$WORK/pack.err" | tail -1)"; then
   echo "publish_guard: 'npm pack' failed:" >&2
@@ -100,9 +124,8 @@ TARPATH="$WORK/$TARBALL"
 say "packed: $TARBALL"
 
 # ── 2. Extract & list every shipped path ─────────────────────────────────────
-PKG="$WORK/extract"
-mkdir -p "$PKG"
 tar -xzf "$TARPATH" -C "$PKG"
+fi
 ROOTDIR="$PKG/package"   # npm tarballs root everything under package/
 [ -d "$ROOTDIR" ] || ROOTDIR="$PKG"
 
@@ -127,21 +150,31 @@ fi
 # ── 3b. Build the operator-identity denylist, classified into two passes ─────
 #   LITERAL  (substring match -F)  — paths & emails (contain @ / or ~)
 #   NAME     (whole-word  match -wF) — repo codenames (generic words can't false+)
+#   TERM     (substring -iF) — operator identity (lane/account/brand names);
+#                               CHANGELOG.md history is exempt
+#   STRICT   (substring -iF) — employer + host names; fail EVERYWHERE
+# (V1 gate G1, plan/V1_LAUNCH_READINESS.md; coordinator decisions 2026-10-22)
 LITERAL="$WORK/literal.txt"; : > "$LITERAL"
 NAME="$WORK/name.txt"; : > "$NAME"
+TERM="$WORK/term.txt"; : > "$TERM"
+STRICT="$WORK/strict.txt"; : > "$STRICT"
 
 classify() { # read tokens on stdin → append to LITERAL or NAME by shape
   while IFS= read -r tok; do
     [ -z "$tok" ] && continue
     case "$tok" in
+      term:*)      printf '%s\n' "${tok#term:}" >> "$TERM" ;;
+      strict:*)    printf '%s\n' "${tok#strict:}" >> "$STRICT" ;;
       *@*|*/*|*~*) printf '%s\n' "$tok" >> "$LITERAL" ;;
       *)           printf '%s\n' "$tok" >> "$NAME" ;;
     esac
   done
 }
 # Seed list of known-sensitive operator tokens (NOT shipped — lives in config/).
-if [ -f config/leak_patterns.txt ]; then
-  grep -vE '^\s*#|^\s*$' config/leak_patterns.txt | classify
+# LEAK_PATTERNS_FILE overrides it (hermetic tests).
+PATTERNS_FILE="${LEAK_PATTERNS_FILE:-config/leak_patterns.txt}"
+if [ -f "$PATTERNS_FILE" ]; then
+  grep -vE '^\s*#|^\s*$' "$PATTERNS_FILE" | classify
 fi
 # Live operator identity derived at scan time (adapts per-operator / per-forker):
 {
@@ -154,6 +187,8 @@ fi
 # De-dup; names must be >=4 chars (avoid stray short tokens matching as words).
 sort -u "$LITERAL" | awk 'length($0) >= 4' > "$LITERAL.c" && mv "$LITERAL.c" "$LITERAL"
 sort -u "$NAME"    | awk 'length($0) >= 4' > "$NAME.c"    && mv "$NAME.c" "$NAME"
+sort -u "$TERM"   -o "$TERM"
+sort -u "$STRICT" -o "$STRICT"
 
 # ── 3c. Regex denylist (secret-shaped + home-path shapes) ────────────────────
 REGEX="$WORK/regex.txt"
@@ -211,6 +246,94 @@ PLACEHOLDER_MONGO='mongodb(\+srv)?://[^[:space:]]*(\$\{|<[A-Za-z]|x{4,}\.mongodb
 grep -rIinE "${EXCLUDES[@]}" -f "$REGEX" "$ROOTDIR" 2>/dev/null \
   | sed "s#${ROOTDIR}/##" | grep -vE "$LOOPBACK_MONGO" | grep -vE "$PLACEHOLDER_MONGO" | sort -u | head -200 \
   | emit "secret/home pattern"
+
+# ── 3e. Operator-identity TERM / STRICT scan ────────────────────────────────
+# The project's public owner may appear ONLY in these JSON keys (coordinator
+# 2026-10-22: the brand may change, so it stays in these fields and nowhere
+# else). They are dropped from the scan copy before matching; every other
+# occurrence fails. mcpName is the MCP-registry namespace and must match the
+# GitHub owner, so it is allow-listed with them.
+python3 -I - "$ROOTDIR" <<'PY' 2>/dev/null || note "allow-list step failed (python3) — owner fields NOT exempted"
+# Blank the allowed values IN PLACE (same line count), so findings keep the
+# source file's line numbers. Only exact JSON string values under the allowed
+# keys are blanked; the same value under any other key still matches.
+import json, os, sys
+root = sys.argv[1]
+PKG_KEYS = ("repository", "homepage", "bugs", "mcpName", "author")
+PLUGIN_KEYS = ("owner", "author", "homepage", "repository")
+def strings(v):
+    if isinstance(v, str): yield v
+    elif isinstance(v, dict):
+        for x in v.values(): yield from strings(x)
+    elif isinstance(v, list):
+        for x in v: yield from strings(x)
+def blank(path, values):
+    with open(path) as f: text = f.read()
+    for v in sorted(set(values), key=len, reverse=True):
+        text = text.replace(json.dumps(v), '"__allowed__"')
+    with open(path, "w") as f: f.write(text)
+def load(path):
+    try:
+        with open(path) as f: return json.load(f)
+    except Exception:
+        return None
+d = load(os.path.join(root, "package.json"))
+if isinstance(d, dict):
+    blank(os.path.join(root, "package.json"), [s for k in PKG_KEYS for s in strings(d.get(k))])
+    # Ruling A: the public repo slug (github.com/<owner>/<repo>, from the
+    # repository URL; also bare in `… marketplace add <owner>/<repo>` install
+    # lines) and the MCP-registry name (mcpName) may appear in ANY
+    # shipped file — install links, server.json, docs URLs. Blanked as exact
+    # substrings, so the owner name alone still fails everywhere else.
+    import re
+    repo = d.get("repository")
+    url = repo.get("url", "") if isinstance(repo, dict) else (repo or "")
+    m = re.search(r"github\.com[/:]([^/\s]+/[^/\s.#]+)", url)
+    allowed = (["github.com/" + m.group(1), "marketplace add " + m.group(1)] if m else []) + ([d["mcpName"]] if isinstance(d.get("mcpName"), str) else [])
+    if allowed:
+        for base, dirs, files in os.walk(root):
+            for name in files:
+                path = os.path.join(base, name)
+                try:
+                    with open(path, encoding="utf-8") as f: text = f.read()
+                except Exception:
+                    continue
+                new = text
+                for a in allowed:
+                    new = new.replace(a, "__allowed__")
+                if new != text:
+                    with open(path, "w", encoding="utf-8") as f: f.write(new)
+# Ruling A: the LICENSE copyright holder line is allowed.
+lic = os.path.join(root, "LICENSE")
+if os.path.isfile(lic):
+    with open(lic, encoding="utf-8", errors="ignore") as f: lines = f.readlines()
+    with open(lic, "w", encoding="utf-8") as f:
+        f.writelines("Copyright (c) __allowed__\n" if l.lstrip().lower().startswith("copyright") else l for l in lines)
+for base, dirs, files in os.walk(root):
+    if os.path.basename(base) != ".claude-plugin":
+        continue
+    for name in files:
+        path = os.path.join(base, name)
+        d = load(path) if name.endswith(".json") else None
+        if not isinstance(d, dict):
+            continue
+        vals = [s for k in PLUGIN_KEYS for s in strings(d.get(k))]
+        for pl in d.get("plugins", []) if isinstance(d.get("plugins"), list) else []:
+            if isinstance(pl, dict):
+                vals += [s for k in PLUGIN_KEYS for s in strings(pl.get(k))]
+        blank(path, vals)
+PY
+if [ -s "$TERM" ]; then
+  grep -rIinF "${EXCLUDES[@]}" --exclude='CHANGELOG.md' -f "$TERM" "$ROOTDIR" 2>/dev/null \
+    | sed "s#${ROOTDIR}/##" | sort -u | head -400 | emit "operator identity term"
+fi
+if [ -s "$STRICT" ]; then
+  grep -rIinF "${EXCLUDES[@]}" -f "$STRICT" "$ROOTDIR" 2>/dev/null \
+    | sed "s#${ROOTDIR}/##" | sort -u | head -400 | emit "operator employer/host name"
+fi
+# CHANGELOG history is exempt from TERMs but never from a home path.
+[ -f "$ROOTDIR/CHANGELOG.md" ] && grep -inE '/Users/[A-Za-z0-9._-]+' "$ROOTDIR/CHANGELOG.md" 2>/dev/null \
+  | sed 's#^#CHANGELOG.md:#' | emit "home path in CHANGELOG"
 
 # ── 5. Verdict ───────────────────────────────────────────────────────────────
 hr

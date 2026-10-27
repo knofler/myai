@@ -94,25 +94,29 @@ export default async function ContextView() {
           label="Total items"
           value={formatCompact(summary.totalItems)}
           sub="vectors + sessions + brain atoms"
-          accent={summary.hasContext ? 'green' : 'gray'}
+          icon="context"
+          tone={summary.hasContext ? 'ok' : 'muted'}
         />
         <StatCard
           label="Estimated tokens"
           value={formatCompact(summary.estimatedTokens)}
           sub="≈ context volume you own"
-          accent={summary.estimatedTokens > 0 ? 'blue' : 'gray'}
+          icon="analytics"
+          tone={summary.estimatedTokens > 0 ? 'ok' : 'muted'}
         />
         <StatCard
           label="Text size"
           value={formatBytes(summary.estimatedChars)}
           sub="measured corpus content"
-          accent={summary.estimatedChars > 0 ? 'blue' : 'gray'}
+          icon="docs"
+          tone={summary.estimatedChars > 0 ? 'ok' : 'muted'}
         />
         <StatCard
           label="RAG vectors"
           value={numFmt.format(totalVectors)}
           sub={`${layers.vectors.bySource.length} source type${layers.vectors.bySource.length !== 1 ? 's' : ''}`}
-          accent={totalVectors > 0 ? 'green' : 'gray'}
+          icon="search"
+          tone={totalVectors > 0 ? 'ok' : 'muted'}
         />
       </div>
 

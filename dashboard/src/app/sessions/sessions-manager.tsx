@@ -113,7 +113,7 @@ export default function SessionsManager() {
       <span key="d" className="text-[rgb(var(--text-primary))]">
         {deviceLabel(s.userAgent)}
         {s.current && (
-          <Badge className="ml-2 bg-emerald-500/15 text-emerald-400 border-emerald-500/30 uppercase text-[10px]">this device</Badge>
+          <Badge className="ml-2 bg-emerald-500/15 text-emerald-400 border-emerald-500/30 uppercase text-label">this device</Badge>
         )}
       </span>,
       <code key="ip" className="font-mono text-xs text-[rgb(var(--text-primary))]">{s.ip || '—'}</code>,

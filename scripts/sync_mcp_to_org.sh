@@ -7,18 +7,20 @@
 # Per-org filtering: config/mcp_org_sets.txt maps each org to a policy —
 #   all | allow:<name,...> | deny:<name,...>
 # The base .mcp.json's "mcpServers" block is filtered accordingly (jq) before
-# landing in the org dir, so Enterprise (museum) gets the scoped set while
-# Team/personal keep the looser one. Orgs without a policy default to 'all'.
+# landing in the org dir, so a scoped (e.g. Enterprise) profile gets the
+# scoped set while the others keep the looser one. Orgs without a policy
+# default to 'all'.
 # Filtering requires jq; if jq is missing a non-'all' org is SKIPPED (fail
 # closed — never hand a scoped org the unfiltered config).
 #
 # Usage:
-#   ./scripts/sync_mcp_to_org.sh museum          # sync to museum only
-#   ./scripts/sync_mcp_to_org.sh tech             # sync to tech only
-#   ./scripts/sync_mcp_to_org.sh personal         # sync to personal only
-#   ./scripts/sync_mcp_to_org.sh all              # sync to all three
+#   ./scripts/sync_mcp_to_org.sh <name>           # sync to ~/.claude-<name> only
+#   ./scripts/sync_mcp_to_org.sh all              # sync to every named profile
 #   ./scripts/sync_mcp_to_org.sh all --dry-run    # preview without changes
 #   ./scripts/sync_mcp_to_org.sh --dry-run all    # flag order doesn't matter
+#
+# The named profiles are swarm_roles.sh role_profile_names: MYAI_PROFILES (the
+# operator defaults file), else the ~/.claude-* dirs on this Mac (v1 G6 P4).
 #
 # Idempotent and safe to re-run — overwrites the target .mcp.json each time
 # with the current master config.
@@ -46,14 +48,17 @@ MCP_SOURCE="${SYNC_MCP_SOURCE:-$REPO_ROOT/.mcp.json}"
 ORG_SETS_FILE="${SYNC_MCP_ORG_SETS:-$REPO_ROOT/config/mcp_org_sets.txt}"
 REPO_ORG_MAP="${SYNC_MCP_REPO_ORG_MAP:-$REPO_ROOT/config/repo_org_map.txt}"
 
-# Per-org config dirs (must match setup_org_dirs.sh)
-MUSEUM_DIR="$HOME/.claude-museum"
-TECH_DIR="$HOME/.claude-tech"
-PERSONAL_DIR="$HOME/.claude-personal"
-
-# Org keys and their config dirs — parallel arrays (bash 3.2-safe)
-ORG_KEYS="museum tech personal"
-# Resolved per key in resolve_dir()
+# Org keys = the named profiles (same list setup_org_dirs.sh creates); each
+# key's config dir is ~/.claude-<key> (resolve_dir).
+# (BASH_SOURCE, not $0: the test suite sources this file in library mode.)
+SYNC_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+# shellcheck source=scripts/lib/operator_defaults.sh
+. "$SYNC_LIB/operator_defaults.sh"
+# shellcheck source=scripts/lib/swarm_roles.sh
+. "$SYNC_LIB/swarm_roles.sh"
+operator_defaults_load "$SYNC_LIB/../.."
+ORG_KEYS="$(role_profile_names | tr '\n' ' ')"
+ORG_KEYS="${ORG_KEYS% }"
 
 DRY_RUN=0
 TARGET=""
@@ -74,13 +79,11 @@ do_it() {
   fi
 }
 
+is_org_key() { case " $ORG_KEYS " in *" $1 "*) [ -n "$1" ] ;; *) return 1 ;; esac; }
+
 resolve_dir() {
-  case "$1" in
-    museum)   echo "$MUSEUM_DIR"   ;;
-    tech)     echo "$TECH_DIR"     ;;
-    personal) echo "$PERSONAL_DIR" ;;
-    *)        die "unknown org key: $1" ;;
-  esac
+  is_org_key "$1" || die "unknown org key: $1"
+  echo "$HOME/.claude-$1"
 }
 
 # Resolve an org's filter policy from config/mcp_org_sets.txt.
@@ -146,11 +149,11 @@ server_list() {
 # Resolve a repo (absolute git-toplevel path OR repo basename) to its org key
 # from config/repo_org_map.txt. Mirrors hooks/session/16-org-context.sh: match by
 # full path first, then basename; comments/blank lines skipped; unmapped repos
-# default to 'personal'. bash 3.2-safe (while-read + awk, no assoc arrays).
+# default to 'default' (the bare ~/.claude profile). bash 3.2-safe (while-read + awk, no assoc arrays).
 org_for_repo() {
   _repo="$1"
   _base=$(basename "$_repo")
-  _org="personal"
+  _org="default"
   if [ -f "$REPO_ORG_MAP" ]; then
     while IFS= read -r _line; do
       _trimmed=${_line#"${_line%%[![:space:]]*}"}
@@ -195,8 +198,8 @@ if [ "${SYNC_MCP_LIB_ONLY:-}" = "1" ]; then
 fi
 
 usage() {
-  say "Usage: $0 <museum|tech|personal|all> [--dry-run]"
-  say "       $0 --dry-run <museum|tech|personal|all>"
+  say "Usage: $0 <${ORG_KEYS// /|}${ORG_KEYS:+|}all> [--dry-run]"
+  say "       $0 --dry-run <${ORG_KEYS// /|}${ORG_KEYS:+|}all>"
   say ""
   say "Per-org connector sets are defined in config/mcp_org_sets.txt."
   exit 1
@@ -209,9 +212,9 @@ main() {
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
-    museum|tech|personal|all) TARGET="$arg" ;;
+    all) TARGET="$arg" ;;
     -h|--help) usage ;;
-    *) die "unknown argument: $arg" ;;
+    *) if is_org_key "$arg"; then TARGET="$arg"; else die "unknown argument: $arg"; fi ;;
   esac
 done
 
@@ -322,8 +325,8 @@ say "   synced:  $SYNCED"
 say "   skipped: $SKIPPED"
 if [ "$SYNCED" -gt 0 ] && [ "$DRY_RUN" = "0" ]; then
   say ""
-  say "MCP configs are now in place. Next session launched via claude-museum,"
-  say "claude-tech, or claude-personal will pick up these servers."
+  say "MCP configs are now in place. The next session launched via a"
+  say "claude-<name> launcher will pick up these servers."
 fi
 if [ "$SKIPPED" -gt 0 ]; then
   say ""

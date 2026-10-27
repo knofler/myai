@@ -9,8 +9,16 @@
 // The full machine-readable spec still lives at GATEWAY/api/openapi.json,
 // rendered at GATEWAY/api/docs (runtime/src/core/openapi.ts) — this page
 // links out to that rather than duplicating it.
+//
+// D5 / DESIGN_LANGUAGE §5a (pass 2, 2026-09-18): the portal opened on a bare
+// <h1> over a wall of prose. It now leads with PageHeader — the big "docs"
+// glyph plus a plain-English answer for a cold integrator. This page loads no
+// data, so per the pass-2 rule the sentence is static and describes what the
+// page is FOR rather than inventing a count. Layout, width and every section
+// below are untouched.
 import Link from 'next/link';
 import { CodeBlock } from './code-block';
+import { PageHeader } from '@/components/page-header';
 
 export const metadata = {
   title: 'myAI Developer Portal',
@@ -59,7 +67,7 @@ function Section({ id, step, title, children }: { id: string; step?: number; tit
   return (
     <section id={id} className="scroll-mt-20">
       <h2 className="text-lg font-semibold text-[rgb(var(--text-primary))] flex items-baseline gap-2">
-        {step != null && <span className="text-brand-orange">{step}.</span>}
+        {step != null && <span className="text-[rgb(var(--text-secondary))]">{step}.</span>}
         {title}
       </h2>
       <div className="mt-3 text-sm text-[rgb(var(--text-secondary))] leading-relaxed space-y-4">{children}</div>
@@ -107,20 +115,24 @@ export default function DevelopersPage() {
 
       {/* Body */}
       <main className="max-w-5xl mx-auto px-5 md:px-8 py-10 md:py-14">
-        <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Developer portal</h1>
-        <p className="mt-2 text-sm text-[rgb(var(--text-secondary))] max-w-2xl">
-          Everything an external integrator needs to call the myAI gateway directly: mint a
-          scoped API key, copy-paste curl against the REST and MCP surfaces, and the
-          rate-limit / error-code contract to build against. Building a Zapier or n8n
-          connector? Start here, then wire outbound webhooks in{' '}
-          <a href="#webhooks" className="text-brand-orange hover:underline">
-            step 5
-          </a>
-          .
-        </p>
-        <p className="mt-2 text-xs text-[rgb(var(--text-muted))] max-w-2xl">
+        <PageHeader
+          icon="docs"
+          title="Developer portal"
+          summary="Everything you need to call the myAI gateway from your own code. Mint a scoped API key, copy a curl command that works, and build against the rate limit and error contract."
+          subtitle={
+            <>
+              REST and MCP, seven steps. Building a Zapier or n8n connector? Start at step 1, then wire
+              outbound webhooks in{' '}
+              <a href="#webhooks" className="font-medium text-[rgb(var(--text-primary))] underline underline-offset-2">
+                step 5
+              </a>
+              .
+            </>
+          }
+        />
+        <p className="text-xs text-[rgb(var(--text-muted))] max-w-2xl">
           Looking for the full endpoint-by-endpoint spec instead?{' '}
-          <a href={`${REST_BASE}/api/docs`} target="_blank" rel="noopener noreferrer" className="text-brand-orange hover:underline">
+          <a href={`${REST_BASE}/api/docs`} target="_blank" rel="noopener noreferrer" className="font-medium text-[rgb(var(--text-primary))] underline underline-offset-2">
             Browse the OpenAPI reference
           </a>{' '}
           (machine-readable spec at{' '}
@@ -145,18 +157,18 @@ export default function DevelopersPage() {
             </p>
             <ol className="list-decimal pl-5 space-y-2">
               <li>
-                <Link href="/welcome/start" className="text-brand-orange hover:underline">
+                <Link href="/welcome/start" className="font-medium text-[rgb(var(--text-primary))] underline underline-offset-2">
                   Sign up
                 </Link>{' '}
                 for a tenant (or{' '}
-                <Link href="/operator-login" className="text-brand-orange hover:underline">
+                <Link href="/operator-login" className="font-medium text-[rgb(var(--text-primary))] underline underline-offset-2">
                   sign in
                 </Link>{' '}
                 if you already have one).
               </li>
               <li>
                 Open{' '}
-                <Link href="/api-keys" className="text-brand-orange hover:underline">
+                <Link href="/api-keys" className="font-medium text-[rgb(var(--text-primary))] underline underline-offset-2">
                   API Keys
                 </Link>{' '}
                 in the dashboard (owner/admin role required).
@@ -240,7 +252,7 @@ export default function DevelopersPage() {
                 href="https://modelcontextprotocol.io"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-brand-orange hover:underline"
+                className="font-medium text-[rgb(var(--text-primary))] underline underline-offset-2"
               >
                 MCP
               </a>{' '}
@@ -327,7 +339,7 @@ export default function DevelopersPage() {
             <p className="text-xs text-[rgb(var(--text-muted))]">
               Back off exponentially on <code>RATE_LIMITED</code>; on <code>QUOTA_EXCEEDED</code>{' '}
               either wait for the UTC month to roll over or upgrade the plan from{' '}
-              <Link href="/pricing" className="text-brand-orange hover:underline">
+              <Link href="/pricing" className="font-medium text-[rgb(var(--text-primary))] underline underline-offset-2">
                 Pricing
               </Link>
               .

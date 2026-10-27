@@ -1,3 +1,7 @@
+/* Scalar's own stylesheet (app/docs/route.ts) must layer below Tailwind's
+   reset or its component styles win specificity fights with @theme tokens. */
+@layer scalar, base, components, utilities;
+
 @import "tailwindcss";
 
 /* Tailwind v4 theme tokens — shadcn/ui "new-york" neutral base.

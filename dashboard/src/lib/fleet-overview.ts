@@ -84,6 +84,13 @@ export interface FleetSummary {
   queueDepth: number;
   inFlight: number;
   needsAttention: number;
+  /**
+   * Tasks waiting on the operator's approve/reject. Deliberately NOT part of
+   * `needsAttention` (which means blocked or out of retries — something went
+   * wrong), but it is still work that cannot move without a person, so a
+   * summary sentence that says "nothing needs you" has to see it.
+   */
+  review: number;
 }
 
 /**
@@ -96,10 +103,12 @@ export function fleetSummary(tasks: FleetTaskLike[], repoCount: number): FleetSu
   let queueDepth = 0;
   let inFlight = 0;
   let needsAttention = 0;
+  let review = 0;
   for (const t of tasks) {
     if (QUEUED_STATUSES.has(t.status)) queueDepth += 1;
     if (t.status === 'working') inFlight += 1;
     if (ATTENTION_STATUSES.has(t.status)) needsAttention += 1;
+    if (t.status === 'review') review += 1;
   }
-  return { repos: repoCount, queueDepth, inFlight, needsAttention };
+  return { repos: repoCount, queueDepth, inFlight, needsAttention, review };
 }

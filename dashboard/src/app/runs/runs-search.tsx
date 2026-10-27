@@ -4,7 +4,9 @@
 // Filters: repo, task id, outcome status, error/RESULT substring. One fetch per
 // Apply (no live tail — this is an archive, not a stream); a row expands to
 // show the full RESULT line + error excerpt.
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { DataTable, type DataRow } from '@/components/ui/data-table';
+import { RunOutcomeBadge } from '@/components/ui/badge';
 
 interface RunEntry {
   jobId: string;
@@ -24,24 +26,39 @@ interface RunEntry {
 const STATUSES = ['', 'done', 'blocked', 'failed', 'no-result'];
 const LIMIT = 100;
 
-const STATUS_COLOR: Record<string, string> = {
-  done: 'text-emerald-400',
-  blocked: 'text-amber-400',
-  failed: 'text-red-400',
-  'no-result': 'text-[rgb(var(--text-muted))]',
-};
-
-function Th({ children }: { children: React.ReactNode }) {
-  return <th className="text-left font-medium text-[rgb(var(--text-primary))] px-3 py-2 border-b border-[rgb(var(--border-subtle))] whitespace-nowrap">{children}</th>;
-}
-function Td({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <td className={`px-3 py-2 border-b border-[rgb(var(--border-subtle))] align-top ${className}`}>{children}</td>;
-}
-
 function fmtDuration(seconds?: number): string {
   if (typeof seconds !== 'number') return '—';
   if (seconds < 60) return `${seconds}s`;
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+// Tap-to-expand result cell — the DataTable desktop row has no full-row
+// expansion, so the RESULT line + error excerpt reveal inline within this one
+// cell instead (was a second <tr colSpan> under the row).
+function ResultCell({ e }: { e: RunEntry }) {
+  return (
+    <details className="group">
+      <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+        <span className="line-clamp-2 text-[rgb(var(--text-primary))]">
+          {e.resultLine || <span className="text-[rgb(var(--text-muted))]">(no RESULT line)</span>}
+        </span>
+      </summary>
+      <div className="mt-2 space-y-2">
+        <p className="text-xs text-[rgb(var(--text-muted))]">
+          {e.machine ? `machine ${e.machine} · ` : ''}
+          {e.model ? `model ${e.model} · ` : ''}
+          {typeof e.exitCode === 'number' ? `exit ${e.exitCode} · ` : ''}
+          {e.logFile ? `log ${e.logFile}` : 'no source log file recorded'}
+        </p>
+        {e.resultLine && (
+          <pre className="whitespace-pre-wrap font-mono text-xs text-[rgb(var(--text-primary))]">{e.resultLine}</pre>
+        )}
+        {e.errorExcerpt && (
+          <pre className="whitespace-pre-wrap font-mono text-xs text-red-300 border border-red-900/40 bg-red-950/20 rounded p-2">{e.errorExcerpt}</pre>
+        )}
+      </div>
+    </details>
+  );
 }
 
 export default function RunsSearch() {
@@ -51,7 +68,6 @@ export default function RunsSearch() {
   const [taskId, setTaskId] = useState('');
   const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
-  const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -130,67 +146,42 @@ export default function RunsSearch() {
       </form>
 
       {error ? (
-        <p className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2">{error}</p>
+        <p role="alert" className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2">{error}</p>
       ) : loading ? (
         <p className="text-sm text-[rgb(var(--text-muted))]">Loading…</p>
-      ) : entries.length === 0 ? (
-        <p className="text-sm text-[rgb(var(--text-muted))]">No archived runs match these filters yet. Runs are ingested at each fire&apos;s close-off (and backfilled via scripts/ingest_runner_history.sh).</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr>
-                <Th>Started (UTC)</Th>
-                <Th>Repo</Th>
-                <Th>Task</Th>
-                <Th>Outcome</Th>
-                <Th>Duration</Th>
-                <Th>Result</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((e) => (
-                <Fragment key={e.jobId}>
-                  <tr
-                    className="cursor-pointer hover:bg-[rgb(var(--bg-surface))]"
-                    onClick={() => setExpanded(expanded === e.jobId ? null : e.jobId)}
-                  >
-                    <Td className="text-[rgb(var(--text-muted))] whitespace-nowrap">{new Date(e.startedAt).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z')}</Td>
-                    <Td className="text-[rgb(var(--text-secondary))]">{e.repo}</Td>
-                    <Td>
-                      <span className="font-mono text-xs text-teal-300">{e.taskId}</span>
-                    </Td>
-                    <Td><span className={STATUS_COLOR[e.status] ?? 'text-[rgb(var(--text-primary))]'}>{e.status}</span></Td>
-                    <Td className="text-[rgb(var(--text-muted))] whitespace-nowrap">{fmtDuration(e.durationSeconds)}</Td>
-                    <Td className="text-[rgb(var(--text-primary))]">
-                      <span className="line-clamp-2">{e.resultLine || <span className="text-[rgb(var(--text-muted))]">(no RESULT line)</span>}</span>
-                    </Td>
-                  </tr>
-                  {expanded === e.jobId && (
-                    <tr>
-                      <td colSpan={6} className="px-3 py-2 border-b border-[rgb(var(--border-subtle))] align-top bg-[rgb(var(--bg-surface))]">
-                        <div className="space-y-2 py-1">
-                          <p className="text-xs text-[rgb(var(--text-muted))]">
-                            {e.machine ? `machine ${e.machine} · ` : ''}
-                            {e.model ? `model ${e.model} · ` : ''}
-                            {typeof e.exitCode === 'number' ? `exit ${e.exitCode} · ` : ''}
-                            {e.logFile ? `log ${e.logFile}` : 'no source log file recorded'}
-                          </p>
-                          {e.resultLine && (
-                            <pre className="whitespace-pre-wrap font-mono text-xs text-[rgb(var(--text-primary))]">{e.resultLine}</pre>
-                          )}
-                          {e.errorExcerpt && (
-                            <pre className="whitespace-pre-wrap font-mono text-xs text-red-300 border border-red-900/40 bg-red-950/20 rounded p-2">{e.errorExcerpt}</pre>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          title="Run history"
+          searchable={false}
+          columns={[
+            { label: 'Outcome', mobile: 'badge' },
+            { label: 'Repo', mobile: 'title' },
+            { label: 'Task', mobile: 'meta' },
+            { label: 'Started (UTC)', mobile: 'meta' },
+            { label: 'Duration', mobile: 'meta' },
+            // Explicit 'detail' — this cell holds its own <details> expand for
+            // the full RESULT line + machine/model/exit/log + error excerpt,
+            // which must NOT land inside the mobile card's outer <summary>
+            // (nested <summary> elements are invalid and fight over taps).
+            { label: 'Result', mobile: 'detail' },
+          ]}
+          rows={entries.map((e): DataRow => ({
+            id: e.jobId,
+            search: `${e.status} ${e.repo} ${e.taskId} ${e.resultLine}`.toLowerCase(),
+            sort: { started: e.startedAt },
+            cells: [
+              <RunOutcomeBadge key="status" status={e.status} />,
+              <span key="repo" className="text-[rgb(var(--text-secondary))]">{e.repo}</span>,
+              <span key="task" className="font-mono text-xs text-teal-300">{e.taskId}</span>,
+              <span key="started" className="text-[rgb(var(--text-muted))] whitespace-nowrap">{new Date(e.startedAt).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z')}</span>,
+              <span key="duration" className="text-[rgb(var(--text-muted))] whitespace-nowrap">{fmtDuration(e.durationSeconds)}</span>,
+              <ResultCell key="result" e={e} />,
+            ],
+          }))}
+          defaultSort="started"
+          defaultDesc
+          emptyText="No archived runs match these filters yet. Runs are ingested at each fire's close-off (and backfilled via scripts/ingest_runner_history.sh)."
+        />
       )}
     </div>
   );

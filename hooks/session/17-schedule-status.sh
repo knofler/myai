@@ -106,6 +106,17 @@ out = []
 if working:
     out.append("%s▶ NOW%s    %s%s%s  %s(agent working)%s" % (Y,R,B,title(working[0]),R,D,R))
 
+# RUNNER: repeat-dispatch WARN (task-ab685a73) — a task whose fires keep
+# landing docs/state-only commits (the noopDispatchCount field task-store.ts
+# stamps via monitoring/task-noop-dispatch-alerter.ts) looks like a clean
+# success on every individual run. Surface it here so a re-dispatch loop
+# shows up on every session start, not only when a human reads git log.
+noop_stuck = [t for t in ts if (t.get("noopDispatchCount") or 0) > 2]
+if noop_stuck:
+    out.append("%s⚠ NOOP%s   %s(%d)%s fired repeatedly with docs/state-only commits — no code change landed%s" % (Y,R,D,len(noop_stuck),R,R))
+    for t in noop_stuck[:4]:
+        out.append("   %s⚠%s %s[%s]%s %s  %s%s× in a row%s" % (Y,R,D,t.get("priority","?"),R,title(t),D,t.get("noopDispatchCount"),R))
+
 if done:
     out.append("%s✓ DONE%s   %s(%d)%s" % (G,R,D,len(done),R))
     for t in done[:4]:
@@ -203,6 +214,13 @@ if git -C "$ROOT" rev-parse --verify -q origin/main >/dev/null 2>&1 && git -C "$
             ship_drift_line="  ${C}◆ SHIP${R}  ${D}test is ${ship_drift} commit(s) ahead of main (threshold ${ship_threshold})${R}"
         fi
     fi
+fi
+
+# ── operator kill switch (config/autoship.off, directive 2026-09-16) — overrides the
+# drift line: while the marker exists runner_ship_step.sh exits before any PR work, so
+# the banner must say so instead of claiming the runner "should open/merge a PR".
+if [ -f "$ROOT/config/autoship.off" ]; then
+    ship_drift_line="  ${M}⛔ AUTO-SHIP OFF${R}  ${D}config/autoship.off — runner opens/merges NO test->main PR${ship_drift:+ (test is ${ship_drift} commit(s) ahead of main)}; ship with \`ship it\`${R}"
 fi
 
 # ── runner cadence (read real interval from plist) + last session ──

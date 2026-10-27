@@ -2,6 +2,8 @@
 # runtime/src/mcp/tools.ts TOOL_DEFINITIONS. Guarded by check_tool_surface.sh:
 # any name here that disappears from TOOL_DEFINITIONS fails CI. Regenerate
 # with: scripts/check_tool_surface.sh --fix (then review the diff).
+account_usage_record
+account_usage_status
 activation_funnel
 agents_invoke
 agents_list
@@ -9,6 +11,8 @@ artifacts_list
 artifacts_register
 backlog_cursor_get
 backlog_cursor_set
+backlog_ledger_add
+backlog_ledger_get
 brain_bandit_stats
 brain_blame
 brain_branch
@@ -63,6 +67,7 @@ context_boot
 continuity_stats
 data_retention_purge
 dispatch_cycle
+dispatch_delegate
 entitlements_status
 erasure_sweep
 evening_sweep
@@ -84,8 +89,17 @@ health_status
 inline_execute
 job_history_record
 job_history_search
+lease_acquire
+lease_heartbeat
+lease_list
+lease_release
 logs_list
 logs_record
+mail_ack
+mail_claim_as_task
+mail_inbox
+mail_send
+mail_task_result
 marketplace_install
 marketplace_publish
 marketplace_search
@@ -152,6 +166,14 @@ slo_status
 standing_agents_status
 state_read
 state_update
+swarm_action
+swarm_approve
+swarm_get
+swarm_list
+swarm_live
+swarm_plan
+swarm_stop
+swarm_update_budget
 task_lease_reap
 tasks_bulk
 tasks_claim
@@ -170,3 +192,4 @@ trash_list
 triage_prs
 usage_summary
 user_savings
+worker_lane_status

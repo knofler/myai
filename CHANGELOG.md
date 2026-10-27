@@ -8,13 +8,396 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-27
+
+### Highlights
+
+**Dashboard redesign (phases 0–6).** The dashboard is now organised around what an operator actually does, not around every page it has:
+- **Phase 0 — five jobs, not 31 rows.** The 31-row sidebar is replaced by five operator sections, reachable on mobile too.
+- **Phases 1–3 — Swarm Control Room.** `/swarm` opens on a live, read-only Control Room (new `swarm_live` gateway aggregate). It shows today's activity by the hour (2b), and operator actions from it are audited (3).
+- **Phase 4 — Today.** The Today page is redesigned around the current day's work.
+- **Phase 5 — Work and Brain.** Work is grouped into tabs. The Brain page now carries the health score and capture rate (5b) instead of scattering them across pages.
+- **Phase 6 — Settings → Guards.** One read-only tab shows the admin-auth posture, the CLI Usage Guard thresholds and the autonomous-scheduling consent counts.
+- **Proven, not assumed (v1 gate G8).** Every nav screen is tested against an empty brain and a seeded brain; this found and fixed 3 bugs. There is an e2e smoke at 3 widths.
+
+**v1.0 launch readiness** (plan: gates G1–G9):
+- **G1 — clean room.** The shipped package carries no operator-specific identity in docs, hooks, templates, runtime text or the dashboard. `publish_guard` gains an operator-identity denylist.
+- **G2 — a stranger can install it.**
+  - A clean-room stranger harness checks the whole path: install → `myai up` → your own dashboard → MCP → your own brain and project, on Linux and macOS.
+  - With no Docker gateway running, agents get a local stdio MCP server over the brain, and the stdio bridge falls back to it automatically.
+  - `myai doctor` and `myai plug proof` name the active MCP mode.
+- **G4 — tests you can trust.** Pipefail/SIGPIPE false negatives are swept out of the shell suites, and the `run_all` watchdog is fixed.
+- **G6 — roles and doctor.**
+  - A swarm role resolver; each device has exactly one swarm master, chosen at install, and workers never task the operator.
+  - Every `myai doctor` WARN/FAIL now explains why and how to fix it, with new checks for brain integrity, config migrations, scheduled jobs and agent MCP.
+  - Lane and profile names are your data, not ours: the runner profile, the profile lists every setup script manages, and the statusline/wrap-up colours all come from roles (master / worker / runner). An existing install keeps its names; a fresh one starts from `~/.claude`.
+- **G5 — security.** v1 is the default single-user install, which passes the security re-check: gateway auth on by default, no default secrets, tenant isolation. Hosted/multi-tenant mode ships as **BETA**.
+- **MCP for a new user.** A fresh repo's `.mcp.json` carries only `myai` and `context7`. Add the rest when you want them with `myai mcp add <name>` (`myai mcp add --list` shows what's available).
+- **The swarm master reaches everyone.** Every live session on the Mac, in every repo, is told who the master is and where to report, both when the master takes over and when a session starts.
+
+**Sleep guard.** The posture follows the power source only:
+- On AC, closing the lid never sleeps the Mac.
+- On battery, sleep is allowed, and a lid still closed after 5 minutes is put to sleep (a backstop for a close that lands before the guard's next tick).
+- `--stay-awake` is time-boxed.
+- It runs as a KeepAlive daemon with a heartbeat that `--check` verifies.
+
+**Boot proves the dashboard is up.** The morning boot rebuilds the stack through `scripts/stack_up_verified.sh`: it waits for the gateway (whose health window is now 90 s), retries the dashboard, and only passes once the dashboard container is running and `:3210` answers. Otherwise the phase FAILs and says which part failed.
+
+**CI.** Self-hosted runners run as slots of the `myai` compose project, with several per repo; shell suites also run on PRs into `test`.
+
+### Added
+- feat(mcp): `myai mcp add <name>… | --list` adds opt-in MCP servers to a repo's `.mcp.json`. The default set for a new repo is `myai` + `context7` (#644, #648).
+- feat(boot): `scripts/stack_up_verified.sh [--build]` brings up the gateway and dashboard and proves it: the dashboard is running and its health URL answers, or it exits 1 with the reason. Boot phase 4 uses it (#640, #645).
+- feat(g6): roles, not names. The runner profile, pool label and master ban come from the role resolver (#642). Setup scripts create and manage exactly the profiles you name (`setup_org_dirs.sh [<name>…]`), and display colours follow roles (#645).
+- feat(swarm): the worker-role hook is registered in every Claude profile, so a session in any repo learns who the swarm master is when it starts (#649).
+- feat(dashboard): redesign phase 6 — Settings "Guards" tab (`/system?tab=guards`) surfaces the three config/toggles that had no UI home: admin auth posture (`ADMIN_API_TOKEN` configured/not, and what it gates — never the token itself), the CLI session Usage Guard's thresholds (`config/session-limits.json` — duration, action/token budgets, warn/block policy, autosave), and the autonomous-scheduling consent counts (links to the full table on Work → Schedule). Read-only, same `AI_ROOT`-mounted-repo + containment-guard pattern as `lib/schedule-policy.ts` (`dashboard/src/lib/guard-policy.ts`, `dashboard/src/lib/admin-auth-status.ts`, `dashboard/src/views/guards.tsx`). Tests: +7.
+- feat(agents): add standing-release-scout weekly npm-vs-main release-prep agent — `scripts/release_scout_step.sh` compares the npm-published `ai-management` version against commits since its tag (delegating semver/changelog logic to the existing `scripts/release_version.py`) and, when warranted, bumps `package.json` + `CHANGELOG.md` and commits to `test`, mailing the operator `"release vX.Y.Z ready — run publish_release.sh"`. Never publishes — publishing stays the operator's `scripts/publish_release.sh --interactive-otp`. Same standing-agent mechanism as `standing-blog-scout` (`recurring_tasks_create` via `scripts/register_release_scout_recurring.sh`, not auto-run). Hermetic tests: `scripts/tests/test_release_scout_step.sh` (39 assertions).
+
 ### Fixed
-- fix(runner): an expired CLI login is a MACHINE condition, not a task failure — `scripts/lib/runner_auth_guard.sh` (+ `scripts/tests/test_runner_auth_guard.sh`, 21 assertions). When a headless session dies with the CLI's auth-failure text ("Failed to authenticate / OAuth session expired / Please run /login"), the runner now releases the task to `pending` WITHOUT consuming a retry, skips the escalation ledger, arms a per-profile marker so further fires on that machine pause claiming for `AUTH_GUARD_RETRY_MIN` (default 60) minutes before letting one probe task through, and sends a critical notification with the exact fix (`CLAUDE_CONFIG_DIR=<profile> claude login`). A completed session clears the marker; `--force` / `--task-id` bypass the gate. Before this, runner-host burned a strike per 10-minute fire on task-0f8bfdb4 (2026-09-09) and would have dead-lettered it.
-- fix(runner): RAM-cap startup grace — `RAM_CAP_GRACE_SEC` (default 90). Three of 24 runs on work-desktop (2026-09-06..08) were tree-killed at the FIRST 15s poll ("RAM CAP HIT (1774MB >= 1536MB, procs=20)", one-line log) before doing anything: with the headless MCP trim already active, that burst is the 32 SessionStart hooks fanning out docker/git/curl children, summed as RSS. During the grace only a genuine explosion (>= 2x the cap) is killed; after it the cap applies as before and a `RAM BASELINE` line is logged once for tuning. `scripts/tests/test_runner_resource_caps.sh` +6 (38 pass).
+- fix(offsite): `offsite_backup.sh --fetch` with a wrong key could "succeed" about 1 time in 256 (AES-CBC carries no integrity check) and write garbage to `--out`. The decrypted result must now be a real backup archive, otherwise the fetch exits 1 and leaves no file (#651).
+- fix(swarm): the master's announcement now reaches every live session in every repo, and `tell <repo>` live-pings a repo session in its terminal tab (#643).
+- fix(doctor): a missing `ANTHROPIC_API_KEY` is never a FAIL. It is a WARN only when a Claude agent needs it, so stack/MCP-only installs come up clean (#647).
+- fix(g6): `runner.conf` and `mcp-optional.conf` always live in `~/.myai`, never under a custom `MYAI_HOME` (#650).
+- fix(selfhost): the bundle's compose lint renders with placeholder secrets and asserts the compose file still refuses to start without each required secret (#646).
+- fix(ci): the shellcheck baseline covers both the CI runner's shellcheck and newer local versions, so the gate is green under either (#641). Test names are role-based (#652).
+- fix(runner): durable consumed-titles ledger closes the false cursor rewind RESIDUAL after f2843afd — `runtime/src/tasks/runner-backlog-cursor-store.ts` (+`confirmedTitles` on the tenant's Mongo cursor doc), new MCP tools `backlog_ledger_get`/`backlog_ledger_add`, `scripts/lib/gateway.sh` (`gw_backlog_ledger_get`/`gw_backlog_ledger_add`), `scripts/queue_topup.sh`. f2843afd's exact-title dedupe gate stopped the DAMAGE (re-pops became cheap logged skips) but not the CAUSE: self-heal's confirmed-prefix walk only trusted `tasks_list`, hard-capped at `limit:2000` — as the fleet-wide task table grows, a title confirmable on one cycle can silently fall out of a LATER cycle's window even though its gateway task still exists, so the walk stops at the first miss and rewinds the cursor past a whole span of genuinely-consumed lines (observed: 957→608, ~1 line/10-min-cycle churn, forever, since the cap keeps moving). Self-heal now confirms a line via the durable ledger OR `tasks_list`, and computes a ledger-only floor the corrected cursor may never go below; every title it confirms (leading-prefix walk, full-file scan, or the pop loop's exact-title dedupe match) is written back to the ledger so a later cycle never needs `tasks_list` to reconfirm it. Tests: `runner-backlog-cursor-store.test.ts` +4, `scripts/tests/test_queue_topup_ledger_floor.sh` (6 assertions, reproduces the aging-out rewind across two simulated cycles and proves it no longer happens), `mcp-tools.test.ts` tool-count bumped 168→170.
+- fix(runner): an expired CLI login is a MACHINE condition, not a task failure — `scripts/lib/runner_auth_guard.sh` (+ `scripts/tests/test_runner_auth_guard.sh`, 21 assertions). When a headless session dies with the CLI's auth-failure text ("Failed to authenticate / OAuth session expired / Please run /login"), the runner now releases the task to `pending` WITHOUT consuming a retry, skips the escalation ledger, arms a per-profile marker so further fires on that machine pause claiming for `AUTH_GUARD_RETRY_MIN` (default 60) minutes before letting one probe task through, and sends a critical notification with the exact fix (`CLAUDE_CONFIG_DIR=<profile> claude login`). A completed session clears the marker; `--force` / `--task-id` bypass the gate. Before this, the home Mac burned a strike per 10-minute fire on task-0f8bfdb4 (2026-09-09) and would have dead-lettered it.
+- fix(runner): RAM-cap startup grace — `RAM_CAP_GRACE_SEC` (default 90). Three of 24 runs on one office Mac (2026-09-06..08) were tree-killed at the FIRST 15s poll ("RAM CAP HIT (1774MB >= 1536MB, procs=20)", one-line log) before doing anything: with the headless MCP trim already active, that burst is the 32 SessionStart hooks fanning out docker/git/curl children, summed as RSS. During the grace only a genuine explosion (>= 2x the cap) is killed; after it the cap applies as before and a `RAM BASELINE` line is logged once for tuning. `scripts/tests/test_runner_resource_caps.sh` +6 (38 pass).
 - fix(brain): `brain_merge` now mirrors each touched namespace's headline atom into the gateway handoff store (`handoff_read`), which had gone dark on 2026-07-26 because `wrap up` writes the brain atom and never called `handoff_write`; `readHandoff` accepts both spellings of a repo (`ai_management` / `ai-management`). New `headlineFor(ns)` export in `runtime/src/core/distill.ts`. Tests: brain-distill (mirror asserted on merge), handoff-store (+1 slug-tolerance).
 - fix(gateway): `runtime/src/llm/cost-estimator.ts` pricing refreshed to match `openai_agent.py` — `kimi-k2.6` 0.20/2.00 → 0.95/4.00 $/M (2x under on output for two months), `deepseek-chat`/`deepseek-reasoner`/`deepseek-v4-flash` → 0.14/0.28 (retired aliases → V4-Flash), `kimi-k2` → last published 0.60/2.50. Pinned expectations in cost-estimator + failover tests updated.
 - fix(dashboard): the "Database not reachable" banner on seven pages (velocity, fleet, revenue, revenue/nrr, apps, analytics, analytics/funnel) named a hardcoded local port (`:27200`) even though the dashboard runs on Atlas — on a transient Atlas blip the operator was sent to the wrong place (2026-09-09). New credential-safe `dbUnreachableHint()` (`dashboard/src/lib/db-hint.ts`, +7 tests) derives the target from `MONGODB_URI` (Atlas cluster host vs local host:port) and says what to check.
 - docs(kernel): CLAUDE.md rule 8 claimed the pre-push hook runs local-ci; it runs only the tracked-file hygiene check — corrected, with the explicit `local-ci.sh --dry-run` instruction.
+
+### Security
+- deps(runtime): clear the two high `npm audit` advisories on prod deps that appeared after 2026-10-22 — `zod` 3.25.76 → 4.6.7 (GHSA-mrhx-c7xc-m3w5, memory exhaustion validating oversized constrained collections; no 3.x fix exists) and transitive `body-parser` → 1.20.9 (DoS via trailing bytes after a compressed body). zod 4 migration: `z.record` takes an explicit key schema, and `GatewayMessage.id` uses `z.guid()` to keep zod 3's 8-4-4-4-12 contract (zod 4 `.uuid()` is RFC-strict).
+
+### All changes since 0.9.0
+
+#### Added
+- feat(doctor): G6a — every WARN/FAIL explains why + fix; brain integrity, migrations, scheduled jobs, agent MCP, repo checks
+- feat(g6): P2 — master identity from the role resolver (tell, remote_fleet, boot doorway, gateway director check)
+- feat(g6): P1 — swarm ROLE resolver (shell + runtime) and the two G6 fixtures; no call sites changed
+- feat(g2-b2): doctor and plug proof name the active MCP mode (c)
+- feat(g2-b2): the stdio bridge falls back to the local server when no gateway answers (b)
+- feat(g2-b2): local stdio MCP server over the brain + handoff non-divergence (a)
+- feat(g2): scripts/g2_stranger.sh — the clean-room stranger harness
+- feat(ci): runners stopped by choice show OK, not a daily WARN
+- feat(ci): N self-hosted runners per repo, all slots of compose project myai
+- feat(swarm): workers never task the operator — inject the worker rule
+- feat(dashboard): v1 gate G8 — every nav screen proven for an empty and a seeded brain, plus the 3 bugs it found
+- feat(swarm): every device has exactly one swarm master, chosen at install
+- feat(publish-guard): G1 operator-identity denylist (term/strict) + --dir mode
+- feat(dashboard): redesign phase 6 — Settings "Guards" tab
+- feat(local-ci): detect in-process Mongo (MONGODB_MEMORY_SERVER=1) and export into Test gate
+- feat(swarm): phase 3 — audited operator actions from the Control Room
+- feat(dashboard): phase 4 — Today page redesign
+- feat(dashboard): phase 2b — today by the hour, inside the Control Room
+- feat(swarm_live): work events are spans — optional `until` (startedAt → completedAt)
+- feat(dashboard): phase 2 — Swarm Control Room is /swarm's default view
+- feat(gateway): swarm_live — read-only Control Room aggregate (dashboard redesign phase 1)
+- feat(dashboard): phase 0 — five operator jobs replace the 31-row nav
+- feat(mcp): Docker MCP phase 6 — fleet docker entry, rollout + verify, docs
+- feat(mcp): Docker MCP phase 2 — context7 behind the gateway; playwright/github held
+- feat(mcp): Docker MCP phase 4 — every gateway call through the lane interceptor
+- feat(tell): auto-start agy session when tell agy finds no live session
+- feat(mcp): Docker MCP phase 0 — lane → profile map, boot converges profiles
+- feat(mcp): Docker MCP gateway interceptor — audit + per-lane deny (phase 3)
+- feat(swarm): active-active coordinators — one lease per Mac by default
+- feat(mcp): ai_management docker entry → Docker MCP gateway (phase 1 prototype)
+- feat(selfheal): host disk guard — a deleted-but-open file can never silently fill the Mac again
+- feat(fleet): multi-Mac phase 4 — role profiles drive resource caps; fleet doctor; new office Mac checklist
+- feat(runner): multi-Mac phase 3 — runner schedule + failover, runner-slot:<account> leases, account balancer, per-task model
+- feat(usage): host side of the account ledger — statusLine ground truth, push, readings
+- feat(gateway): account usage ledger — account_usage_record / account_usage_status
+- feat(fleet): phase 1 — roles + ONE fleet coordinator (multi-Mac)
+- feat(swarm): qwen lane runs headless and shows inside the claude-qwen chat
+- feat(swarm): qwen lane — deterministic local-model job runner in a visible tab
+- feat(swarm): wake DEAF lanes — sessions with no mail watcher still get the coordinator's mail
+- feat(install): first run detects missing Docker and walks the user through it
+- feat(runner): default backlog pruning to report-only and add pagination limit
+- feat(swarm): phase 3 — claims, change journal, append-safe handoff, mail discipline
+- feat(runner): bulk prune shipped backlog seeds and guard push to test during PR CI
+- feat(swarm): ship lock locks gh pr merge only — workers may open PRs (operator option 1)
+- feat(swarm): ship lock — only the coordinator opens/merges PRs (plan row 4)
+- feat(swarm): lane worktrees — one checkout per worker outside Dropbox (plan row 3)
+- feat(swarm): swarm master — coordinator election on keyed leases (plan row 2)
+- feat(new-mac): install agy-rc alias + status line when agy is present
+- feat(gateway): keyed leases — lease_acquire/heartbeat/release/list (swarm coordinator phase 1)
+- feat(sessions): exact pid→conversation + authoritative busy/idle from Claude's session record; deferred ping for busy agy
+- feat(iterm): iterm_tab write/focus verbs + distinct exit codes (3 unscriptable, 4 not found)
+- feat(agy): `agy remote start <repo>` / `agy remote status` — agy sessions in visible iTerm tabs
+- feat(sessions): check/peek, nudge, takeover — reach any live session through its visible iTerm tab
+- feat(agy,mail): agy-rc + boot doorway for agy; lane-signed tell; green/orange mail headers
+- feat(agy): bottom status line for Antigravity sessions (repo, branch, lane, model, myAI badge)
+- feat(mail): standardize the idle mail watcher + add swarm_update_budget MCP tool
+- feat(dashboard): /tour phone view — looping video + 8 scene cards below md
+- feat(dashboard): /tour phone view — looping video + 8 scene cards below md
+- feat(launch): museum/tech/personal sessions start in bypass (survives regeneration)
+- feat(power): per-host charger displaysleep map (office-mac=5, default 30)
+- feat(vscode): copilot-instructions.md + AGENTS.md keywords + .vscode/mcp.json generator and fleet rollout
+- feat(agents): add standing-release-scout weekly npm-vs-main release-prep agent
+- feat(agents): add standing-blog-scout weekly blog-draft agent
+- feat(mongo-mirror): full Atlas→local replica (deny-list) + per-collection freshness on dashboard
+- feat(boot): auto-refresh stale ~/.zshrc claude label block on every Mac
+- feat(local-ci): runner mode — run gates inside the warm myai-gh-runner via docker exec, no docker.sock
+- feat(tour): faster, continuously-looping walkthrough + reel (operator feedback)
+- feat(messaging): live session-to-session delivery on one Mac — mail-live hook + tmux ping + `tell`
+- feat(rails): git-hook rails for every AI tool + agy/codex/copilot lanes + museum-least-work guard + swarm keyword
+- feat(dashboard): /tour — the animated brain tour (walkthrough + cinematic reel) in the app
+- feat(dashboard): /tour — the animated brain tour (walkthrough + cinematic reel) in the app
+- feat(swarm): Workers panel — connected/down/not-configured per execution lane
+- feat(runner): only the office Mac claims queue work (runner_lanes.txt claim=on|off)
+- feat(cloud): every gateway-backed page works on Vercel via an Atlas fallback (no tunnel)
+- feat(selfhosted-runner): fleet rule — self-hosted runners only except the configured hosted-runner-exempt org (brain 34f5bee9)
+- feat(vercel-env): sync env vars to EVERY target incl. custom envs (foh)
+- feat(swarm): /swarm works from the cloud (Atlas) + live pipeline animation + demo lanes + videos
+- feat(dashboard): local-only auto-login on loopback, no login page at localhost:3210
+- feat(boot): collaborator-activity step — report new code from other people
+- feat(stack-limits): per-host gateway mem + RAM-guard ceiling + myai-only restart (office-mac)
+- feat(ship-it): vetted branch-protection allowlist + protect_main.sh + classifier-deny protocol
+- feat(dispatch): agent messaging + dispatch layer phase 1 — delegate verb + mail-to-task + result mail
+- feat(dashboard): IndexedDB stale-while-revalidate cache for /swarm + CDN cache on /api/status
+- feat(new-mac): hourly Atlas → local myai-mongo mirror on every Mac
+- feat(new-mac): Compass with every app's DB is part of every new Mac
+- feat(dropbox): node_modules never syncs, on every repo and every Mac — enforced
+- feat(swarm): live /swarm ops console — approve, stop, mailbox, activity (P3 Direction A)
+- feat(swarm): swarm_list + swarm_get read tools — the /swarm (P3) data source
+- feat(swarm): wire token-budget auto-pause (P5 enforcement)
+- feat: install Vercel CLI as part of the myai machine build
+- feat(swarm): P2 swarm task model — swarms collection + swarm_plan/approve/stop (task-451518c2)
+- feat(swarm): P5 guardrails + metrics — pure library + tests
+- feat(remote_fleet): swarm P4 cross-machine live — rc-keepalive re-arms dropped /rc; live-note mirrors SendMessage to mailbox
+- feat(mailbox): durable swarm mailbox — mail_send/inbox/ack + session-start inbox banner (SWARM_MESSAGING P1)
+- feat(machine): dev_apps.sh — one file opens Bruno (all collections) + Compass (imported connections)
+- feat(remote): 'sessions' view — every session grouped REMOTE / LIVE / OFFLINE
+- feat(remote): label every claude session '<device> - <repo>'; add foh to fleet
+- feat(boot): universal boot — every Mac, every day, own agent, per-host report
+- feat(machine): new mac checks Remote Control in every profile + no-sleep power on charger
+- feat(machine): new mac = myAI first, then profiles, git + fleet fetch, stack, brain; skip what exists
+- feat(machine): lean 'new mac' keyword + new_mac_setup.sh (essentials only, never stops on a failed step)
+- feat(machine): carry the three Claude profiles to a new Mac + keep Remote Control on
+- feat(dashboard): DASH-B5 — Build + Account pages migrated to primitives
+- feat(dashboard): DASH-B2 — Operate pages migrated to primitives (DataTable, Badge)
+- feat(pr-review): automated fleet PR review lane (pr_review_step.sh)
+- feat(brain): BRAIN-3 distiller promotes recurring facts to memory atoms + brain_delta prior-art surfacing
+- feat(dashboard): guided demo tour — walk prospects through the loop on the read-only sandbox tenant (task-0e5356ca)
+- feat(dashboard): surface AUTO-SHIP OFF kill switch + last ship-step verdict
+- feat(fleet-mcp): discover every repo under CODE — a new repo needs no listing
+- feat(boot): verify MCP from every fleet repo's own .mcp.json; per-host schedule (office Mon–Thu, home Fri)
+- feat(dashboard): /ask — put a question to a specialist agent from the dashboard
+- feat(dashboard): terminal-window app icon + RUNBOOK mode 10 (host RAM)
+- feat(dashboard): plan day 6 pass 2 — every page leads with an answer, and a test that keeps it that way
+- feat(dashboard): bigger stat tiles; Work readable on a phone (operator feedback, day 6 pass 1)
+- feat(dashboard): plan day 6 pass 1 — Fleet + Work follow the homepage contract; shared tile/section/tone primitives
+- feat(atlas): route each repo to its Atlas CLI profile via config/atlas_profiles.txt
+- feat(runner): operator kill switch for auto-ship PRs — config/autoship.off
+- feat(dashboard): big icons + a real summary line on every page header
+- feat(blueprint): LLM-from-scratch learning blueprint — framework built, model not
+- feat(boot): `boot` routine — 08:00 Mon-Fri warm-up on the office Mac
+- feat(boot): resync.sh — code fetch + brain fetch as ONE step, at boot or mid-session
+- feat(ci): type-check dashboard/ on self-hosted runner at PR time
+- feat(runner): WARN + SCHEDULE banner line when a task repeat-dispatches docs/state-only commits
+- feat(ops): sleep_guard — the Mac cannot sleep, or stop locking, without saying so
+- feat(routing): expose DeepSeek to the in-app agent as a metered, opt-in provider
+- feat(work): add task detail page — stage rail, working card, activity
+- feat(brain): rebuild /brain primary view as the product's visual signature
+- feat(work): rebuild Up Next/Running/Needs You as a Linear-style priority queue
+- feat(blueprint): add rule-7 API docs to the template's own routes
+- feat(remote): label phone doorways "<device> - <repo>"; archive on wrap up
+- feat(dashboard): Home + 5-slot bar + global action sheet from the operator's mockup
+- feat(design): colour language + type scale as @theme tokens; 12px floor sweep
+- feat(blueprint): Next 16 + React 19, ESLint CLI, renovate, freshness check
+
+#### Fixed
+- fix(sleep-guard): 5-min closed-lid backstop on battery
+- fix(tests): sleep-guard suite runs the guard via an array, not an unquoted $GB (SC2086)
+- fix(tests): green the 2026-10-23 boot failures at HEAD
+- fix(sleep-guard): decide on power source only, never lid detection
+- fix(tests): runner_mem shipped-config check reads the host row instead of pinning 1g/2
+- fix(g2): the trial-repo leak scan judges content, not package path rules
+- fix(g2-b2): keep the readHandoff call shape when no history is asked
+- fix(mcp): bridge repo hint falls back to the canonical repo id (G2 B6)
+- fix(mcp): the stdio bridge forwards the caller's repo as x-myai-repo (G2 B6)
+- fix(gateway): context_boot boots the caller's repo, never MASTER_REPO (G2 B6)
+- fix(up): the greenfield gateway writes the brain as the host user (G2 B5)
+- fix(up): mount the user's brain into the greenfield gateway (G2 B5)
+- fix(dashboard): a stranger reaches their own dashboard on Linux (G2 B4)
+- fix(gateway): token lookup also reads the greenfield stack env (G2 B3)
+- fix(swarm): doctor/check WARN, not FAIL, when no agent is installed yet
+- fix(g1): exempt-org list falls back to ${MYAI_HOME:-~/.myai}/hosted_runner_orgs.txt (npm installs)
+- fix(pack): ship dashboard/loopback-gate.js so myai up builds from the tarball
+- fix(g1): update_all copies operator_org_policy.conf only when present
+- fix(ci): harden runner migrate from the live office-mac run
+- fix(runner): record every consumed backlog title in the durable ledger at pop time (task-75e3bb46)
+- fix(tests): run_all watchdog notice check — attribute by suite, not text
+- fix(tests): G4 — sweep printf|grep -q under pipefail (SIGPIPE false negatives)
+- fix(swarm): master list keeps an agent CLI's lane column
+- fix(tests): G4 — mcp_interceptor frame default + silent run_all watchdog reap
+- fix(tests): repo_ci_mirror has() — here-string instead of printf|grep -q
+- fix(sleep-guard): correct the record — the StartInterval daemon works; it's superseded, not broken
+- fix(sleep-guard): KeepAlive loop + heartbeat — the StartInterval daemon ran once
+- fix(sleep-guard): power-source aware — battery + lid closed 10 min sleeps
+- fix(swarm): no unaudited stop — refuse Plans-tab Stop with 503 when the gateway is down
+- fix(swarm_prs_snapshot): GNU-first stat fallback (AI_RULES §4)
+- fix(ci): remove /documentation redirect-trap from nav-v2 and resolve high/critical prod audit advisories
+- fix(llm): stop dispatching the retired claude-sonnet-4-20250514 on the api hop
+- fix(local-ci): mirror the repo's own CI — openapi:check + its secret-scan step
+- fix(local-ci): store active builder image markers in $HOME/.myai/localci-active across TMPDIRs
+- fix(mcp): lazy `myai root` in the gateway template; linked worktrees are never fleet repos
+- fix(local-ci): guard active builder images with localci-active/<tag>.<pid> markers
+- fix(mcp): phase 6 follow-ups — opt-in fleet gateway, context7 dedupe, ship profile config
+- fix(local-ci): age-gate stale localci-verify-* prune by LOCALCI_PRUNE_AGE_H (default 6h)
+- fix(lane-worktree): stop open from spawning duplicate lane sessions
+- fix(local-ci): remove builder image on exit trap and prune stale localci-verify-* images
+- fix(vercel): ignoreCommand 334 → 233 chars — Vercel caps it at 256
+- fix(local-ci): scope builder image tag by repo, worktree, and sha12
+- fix(mcp): escape the interceptor path — a space broke every docker MCP call
+- fix(config-journal): real before/after for Docker MCP profiles and directories
+- fix(tell): only auto-start agy when label targets this Mac
+- fix(boot): phase 9b survives a cold boot — longer agy wait + re-checks
+- fix(org): never rewrite an unparseable profile settings.json (review #521)
+- fix(org): every claude launcher starts in bypass; boot repairs bypass-less blocks
+- fix(boot): export MYAI_HOME in the morning-boot launchd plist
+- fix(state): remove conflict markers from handoff (autostash pop), drop stale home-Mac line
+- fix(mcp): fleet myai bridge resolves via MYAI_FRAMEWORK_DIR (ahead of legacy MYAI_HOME)
+- fix(state): MYAI_HOME is the state dir, never the framework; ping the default lane
+- fix(tests): suites must never resolve the real brain via MYAI_BRAIN_DIR
+- fix(fleet): bash-3.2 parse breaks, safe stash pop, #511 shellcheck
+- fix(boot): bound the shell-suites phase with BOOT_SUITES_TIMEOUT
+- fix(runner): parse runner log-name stamps as UTC, not local time
+- fix(runner): never fire on the Mac holding the coordinator lease; office also runs Mon 00:00–09:00
+- fix(lint): phase-3 libs' public-result globals (SC2034) — the new files were untracked when shellcheck first ran
+- fix(usage): dedupe transcript usage by message.id — every per-line sum was ~2x
+- fix(mail): no address collisions — <host>/coordinator role address, lane mail only in the swarm repo, ai_management-only eligibility
+- fix(iterm): typed pings really submit — newline NO + separate Enter + verify; one AppleScript layer
+- fix(local-ci): a base with no required checks still runs every gate
+- fix(tests): run_all watchdog race marked every suite timed out on Linux; product-tour wiring follows #492
+- fix(dashboard): header Tour opens /tour; overlay replay moves onto /tour
+- fix(runner): guard PRUNE_FLAGS empty array expansion under bash 3.2
+- fix(tests): run_all can't hang — suites get stdin=/dev/null + per-suite watchdog
+- fix(local-ci): PR #489 review — non-main base records branch policy as SKIP (never posted), main wins on several bases, same-repo PRs only, log lookup failures
+- fix(local-ci): paginate the PR-base lookup (gh pr list --limit, repo pagination gate)
+- fix(local-ci): infer the PR base — required checks from the base's protection, branch policy only for PRs into main
+- fix(swarm): PR #488 review — journal outside git only, pending reports, atomic handoff lock, strict wrap-check, gated claims/tell
+- fix(e2e): mobile reachability asserts home via the breadcrumb (h1 became a greeting in f12574ab)
+- fix(e2e): record cookie consent in the shared operator state; scope spec cookies to baseURL (127.0.0.1 in CI)
+- fix(e2e): pre-existing dashboard E2E failures — tour overlay + /swarm live label (task-ada2778a)
+- fix(swarm): PR #486 review — opt-in swarm, per-session lease, word-level merge lock
+- fix(sessions): PR #485 review — session_ping returns 5, errexit-safe capture, only the input box counts
+- fix(sessions): verify a typed ping actually SUBMITTED — retry once, else alert the coordinator
+- fix(test): use structuredClone in 006-task-review-entered-at migration idempotency test
+- fix(runner): pass agy-<model> suffix through as --model in external_cli_agent.sh
+- fix(tasks): stamp reviewEnteredAt and count review-held executions at it
+- fix(gateway): bash hooks that exit without reading stdin no longer crash the gateway (EPIPE)
+- fix(ci): propagate check_tenant_scoping.sh KeyedLeaseModel entry to AI/scripts copy (byte-identical contract)
+- fix(gateway): PR #484 review — server-time expiry ($$NOW), epoch fencing, force needs configure
+- fix(sessions): PR #483 review — record is all-or-nothing, one deferred loop per label, confirm idle before typing
+- fix(sessions): PR #481 review — exact tmux pane, prompt-aware busy check, no wrong-conversation takeover
+- fix(agy): launch with --remote-control like the operator's agy wrapper
+- fix: PR #479 review — runner fires never answer host/tech; safe ~/.zshrc and agy settings writes
+- fix(lanes,tell): count review-held executions; tell sends full text in body; schedule refresh
+- fix(messaging): tell <lane> reaches non-tmux sessions; agy as a reachable fleet session
+- fix(release-scout): guard empty BUMP_FROM_FLAGS expansions (bash 3.2 set -u crash)
+- fix(ci): myai.cjs syntax break + fleet vscode WARN + PR #478 red checks
+- fix(agy): empty mcp_config.json = {} and unparseable exits non-zero (boot showed PASS over invalid JSON)
+- fix(boot): put Docker CLI on the 08:00 launchd PATH (two RED boots: 'docker daemon unreachable')
+- fix(runner): DEDUP only on prior-run deliverable markers, never context SHAs
+- fix(runner): stop the claim/release churn loop (24:1) + claims-vs-executions ratio on runner_health
+- fix(schedule): dedup push_schedule by task title, not whole-file hash
+- fix(ci): green Script Unit Tests for PR #474
+- fix(runner): per-host task RAM cap (stack_limits.txt col 5) — office-mac 6144 MB
+- fix(lint): SC2034/SC2164/SC1090 in the self-hosted runner scripts
+- fix(pacing): a runner fire counts only its OWN session's tokens (pool drift CRITICAL)
+- fix(schedule_task): guard empty RESPONSES array expansion (bash-3.2 set -u) — unblocks PR #473 static lint
+- fix(lint): clear shellcheck findings in runner_lanes.sh + its tests
+- fix(runner): host-aware local-lane dispatch, multi-model matching, demotable pins
+- fix(lint): SC2015/SC2016 in test_setup_org_dirs.sh (from a84bf984)
+- fix(remote): session label wrapper never installed — bash 3.2 heredoc-in-$() expanded $repo
+- fix(lint): SC2015 in the dropbox-ignore sweeper test — explicit if/else
+- fix(swarm): PR #471 review — bounded polling, stale-response guard, degraded flag
+- fix(swarm): a swarm child in review satisfies its downstream's dependsOn
+- fix(lint): clear #470 static-lint findings in the vercel root-dir scripts
+- fix(new-mac): check Docker Desktop starts at login, not just that it runs now
+- fix(new-mac): sleep guard is part of the new-Mac setup (lid close + battery)
+- fix(remote_fleet): doorways drop ANTHROPIC_API_KEY; workspace folders are fleet roots
+- fix(tests): make test_boot_schedule_worktree hermetic on Linux CI + clear SC2015
+- fix(boot): never bake a runner worktree path into the launchd plist
+- fix(ci): stop the myai-local shell-suite flakes at the root cause
+- fix(remote_fleet): doorway requires a live Remote Control binding, launch with --remote-control
+- fix(local-ci): rebuild the builder image once per run, never only-if-missing
+- fix(dashboard): review follow-ups on the brain-read cache
+- fix(test): test_org_context_hook skips inside a container — the hook no-ops on /.dockerenv
+- fix(shellcheck): clear the 3 new findings that RED both Macs' boot
+- fix(remote): tmux ownership by pane pid, not by session name
+- fix(boot,org): verify the real login org; doorway WARNs on unlabelled; boot skips branch policy
+- fix(state): per-host-by-name every boot/runner state writer in the Dropbox tree
+- fix(ci): new-mac files pass shellcheck + Linux; drop stale host-gated boot wording
+- fix(test): stub myai on PATH so test_myai_mcp global-fallback cases are hermetic
+- fix(mcp): argv is not a set — stop json_merge corrupting every repo's .mcp.json
+- fix(telegram): fail-closed backup in telegram_pair.sh, point strict-notifier at --write
+- fix(rollout_mcp_bridge): never commit .mcp.json off the test branch
+- fix(brain): distil mechanical session-auto captures in brain_delta, rank BRONZE (BRAIN-1)
+- fix(dashboard): WCAG 2.1 AA a11y pass — focus visibility, skip link, status messages
+- fix(rollout_mcp_bridge): harden autostash restore, gate commit to the burn branch
+- fix(test): GNU-first stat ordering in test_telegram_pair (AI_RULES §4) — Linux runner returned filesystem text for stat -f
+- fix(review): PR #461 blocking findings — stash restore scope, env backup location, in-git reachability, ship-step path
+- fix(boot): open the claude-museum doorway, record the ping, auto-resolve lossless Dropbox conflicts
+- fix(runner): map /root/… registry paths to \$HOME so managed-repo tasks resolve (second office Mac)
+- fix(rollout_mcp_bridge): clear byte-identical untracked collisions before the rebase (RUNBOOK mode 8)
+- fix(rollout_mcp_bridge): resolve .mcp.json conflicts in-rebase, restore operator files, name real errors
+- fix(rollout_mcp_bridge): autostash dirty trees before the rebase; surface commit errors
+- fix(rollout_mcp_bridge): fetch + rebase before push, push what origin lacks on re-runs
+- fix(mcp): pin mcp-remote in the myai stdio bridge to stop cross-machine drift
+- fix(dashboard): maskable PWA icon needs a safe zone — dots were being cropped
+- fix(dashboard): review findings — summary sentences that stated something false
+- fix(statusline): folder/repo name first — leftmost never clipped in narrow panes
+- fix(atlas): fail closed on malformed routing rows; full-line comments only; hermetic tests
+- fix(boot): gateway staleness check was dead code and failed open
+- fix(resync): actually discard regenerating tracked state before the ff
+- fix(tests): drop unused "\$@" in run_local_ci — unblocks the shellcheck gate on test
+- fix(ci): Docs Site workflow — move to self-hosted runner (billing-blocked on hosted)
+- fix(ci): local-ci must never overclaim — tool-surface gate + PR-check coverage honesty report
+- fix(state): rotate_state.sh sees current H2 session format; size trigger now actually bounds STATE.md
+- fix(ops): verify_deployment.sh — filter to the target environment, never verdict off a co-deploying one
+- fix(ci): add backlog_ledger_* to the tool-surface baseline
+- fix(ci): ratify backlog_ledger_* into the frozen tool set; clear 3 gate failures
+- fix(ops): deployment verification helper avoids short-sha false-absence
+- fix(runner): durable consumed-titles ledger for the runner-backlog cursor (task-aa331af6)
+- fix(a11y): add keyboard focus trap to DetailPanel, start SELF_IMPROVEMENT_TRACK.md
+- fix(resync): known-regenerating tracked state must not block the fast-forward
+- fix(brain): observe hook keys scratch buffer by canonical repo name, not worktree basename
+- fix(tests): bare `cd` in test_local_ci_exit_code.sh broke the static-lint gate
+- fix(local-ci): exit code is the verdict — close every green-while-red path (task-44f717c4)
+- fix(runner): prior-art decline is now a TERMINAL close — done + [resolution] already-shipped
+- fix(runner): exact-title dedupe gate in queue_topup pop — end the re-dispatch loop
+- fix(auth): the switcher never knew about OPERATOR sessions — the real cause of "Sign in after login"
+- fix(dashboard): signed-in operators no longer see "Sign in"; give the shell a real brand mark
+- fix(ci): clear both gate blockers — shellcheck findings and a deterministic test timeout
+- fix(keep-awake): never block display sleep — it disabled the Mac's screen lock
+- fix(remote): a doorway is its -n label, not merely a live session
+- fix(runner): auth-guard release path — testable handler, fix silent crash, fleet visibility
+- fix(runner): P0 — a healthy no-op ledger reconcile killed every scheduled fire
+- fix(init): ship .mcp.json + .githooks pre-push to scaffolded repos
+- fix(remote): do_stop self-guard must key on pid, and survive pipefail
+- fix(boot-sync): retry brain push once before needs-operator; resolve later
+- fix(dashboard): PR #448 review — tap floors, sheet inert, Task chip toggle, same-origin guard
+- fix(dashboard): restore mobile navigability — home, /system, no one-way doors
+- fix(release,brain): poll for tarball availability; stop reporting an unpushed brain as in sync
+- fix(ci-thrift): keep test in the PR trigger — phantom required-check guard (task-00d053c1)
+- fix(release): --interactive-otp — npm prompts for the 2FA code AFTER the guard
+- fix(tooling): wrap-up banner guards the merged-PR truncation tell (task-0f8bfdb4)
+- fix(tests): auth-guard stat portability on Linux + credential-free fixture URIs
+- fix(dashboard): DB-unreachable banner names the configured target, not :27200
+- fix(gateway): cost-estimator pricing matches the refreshed agentic table
+- fix(brain): brain_merge mirrors the headline atom into the handoff store
+- fix(runner): expired CLI login is a machine condition — auth guard, no retry burn + RAM startup grace
+
+#### Performance
+- perf(dashboard): /work plans + leases tabs 5-7x lighter; stale plans called out
+- perf(dashboard): brain reads are truly stale-while-revalidate — no ~700 ms stall every 35 s
+- perf(dashboard): every in-app click ~300 ms → ~25-55 ms; record real page speed
+- perf(db): add tenant+status+completedAt index for /velocity aggregate
+- perf(dashboard): server-cache the slow brain reads + startup warm; web-perceived-performance skill + blueprint defaults
 
 ## [0.9.0] — 2026-09-09
 
@@ -1019,8 +1402,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - feat(blueprint): fold ai_review AI/LL/ lessons + AI/ convention + LL workflow
 - feat(keyword): agent mode -a (auto-mode flag) (#134)
 - feat(keyword): agent mode -a (auto-mode flag)
-- feat(claude.md): document Powerhouse workspace keywords (#133)
-- feat(claude.md): document Powerhouse workspace keywords
+- feat(claude.md): document work-org workspace keywords (#133)
+- feat(claude.md): document work-org workspace keywords
 - feat(ram-guard): 2 GB per-stack ceiling on every agent-mode kickoff (#129)
 - feat(ram-guard): 2 GB per-stack ceiling enforced on every agent-mode kickoff
 - feat(blueprint): polished default landing + Tailwind v4 stable (#126)
@@ -1033,8 +1416,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - feat(blueprint): top-level README + template-mode + propagation polish
 - feat(blueprint): init_blueprint.sh provisioner + 'init blueprint' keyword + Docker-only fix (#118)
 - feat(blueprint): init_blueprint.sh provisioner + 'init blueprint' keyword
-- feat(plan): POWERHOUSE BLUEPRINT — org-wide engineering standard + first reference implementation (#117)
-- feat(plan): POWERHOUSE BLUEPRINT — org-wide engineering standard + first reference implementation
+- feat(plan): FULL-STACK BLUEPRINT — org-wide engineering standard + first reference implementation (#117)
+- feat(plan): FULL-STACK BLUEPRINT — org-wide engineering standard + first reference implementation
 - feat(dashboard): Phase 5e — /costs page + plan progress meter in wrap up (#115)
 - feat(dashboard): Phase 5e — /costs page + plan progress meter in wrap up
 - feat(llm): Phase 5d — Anthropic prompt caching (#113)
@@ -1310,7 +1693,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fix(mcp): move project config to .mcp.json (Claude Code's actual path)
 - fix(blueprint): wrap $VAR before non-ASCII ellipsis (set -u crash) (#124)
 - fix(blueprint): wrap $VAR in ${VAR} before non-ASCII ellipsis (set -u crash)
-- fix(blueprint): default vercel deploys to knoflers-projects scope, not powerhouse
+- fix(blueprint): default vercel deploys to the personal scope, not the team scope
 - fix(hooks): two false-positive bugs in secret-scan (#111)
 - fix(hooks): two false-positive bugs in secret-scan
 - fix(channels): tighten Option C from PR #102 review (Copilot) (#103)
@@ -1401,7 +1784,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fix: strip allStageOutputs from design/build/ship routes to prevent CLI timeout
 - fix: Design stage timeout — context truncation, undici extended timeouts, stdin piping
 - fix: AI suggest error handling, rename Local Agents → Local Tools
-- fix: update managed_repos.txt paths (rummanahmed → rumman.ahmed)
+- fix: update managed_repos.txt paths (home-directory rename)
 - fix: timeline overflow + document viewer + logout UI
 - fix: update stale username paths in managed_repos.txt and handoff
 
@@ -1544,7 +1927,7 @@ on any machine, with no access to the operator's private context.
   - `myai scan [path]` — spider git repos under a directory, register each in
     the gateway directory, and seed RAG awareness. `--register` also lists in
     `managed_repos.txt`; `--dry-run` previews.
-  - `myai new-app [path]` — scaffold a new full-stack app from the Powerhouse
+  - `myai new-app [path]` — scaffold a new full-stack app from the myAI
     Blueprint and register it in the directory.
   - `myai connect [path]` — install the Connect Hub module (ticket → task
     bridge) into a project.

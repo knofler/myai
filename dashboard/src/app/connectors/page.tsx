@@ -8,12 +8,20 @@ import ConnectorManager from './connector-manager';
 
 export const dynamic = 'force-dynamic';
 
+/** The one-line answer (DESIGN_LANGUAGE §5.1). The bundle and its toggles are
+ *  fetched client-side, so this shell names no counts. */
+function connectorsSummary(): string {
+  return 'Connectors are the tools your AI can reach out and use. A curated bundle is wired up on day one, and you decide what stays switched on and what else to add.';
+}
+
 export default function ConnectorsPage() {
   return (
     <div className="max-w-5xl mx-auto">
       <PageHeader
+        icon="connectors"
         title="Connectors"
-        subtitle="The MCP connectors betaC talks to — a curated bundle wired day one, plus your own. Toggle what's active; add custom servers."
+        summary={connectorsSummary()}
+        subtitle="MCP connectors · the bundled set plus your own."
       />
       <div className="mt-6">
         <ConnectorManager />

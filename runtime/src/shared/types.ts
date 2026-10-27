@@ -6,14 +6,15 @@ export const MessageRole = z.enum(['user', 'assistant', 'system', 'channel']);
 export type MessageRole = z.infer<typeof MessageRole>;
 
 export const GatewayMessageSchema = z.object({
-  id: z.string().uuid(),
+  // z.guid(): any 8-4-4-4-12 hex id, the zod 3 `.uuid()` contract; zod 4 `.uuid()` is RFC-strict.
+  id: z.guid(),
   sessionId: z.string(),
   role: MessageRole,
   content: z.string(),
   agentName: z.string().optional(),
   channelType: z.string().optional(),
   channelId: z.string().optional(),
-  metadata: z.record(z.unknown()).default({}),
+  metadata: z.record(z.string(), z.unknown()).default({}),
   timestamp: z.date().default(() => new Date()),
 });
 export type GatewayMessage = z.infer<typeof GatewayMessageSchema>;
@@ -82,7 +83,7 @@ export const WsIncoming = z.object({
   sessionId: z.string().optional(),
   agentName: z.string().optional(),
   content: z.string().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   // betaC context-sharing: session.import carries the export bundle; session.recall
   // carries optional { agentName, limit, perSessionMessages } in metadata.
   bundle: z.unknown().optional(),
@@ -149,7 +150,7 @@ export interface GatewayConfig {
   };
   llm: {
     enabled: boolean;
-    mode: 'bridge' | 'direct' | 'api' | 'deepseek' | 'moonshot' | 'gemini' | 'ollama';
+    mode: 'bridge' | 'direct' | 'api' | 'deepseek' | 'moonshot' | 'ollama';
     /** Comma-separated provider chain for auto-fallback. When set and the
      * primary mode call fails with a recoverable network error
      * (ECONNRESET / ENETUNREACH / ETIMEDOUT / fetch-network), the router walks
@@ -173,8 +174,6 @@ export interface GatewayConfig {
     openrouterModel?: string;
     /** OpenRouter base URL override (OPENROUTER_BASE_URL). */
     openrouterBaseUrl?: string;
-    geminiApiKey?: string;
-    geminiModel?: string;
     ollamaBaseUrl?: string;
     ollamaModel?: string;
     /** Phase 5d — enable Anthropic prompt caching for the `api` provider.

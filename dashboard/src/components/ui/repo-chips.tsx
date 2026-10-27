@@ -40,19 +40,20 @@ export function RepoChips({
   const allActive = !active;
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 mt-4" role="group" aria-label="Filter by repo">
-      <span className="text-[11px] uppercase tracking-wider text-zinc-600 mr-1">Repo</span>
+    // Phone: one scrollable row (no wrapping into a wall of chips); desktop wraps as before.
+    <div className="mt-4 flex items-center gap-1.5 overflow-x-auto md:flex-wrap md:overflow-visible" role="group" aria-label="Filter by repo">
+      <span className="mr-1 shrink-0 text-label text-[rgb(var(--text-muted))]">Repo</span>
       <Link
         href={chipHref(base, tab, undefined, extra)}
         aria-current={allActive ? 'true' : undefined}
-        className={`tap-press inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border transition-[color,border-color,transform] ${
+        className={`tap-press inline-flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border transition-[color,border-color,transform] ${
           allActive
             ? 'bg-teal-500/15 border-teal-500/40 text-teal-300 font-medium'
             : 'bg-[rgb(var(--bg-surface))]/60 border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hover:border-zinc-700 active:border-teal-500/40'
         }`}
       >
         All
-        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${allActive ? 'bg-teal-500/20 text-teal-200' : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]'}`}>
+        <span className={`text-label px-1.5 py-0.5 rounded-full ${allActive ? 'bg-teal-500/20 text-teal-200' : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]'}`}>
           {total}
         </span>
       </Link>
@@ -63,14 +64,14 @@ export function RepoChips({
             key={r.repo}
             href={chipHref(base, tab, r.repo, extra)}
             aria-current={isActive ? 'true' : undefined}
-            className={`tap-press inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border transition-[color,border-color,transform] ${
+            className={`tap-press inline-flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border transition-[color,border-color,transform] ${
               isActive
                 ? 'bg-teal-500/15 border-teal-500/40 text-teal-300 font-medium'
                 : 'bg-[rgb(var(--bg-surface))]/60 border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hover:border-zinc-700 active:border-teal-500/40'
             }`}
           >
-            <span className="font-mono">{r.repo}</span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${isActive ? 'bg-teal-500/20 text-teal-200' : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]'}`}>
+            <span>{r.repo}</span>
+            <span className={`text-label px-1.5 py-0.5 rounded-full ${isActive ? 'bg-teal-500/20 text-teal-200' : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))]'}`}>
               {r.count}
             </span>
           </Link>

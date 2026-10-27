@@ -70,7 +70,19 @@ export function lockoutDurationMinutes(priorLockouts: number): number {
 
 // ── bcrypt (pure-JS fallback to avoid native addon dependency) ──
 
-const BCRYPT_ROUNDS = 12;
+// Work factor. Production is FIXED at 12 — only the test runner may lower it.
+// WHY the knob exists (2026-09-12): these are pure-JS bcryptjs hashes (~1-2s
+// each at cost 12), and login() hashes even on a WRONG password by design, to
+// keep the work constant against timing probes. The lockout suite therefore
+// pays one full hash per failed login: signup + 5 failures ran past vitest's
+// 10s timeout deterministically, and the suite had been red at random for it.
+// Lowering rounds in tests keeps the REAL bcrypt path under test, just cheaper.
+// The env var is honoured ONLY under NODE_ENV=test (vitest sets it), and is
+// floored at 4, so it can never weaken a running service.
+const BCRYPT_ROUNDS =
+  process.env.NODE_ENV === 'test' && process.env.AUTH_BCRYPT_ROUNDS
+    ? Math.max(4, Number(process.env.AUTH_BCRYPT_ROUNDS) || 12)
+    : 12;
 
 export const MIN_PASSWORD_LENGTH = 8;
 
@@ -635,6 +647,10 @@ export async function getCurrentUser(payload: JwtPayload): Promise<{
   displayName?: string;
   role: UserRole;
   tenantName?: string;
+  /** Tenant plan. Present so a client holding ONLY the httpOnly JWT cookie can
+   *  rebuild a complete session from /api/auth/me (the dashboard's tenant
+   *  switcher needs tenantId + name + plan). */
+  tenantPlan?: string;
   emailVerified: boolean;
   impersonation?: { by: string; reason?: string; readOnly: boolean; expiresAt: string };
 }> {
@@ -652,6 +668,7 @@ export async function getCurrentUser(payload: JwtPayload): Promise<{
     // the UI must gate on what this session can actually do.
     role: payload.imp ? payload.role : user.role,
     tenantName: tenant?.name,
+    tenantPlan: tenant?.plan,
     emailVerified: !!user.emailVerified,
     // The dashboard's ImpersonationBanner keys off this — present only on
     // operator support sessions (core/impersonation.ts).

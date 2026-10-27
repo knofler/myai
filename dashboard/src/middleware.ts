@@ -75,6 +75,9 @@ const OPERATOR_PUBLIC = [
   // signatures; gating them would silently break billing and Connect payouts.
   '/api/billing/webhook',
   '/api/marketplace/connect/webhook',
+  // Cache warm-up: authenticates itself (per-process token or CRON_SECRET)
+  // and returns timings only, never data.
+  '/api/warm',
 ];
 
 // ── Read-only demo gate (GO_LIVE_PLAN P2 item 14, see src/lib/demo.ts) ──
@@ -85,6 +88,30 @@ const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 const DEMO_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 // Reads that use POST for a request body — safe to keep working in the demo.
 const DEMO_POST_ALLOWLIST = new Set(['/api/sessions/search']);
+
+// Local auto-login (task-a6930b2b, repeat operator ask 2026-10-02): trust a
+// single, narrow signal that ONLY `loopback-gate.js` can produce — never a
+// client, never Next itself. That file is the sole process bound to the
+// published port; it strips any client-supplied copy of this header before
+// setting its own, and only sets it when DASHBOARD_LOCAL_AUTOLOGIN=1 AND
+// HOST_BIND=127.0.0.1 AND the connection's real peer address looks loopback
+// (see its comments for why both env conditions are required on Docker
+// Desktop). Unlike the old Host-header exemption this replaces nothing and
+// adds no new trust in `req.headers.get('host')` or any forwarded-for header.
+const LOOPBACK_AUTOLOGIN_HEADER = 'x-myai-verified-loopback';
+
+/**
+ * True only when loopback-gate.js has vouched for this exact request AND we
+ * are not running on Vercel. The `VERCEL` check is independent of the
+ * DASHBOARD_LOCAL_AUTOLOGIN flag on purpose: Vercel sets `VERCEL=1` itself
+ * (not client-settable) in both its build and runtime environment, so even a
+ * misconfigured hosted deploy that somehow carried DASHBOARD_LOCAL_AUTOLOGIN
+ * into its env cannot be tricked into trusting a client-sent copy of the
+ * header — there is no loopback-gate.js running there to have stripped it.
+ */
+function isVerifiedLocalAutologin(req: NextRequest): boolean {
+  return process.env.VERCEL !== '1' && req.headers.get(LOOPBACK_AUTOLOGIN_HEADER) === '1';
+}
 
 function isLoopbackHost(host: string | null): boolean {
   if (!host) return false;
@@ -129,6 +156,11 @@ export async function middleware(req: NextRequest) {
   const operatorPublic =
     !operatorDenied && OPERATOR_PUBLIC.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   if (!operatorPublic) {
+    // Local auto-login bypass — never for the explicitly-denied paths (e.g.
+    // signup stays closed to everyone, loopback included; see OPERATOR_DENY).
+    if (!operatorDenied && isVerifiedLocalAutologin(req)) {
+      return NextResponse.next();
+    }
     const operator = await verifyOperatorToken(req.cookies.get(OPERATOR_COOKIE)?.value);
     if (!operator) {
       if (pathname.startsWith('/api/')) {

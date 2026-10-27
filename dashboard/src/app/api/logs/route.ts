@@ -43,5 +43,9 @@ export async function GET(req: NextRequest) {
 
   const result = await callGateway<LogsListResult>('logs_list', args);
   if (!result) return NextResponse.json({ error: 'failed to reach gateway' }, { status: 502 });
-  return NextResponse.json({ count: result.entries.length, entries: result.entries });
+  // Cloud (no gateway): logs are the gateway's in-memory buffer, never in Atlas —
+  // pass the explanation through so the page says so instead of looking empty.
+  const cloud = result as LogsListResult & { cloudUnavailable?: boolean; reason?: string };
+  return NextResponse.json({ count: result.entries.length, entries: result.entries,
+    ...(cloud.cloudUnavailable ? { cloudUnavailable: true, reason: cloud.reason } : {}) });
 }

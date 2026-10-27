@@ -133,11 +133,12 @@ export function CommandPalette() {
                 else if (e.key === 'Enter' && results[index]) { select(results[index]); }
               }}
               placeholder="Jump to… or dispatch a task"
+              aria-label="Jump to… or dispatch a task"
               role="combobox"
               aria-expanded="true"
               aria-controls="cmd-palette-list"
               aria-activedescendant={results[index] ? `cmd-opt-${index}` : undefined}
-              className="w-full bg-transparent px-4 py-3.5 text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none border-b border-[rgb(var(--border-subtle))]"
+              className="w-full bg-transparent px-4 py-3.5 text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-teal-500/50 border-b border-[rgb(var(--border-subtle))]"
             />
             <ul id="cmd-palette-list" role="listbox" className="max-h-[40vh] overflow-y-auto py-1.5">
               {results.length === 0 && <li className="px-4 py-6 text-center text-sm text-zinc-600">No matches.</li>}
@@ -157,7 +158,7 @@ export function CommandPalette() {
                 </li>
               ))}
             </ul>
-            <div className="px-4 py-2 border-t border-[rgb(var(--border-subtle))] text-[10px] text-zinc-600 flex gap-3">
+            <div className="px-4 py-2 border-t border-[rgb(var(--border-subtle))] text-label text-zinc-600 flex gap-3">
               <span>↑↓ navigate</span><span>↵ open</span><span>esc close</span>
             </div>
           </>
@@ -240,7 +241,7 @@ function DispatchForm({ repos, onCancel, onDone }: { repos: string[]; onCancel: 
           className="mt-1 w-full bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded px-2 py-1.5 text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:border-teal-600 outline-none"
         />
       </label>
-      {error && <p className="text-xs text-rose-400">{error}</p>}
+      {error && <p role="alert" className="text-xs text-rose-400">{error}</p>}
       <div className="flex gap-2 justify-end pt-1">
         <button type="button" onClick={onCancel} className="px-3 py-1.5 rounded text-xs text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition-colors">
           Cancel

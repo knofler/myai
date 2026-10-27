@@ -102,3 +102,6 @@ Order fixes into phases:
 - [ ] Fixes prioritized by impact-to-effort ratio
 - [ ] Quick wins separated from major refactors
 - [ ] Lighthouse CI recommended for regression prevention
+
+## Related
+- `web-perceived-performance` — what to do about slow navigations in a Next.js app once the numbers are in (tap feedback, server cache + warm, prefetch, persisted cache). Lighthouse is a lab score; pair it with real per-page timings from a logged-in browser.

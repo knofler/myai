@@ -122,8 +122,8 @@ Override tokens in `globals.css` — the whole app updates:
 
 ```css
 @theme {
-  --color-brand-accent: #00B14C;          /* Powerhouse green */
-  --font-primary: 'Powerhouse Filar', -apple-system, sans-serif;
+  --color-brand-accent: #00B14C;          /* brand green (example) */
+  --font-primary: 'Brand Sans', -apple-system, sans-serif;
   --width-content-max: 1440px;
 }
 ```

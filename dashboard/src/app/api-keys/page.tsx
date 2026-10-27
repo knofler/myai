@@ -8,17 +8,25 @@ import ApiKeysManager from './api-keys-manager';
 
 export const dynamic = 'force-dynamic';
 
+/** The one-line answer (DESIGN_LANGUAGE §5.1). The key list is fetched by the
+ *  client manager, so this shell knows no counts and states none. */
+function apiKeysSummary(): string {
+  return 'API keys are how a machine talks to your gateway without a password. Create one, scope it to what it needs, rotate it with a grace window so nothing breaks, or revoke it the moment it leaks.';
+}
+
 export default function ApiKeysPage() {
   return (
     <div className="max-w-5xl mx-auto">
       <PageHeader
+        icon="keys"
         title="API Keys"
-        subtitle="Create, scope, rotate, and revoke the per-tenant API keys that authenticate machine access to your gateway. Rotation keeps the old key alive for a grace window so you can swap it in with zero downtime. Every action is audit-logged."
+        summary={apiKeysSummary()}
+        subtitle="Owner and admin only · every key action is audit-logged."
       >
         <Link
           href="/developers"
           target="_blank"
-          className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-[rgb(var(--text-secondary))] hover:bg-[rgb(var(--bg-hover))] hover:text-[rgb(var(--text-primary))]"
+          className="rounded-lg border border-[rgb(var(--border-subtle))] px-3 py-1.5 text-meta text-[rgb(var(--text-secondary))] hover:bg-[rgb(var(--bg-hover))] hover:text-[rgb(var(--text-primary))]"
         >
           curl quickstart ↗
         </Link>

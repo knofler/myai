@@ -101,6 +101,10 @@ export function Sheet({
         role="dialog"
         aria-modal={open ? true : undefined}
         aria-hidden={!open}
+        // A closed panel stays mounted (so its slide-out can play) but must not
+        // be reachable by Tab — aria-hidden alone leaves its links focusable
+        // (axe aria-hidden-focus). React 19 forwards `inert` as a boolean.
+        inert={!open || undefined}
         aria-label={typeof title === 'string' ? title : undefined}
         aria-labelledby={title && typeof title !== 'string' ? titleId : undefined}
         tabIndex={-1}

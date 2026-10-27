@@ -1,7 +1,7 @@
 # LICENSE — recommendation & options (for the maintainer's final call)
 
 > **Status:** The repo currently ships a permissive **MIT License** (`/LICENSE`,
-> `Copyright (c) 2026 knofler`). This document exists so the licensing choice is
+> `Copyright (c) 2026 <copyright holder>`). This document exists so the licensing choice is
 > a deliberate decision, not an accident of scaffolding. Pick one, then (if you
 > change it) replace `/LICENSE` and update the reference in `dashboard/src/app/terms/page.tsx`.
 
@@ -42,9 +42,9 @@ verbatim as `/LICENSE`, add a `NOTICE` file:
 
 ```
 myAI
-Copyright 2026 knofler
+Copyright 2026 <copyright holder>
 
-This product includes software developed by knofler.
+This product includes software developed by <copyright holder>.
 ```
 
 Add the standard header to source files if you want strict compliance. Choose
@@ -56,7 +56,7 @@ Draft the parameters block (the rest is the standard BUSL-1.1 text from
 <https://mariadb.com/bsl11/>):
 
 ```
-Licensor:             knofler
+Licensor:             <copyright holder>
 Licensed Work:        myAI (this repository)
 Additional Use Grant: You may use the Licensed Work for any purpose other than
                       offering a commercial, hosted "myAI"-equivalent service to

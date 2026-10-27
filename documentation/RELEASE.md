@@ -14,6 +14,22 @@ in the repo. There are two paths:
 
 ---
 
+## 👀 `standing-release-scout` — knows WHEN a release is due
+
+Neither `myai release` nor the automated cadence below runs itself — something
+has to notice the npm package has drifted behind `main`/`test` in the first
+place. `agents/standing-release-scout.md` is a weekly standing agent
+(`scripts/release_scout_step.sh`, registered via
+`scripts/register_release_scout_recurring.sh`, same `recurring_tasks_create`
+mechanism as `standing-blog-scout`) that compares `npm view ai-management
+version` against commits since that version's tag and, when a release is
+warranted, runs `scripts/release_version.py apply` itself, commits to `test`,
+and mails the operator `"release vX.Y.Z ready — run publish_release.sh"` with
+the changelog. **It never publishes** — it only answers "is one due, and if so
+here it is, prepared" so the operator doesn't have to remember to check.
+
+---
+
 ## ⚡ `myai release` — one command, not a manual checklist
 
 `scripts/myai_release.sh` (wired up as `myai release`) wraps everything below

@@ -10,6 +10,7 @@
 //      tool/route if RBAC_ENFORCE were flipped on today, from the ring buffer
 //      `assertCapability` writes to in shadow mode (never the audit trail).
 import { useCallback, useEffect, useState } from 'react';
+import { DataTable, type DataColumn, type DataRow } from '@/components/ui/data-table';
 
 // ── shared types (mirror the gateway shapes) ──────────────────────────────────
 interface AuditActor { userId?: string; role: string; via: string }
@@ -54,13 +55,6 @@ const ACTIONS = [
   'billing.update', 'connector.change', 'schedule.change',
 ];
 const ROLE_COLS = ['viewer', 'member', 'admin', 'owner', 'system', 'operator'];
-
-function Th({ children }: { children: React.ReactNode }) {
-  return <th className="text-left font-medium text-[rgb(var(--text-primary))] px-3 py-2 border-b border-[rgb(var(--border-subtle))] whitespace-nowrap">{children}</th>;
-}
-function Td({ children }: { children: React.ReactNode }) {
-  return <td className="px-3 py-2 border-b border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] align-top">{children}</td>;
-}
 
 export default function AuditViewer() {
   const [events, setEvents] = useState<AuditEvent[]>([]);
@@ -182,7 +176,7 @@ export default function AuditViewer() {
         </div>
 
         {verifyError ? (
-          <p className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2 mb-4">{verifyError}</p>
+          <p role="alert" className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2 mb-4">{verifyError}</p>
         ) : verifyResult ? (
           <div
             className={`text-sm rounded px-3 py-2 mb-4 border ${
@@ -214,38 +208,38 @@ export default function AuditViewer() {
         ) : null}
 
         {error ? (
-          <p className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2">{error}</p>
+          <p role="alert" className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2">{error}</p>
         ) : loading ? (
           <p className="text-sm text-[rgb(var(--text-muted))]">Loading…</p>
-        ) : events.length === 0 ? (
-          <p className="text-sm text-[rgb(var(--text-muted))]">No audit events yet. Privileged actions and access denials will appear here.</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr>
-                  <Th>When (UTC)</Th>
-                  <Th>Action</Th>
-                  <Th>Actor</Th>
-                  <Th>Role</Th>
-                  <Th>Target</Th>
-                  <Th>Detail</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((e) => (
-                  <tr key={e.eventId}>
-                    <Td>{e.createdAt.replace('T', ' ').replace(/\.\d+Z$/, 'Z')}</Td>
-                    <Td><span className="text-[rgb(var(--text-primary))]">{e.action}</span></Td>
-                    <Td>{e.actor?.userId ?? '—'}</Td>
-                    <Td>{e.actor?.role ?? '—'}</Td>
-                    <Td>{e.target ?? '—'}</Td>
-                    <Td>{e.detail ? <code className="text-xs text-[rgb(var(--text-muted))]">{JSON.stringify(e.detail)}</code> : '—'}</Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            title="Events"
+            searchPlaceholder="Search audit log…"
+            defaultSort="when"
+            defaultDesc
+            emptyText="No audit events yet. Privileged actions and access denials will appear here."
+            columns={[
+              { label: 'When (UTC)', sortKey: 'when', mobile: 'meta' },
+              { label: 'Action', mobile: 'title' },
+              { label: 'Actor', mobile: 'detail' },
+              { label: 'Role', mobile: 'detail' },
+              { label: 'Target', mobile: 'detail' },
+              { label: 'Detail', mobile: 'detail' },
+            ]}
+            rows={events.map((e): DataRow => ({
+              id: e.eventId,
+              search: `${e.action} ${e.actor?.userId ?? ''} ${e.actor?.role ?? ''} ${e.target ?? ''}`.toLowerCase(),
+              sort: { when: new Date(e.createdAt).getTime() },
+              cells: [
+                e.createdAt.replace('T', ' ').replace(/\.\d+Z$/, 'Z'),
+                <span className="text-[rgb(var(--text-primary))]">{e.action}</span>,
+                e.actor?.userId ?? '—',
+                e.actor?.role ?? '—',
+                e.target ?? '—',
+                e.detail ? <code className="text-xs text-[rgb(var(--text-muted))]">{JSON.stringify(e.detail)}</code> : '—',
+              ],
+            }))}
+          />
         )}
       </section>
 
@@ -257,34 +251,30 @@ export default function AuditViewer() {
             Which roles may perform each action on each resource. Derived from the role capability
             lattice — the server-side matrix is the real boundary.
           </p>
-          <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr>
-                  <Th>Resource</Th>
-                  <Th>Action</Th>
-                  <Th>Capability</Th>
-                  {ROLE_COLS.map((r) => <Th key={r}>{r}</Th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {grid.map((row) => (
-                  <tr key={`${row.resource}.${row.action}`}>
-                    <Td>{row.resource}</Td>
-                    <Td>{row.action}</Td>
-                    <Td><code className="text-xs text-teal-300">{row.capability}</code></Td>
-                    {ROLE_COLS.map((r) => (
-                      <td key={r} className="px-3 py-2 border-b border-[rgb(var(--border-subtle))] text-center">
-                        {row.roles[r]
-                          ? <span className="text-emerald-400" aria-label="allowed">✓</span>
-                          : <span className="text-zinc-700" aria-label="denied">—</span>}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            title="Permission matrix"
+            searchPlaceholder="Search resource/action…"
+            columns={[
+              { label: 'Resource', mobile: 'title' },
+              { label: 'Action', mobile: 'meta' },
+              { label: 'Capability', mobile: 'detail' },
+              ...ROLE_COLS.map((r): DataColumn => ({ label: r, align: 'center', mobile: 'detail' })),
+            ]}
+            rows={grid.map((row): DataRow => ({
+              id: `${row.resource}.${row.action}`,
+              search: `${row.resource} ${row.action} ${row.capability}`.toLowerCase(),
+              cells: [
+                row.resource,
+                row.action,
+                <code className="text-xs text-teal-300">{row.capability}</code>,
+                ...ROLE_COLS.map((r) =>
+                  row.roles[r]
+                    ? <span key={r} className="text-emerald-400" aria-label="allowed">✓</span>
+                    : <span key={r} className="text-zinc-700" aria-label="denied">—</span>
+                ),
+              ],
+            }))}
+          />
         </section>
       )}
 
@@ -297,37 +287,33 @@ export default function AuditViewer() {
         </p>
         {shadowError ? (
           <p className="text-sm text-amber-400 border border-amber-900/50 bg-amber-950/20 rounded px-3 py-2">{shadowError}</p>
-        ) : shadowSummary.length === 0 ? (
-          <p className="text-sm text-[rgb(var(--text-muted))]">No shadow denials recorded yet.</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr>
-                  <Th>Tool / route</Th>
-                  <Th>Capability</Th>
-                  <Th>Count</Th>
-                  <Th>By role</Th>
-                  <Th>Last seen (UTC)</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {shadowSummary.map((row) => (
-                  <tr key={row.action}>
-                    <Td><span className="text-[rgb(var(--text-primary))]">{row.action}</span></Td>
-                    <Td><code className="text-xs text-teal-300">{row.capability}</code></Td>
-                    <Td>{row.count}</Td>
-                    <Td>
-                      {Object.entries(row.roles)
-                        .map(([role, count]) => `${role}: ${count}`)
-                        .join(', ')}
-                    </Td>
-                    <Td>{new Date(row.lastAt).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z')}</Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            title="Shadow denials"
+            searchPlaceholder="Search tool/route…"
+            defaultSort="count"
+            defaultDesc
+            emptyText="No shadow denials recorded yet."
+            columns={[
+              { label: 'Tool / route', sortKey: 'action', mobile: 'title' },
+              { label: 'Capability', mobile: 'detail' },
+              { label: 'Count', align: 'right', sortKey: 'count', mobile: 'meta' },
+              { label: 'By role', mobile: 'detail' },
+              { label: 'Last seen (UTC)', sortKey: 'lastAt', mobile: 'detail' },
+            ]}
+            rows={shadowSummary.map((row): DataRow => ({
+              id: row.action,
+              search: `${row.action} ${row.capability}`.toLowerCase(),
+              sort: { action: row.action, count: row.count, lastAt: row.lastAt },
+              cells: [
+                <span className="text-[rgb(var(--text-primary))]">{row.action}</span>,
+                <code className="text-xs text-teal-300">{row.capability}</code>,
+                row.count,
+                Object.entries(row.roles).map(([role, count]) => `${role}: ${count}`).join(', '),
+                new Date(row.lastAt).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z'),
+              ],
+            }))}
+          />
         )}
       </section>
     </div>

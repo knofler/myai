@@ -203,7 +203,7 @@ change ships from the MASTER checkout and requires a gateway rebuild.
 
 ## Implementation Status
 
-This is a documentation-first design. Implementation will be added to AgentFlow (`knofler/agentFlow`) in `src/lib/ai/`:
+This is a documentation-first design. Implementation will be added to AgentFlow in `src/lib/ai/`:
 - `src/lib/ai/cost-estimator.ts` — already exists (basic version)
 - `src/lib/ai/router.ts` — already has provider fallback chains
 - New: complexity scoring, tier selection, budget guards, session tracking

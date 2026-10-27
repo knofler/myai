@@ -5,8 +5,9 @@
 > button. Per-project hookups (Vercel/Atlas/Sentry/Anthropic) are in
 > **`BLUEPRINT_HOOKUP.md`** — this file is the org-level foundation those rely on.
 >
-> Orgs in scope: `powerhouse-ict`, `powerhousemuseum`, future `powerhouse-labs` /
-> `powerhouse-blueprints`, and personal `knofler`.
+> Orgs in scope: typically an internal work org (`<work-org>`), a public-facing
+> org (`<public-org>`), an optional template/labs org (`<labs-org>`), and your
+> personal account (`<owner>`).
 
 ---
 
@@ -112,7 +113,7 @@ Net effect: a docs/`AI_RULES`/hook PR gets **no** Copilot review; a code PR gets
 
 ## 5. GitHub Template Repository marker
 
-Make the canonical blueprint (`knofler/todo-blueprint`, and per-org mirrors)
+Make the canonical blueprint (`<owner>/todo-blueprint`, and per-org mirrors)
 usable via the GitHub UI **"Use this template"** button:
 
 - Repo → Settings → **Template repository** ✔
@@ -126,19 +127,19 @@ Org members can then scaffold from the UI; the CLI path stays
 ## 6. Vercel org/team link (optional)
 
 1. Vercel → connect the GitHub org (Git Integration).
-2. Decide default scope: **personal** (`knoflers-projects`) for sandbox/test
-   apps (no SSO wall on preview URLs); **team** for production Powerhouse apps.
+2. Decide default scope: **personal** (`<personal-vercel-scope>`) for sandbox/test
+   apps (no SSO wall on preview URLs); **team** for production work-org apps.
 3. Set org-wide env defaults (e.g. `SENTRY_ORG`) at the Vercel team level so new
    projects inherit them.
 
 ---
 
-## 7. Per-org rollout order (from POWERHOUSE_BLUEPRINT.md §5)
+## 7. Per-org rollout order
 
-1. `knofler` (personal) — proven on `todo-blueprint`.
-2. `powerhouse-labs` / `powerhouse-blueprints` — host the org template repo.
-3. `powerhouse-ict` — first real internal repo.
-4. `powerhousemuseum` — first real public repo.
+1. `<owner>` (personal) — prove it on `todo-blueprint`.
+2. `<labs-org>` — host the org template repo.
+3. `<work-org>` — first real internal repo.
+4. `<public-org>` — first real public repo.
 5. Mark the blueprint as a Template Repository in each org once stable.
 
 ---

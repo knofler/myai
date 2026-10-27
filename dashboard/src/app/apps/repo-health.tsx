@@ -23,7 +23,7 @@ function StatusDot({ ok, unknown, label }: { ok: boolean; unknown?: boolean; lab
   return (
     <div className="flex items-center gap-1.5" title={label}>
       <span className={`w-2 h-2 rounded-full ${unknown ? 'bg-zinc-600' : ok ? 'bg-emerald-400' : 'bg-red-400'}`} />
-      <span className="text-[10px] text-[rgb(var(--text-muted))]">{label}</span>
+      <span className="text-label text-[rgb(var(--text-muted))]">{label}</span>
     </div>
   );
 }
@@ -62,9 +62,9 @@ export default function RepoHealth() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatCard label="Total repos" value={repos.length} />
-        <StatCard label="Accessible" value={accessible.length} accent={accessible.length > 0 ? 'green' : 'gray'} />
-        <StatCard label="Healthy" value={healthy.length} accent={healthy.length > 0 ? 'green' : 'gray'} />
+        <StatCard label="Total repos" value={repos.length} icon="fleet" tone="muted" />
+        <StatCard label="Accessible" value={accessible.length} icon="status" tone={accessible.length > 0 ? 'ok' : 'muted'} />
+        <StatCard label="Healthy" value={healthy.length} icon="check" tone={healthy.length > 0 ? 'ok' : 'muted'} />
       </div>
 
       {inDocker && (
@@ -89,7 +89,7 @@ export default function RepoHealth() {
                   <div className="flex items-center justify-between mb-3">
                     <div>
                       <p className="font-medium text-sm text-[rgb(var(--text-primary))]">{r.name}</p>
-                      <p className="text-[10px] text-zinc-600 font-mono mt-0.5 truncate max-w-[250px]">{r.path}</p>
+                      <p className="text-label text-zinc-600 font-mono mt-0.5 truncate max-w-[250px]">{r.path}</p>
                     </div>
                     <span className={`w-3 h-3 rounded-full ${notAccessible ? 'bg-zinc-600' : allGreen ? 'bg-emerald-400' : 'bg-amber-400'}`} />
                   </div>

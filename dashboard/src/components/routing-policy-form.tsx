@@ -11,6 +11,7 @@ import {
   MODEL_OPTIONS,
   PRIORITIES,
   budgetState,
+  isMeteredModel,
   modelOption,
   type Priority,
   type RoutingPolicy,
@@ -42,7 +43,7 @@ function ModelSelect({
       {allowInherit && <option value="">— use default —</option>}
       {MODEL_OPTIONS.map((m) => (
         <option key={m.id} value={m.id}>
-          {m.label} · {m.tier}
+          {m.label} · {m.tier}{m.metered ? ' · metered $' : ''}
         </option>
       ))}
     </select>
@@ -69,6 +70,15 @@ export default function RoutingPolicyForm({
 
   const state = useMemo(() => budgetState(spentUsd, policy), [spentUsd, policy]);
   const style = STATUS_STYLE[state.status];
+
+  // Which lanes this policy actually routes to (default + each priority's
+  // effective model). If any is metered, warn — those spend real API dollars
+  // (DeepSeek/GPT) unlike the flat Claude subscription lanes.
+  const meteredModels = useMemo(() => {
+    const ids = new Set<string>([policy.defaultModel]);
+    for (const pr of PRIORITIES) ids.add(policy.priorityOverrides[pr] || policy.defaultModel);
+    return MODEL_OPTIONS.filter((m) => ids.has(m.id) && m.metered).map((m) => m.label);
+  }, [policy]);
 
   function patch(p: Partial<RoutingPolicy>) {
     setPolicy((prev) => ({ ...prev, ...p }));
@@ -132,12 +142,30 @@ export default function RoutingPolicyForm({
 
       {/* ── Model routing rules ───────────────────────────────── */}
       <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5 space-y-4">
-        <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Model routing</h2>
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="text-sm font-semibold text-[rgb(var(--text-primary))]">Model routing</h2>
+          <span className="text-xs text-[rgb(var(--text-muted))]">
+            <span className="text-amber-400 font-mono">metered $</span> = bills real API dollars (DeepSeek, GPT)
+          </span>
+        </div>
         <div>
-          <label htmlFor="default-model" className="block text-xs text-[rgb(var(--text-secondary))] mb-1">Default model</label>
+          <label htmlFor="default-model" className="block text-xs text-[rgb(var(--text-secondary))] mb-1">
+            Default model
+            {isMeteredModel(policy.defaultModel) && (
+              <span className="ml-2 text-amber-400 font-mono">metered $</span>
+            )}
+          </label>
           <ModelSelect id="default-model" value={policy.defaultModel} onChange={(v) => patch({ defaultModel: v })} />
           <p className="text-xs text-zinc-600 mt-1">Used for any priority without an explicit override.</p>
         </div>
+
+        {meteredModels.length > 0 && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+            This policy routes to metered {meteredModels.length === 1 ? 'provider' : 'providers'}{' '}
+            <span className="font-mono">{meteredModels.join(', ')}</span> — these spend real per-token
+            API dollars, unlike the flat-rate Claude subscription lanes. Keep the monthly cap below in mind.
+          </div>
+        )}
 
         <div>
           <div className="text-xs text-[rgb(var(--text-secondary))] mb-2">Per-priority overrides</div>
@@ -150,7 +178,10 @@ export default function RoutingPolicyForm({
                 <div key={pr}>
                   <label htmlFor={`ov-${pr}`} className="flex items-center justify-between text-xs mb-1">
                     <span className="font-mono text-[rgb(var(--text-primary))]">{pr}</span>
-                    <span className={TIER_STYLE[tier] ?? 'text-[rgb(var(--text-muted))]'}>{tier || '—'}</span>
+                    <span className="flex items-center gap-1">
+                      {isMeteredModel(effective) && <span className="text-amber-400 font-mono">$</span>}
+                      <span className={TIER_STYLE[tier] ?? 'text-[rgb(var(--text-muted))]'}>{tier || '—'}</span>
+                    </span>
                   </label>
                   <ModelSelect id={`ov-${pr}`} value={val} onChange={(v) => setOverride(pr, v)} allowInherit />
                 </div>
@@ -250,8 +281,8 @@ export default function RoutingPolicyForm({
         >
           {saving ? 'Saving…' : 'Save policy'}
         </button>
-        {saved && <span className="text-xs text-emerald-400">Saved.</span>}
-        {error && <span className="text-xs text-rose-400">{error}</span>}
+        {saved && <span role="status" className="text-xs text-emerald-400">Saved.</span>}
+        {error && <span role="alert" className="text-xs text-rose-400">{error}</span>}
       </div>
     </div>
   );

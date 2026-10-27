@@ -34,7 +34,12 @@ const log = createChildLogger({ module: 'betac-context-bundle' });
 /** Default total budget for the bundle, in characters (~4 chars/token). */
 const DEFAULT_BUDGET_CHARS = 1800;
 /** Master repo name — the fallback "active project" when nothing scores higher. */
-const MASTER_REPO = 'ai_management';
+/**
+ * No project known (nothing ranked, no repo hint): a NEUTRAL boot. It never falls
+ * back to a hard-coded repo — the old `MASTER_REPO = 'ai_management'` fallback
+ * booted every fresh install into the operator's own project (v1 G2 B6).
+ */
+const NO_PROJECT = '';
 
 export interface BundleParts {
   identity: string;
@@ -80,7 +85,9 @@ export interface OperatorBrief {
 export function briefFromParts(parts: BundleParts): OperatorBrief {
   return {
     who: parts.identity,
-    state: `Active project: ${parts.activeProject}`,
+    state: parts.activeProject
+      ? `Active project: ${parts.activeProject}`
+      : 'Active project: none yet — open the agent in a repo where you ran `myai init`, or pass `repo` to `context_boot`',
     handoff: parts.handoffSummary,
     next: parts.planFocus,
   };
@@ -175,15 +182,21 @@ function resolveBootManifest(tenantId: string, repo: string): BootManifest | und
   }
 }
 
-/** Pick the active project: highest-priority repo, else the master repo. */
-async function resolveActiveProject(tenantId: string): Promise<string> {
+/**
+ * Pick the active project: the caller's repo when it sent one (the stdio bridge
+ * forwards its checkout's namespace as `x-myai-repo`, ctx.callerRepo), else the
+ * highest-priority repo, else NO project (a neutral boot — never a hard-coded
+ * repo name).
+ */
+async function resolveActiveProject(tenantId: string, hint?: string): Promise<string> {
+  if (hint && hint.trim()) return hint.trim();
   try {
     const ranked = await getContextReadService().prioritizeRepos(tenantId);
     if (ranked.length && ranked[0].score > 0) return ranked[0].repo;
   } catch (err) {
-    log.debug({ err }, 'prioritizeRepos failed — defaulting active project');
+    log.debug({ err }, 'prioritizeRepos failed — no active project');
   }
-  return MASTER_REPO;
+  return NO_PROJECT;
 }
 
 /** Latest handoff summary for the active project (summary, else content head). */
@@ -300,7 +313,7 @@ export function renderBundle(parts: BundleParts, budget: number = budgetChars())
  */
 export async function buildContextBundle(
   tenantId: string,
-  opts: { now?: () => Date } = {},
+  opts: { now?: () => Date; repo?: string } = {},
 ): Promise<string | undefined> {
   if (!isAutoBootEnabled()) return undefined;
 
@@ -308,7 +321,10 @@ export async function buildContextBundle(
   const identity = resolveIdentity();
 
   try {
-    const activeProject = await resolveActiveProject(tenantId);
+    const activeProject = await resolveActiveProject(tenantId, opts.repo);
+    if (!activeProject) {
+      return renderBundle({ identity, activeProject, generatedAt: (opts.now?.() ?? new Date()).toISOString() }, budget);
+    }
     // Split the remaining budget between handoff (most valuable) and plan.
     // The compiled brain brief (distilled at the last brain_merge) beats the
     // handoff store when present — it's the purpose-built ~150-token boot line.
@@ -340,7 +356,7 @@ export async function buildContextBundle(
     // Last-resort: never fail the MCP handshake over context assembly.
     log.warn({ err }, 'betaC bundle assembly failed — returning identity-only');
     return renderBundle(
-      { identity, activeProject: MASTER_REPO, generatedAt: new Date().toISOString() },
+      { identity, activeProject: opts.repo?.trim() || NO_PROJECT, generatedAt: new Date().toISOString() },
       budget,
     );
   }
@@ -426,6 +442,9 @@ export async function expandContext(
   }
 }
 
+/** No project known — buildBootBundle takes its identity-only path (not an error). */
+class NoProjectYet extends Error {}
+
 /**
  * Build the callable boot bundle. Same tight summary as the handshake bundle,
  * returned structured so a shim/agent can consume it directly. When `query` is
@@ -443,7 +462,8 @@ export async function buildBootBundle(
   let parts: BundleParts;
   let manifest: BootManifest | undefined;
   try {
-    const activeProject = opts.repo?.trim() || (await resolveActiveProject(tenantId));
+    const activeProject = await resolveActiveProject(tenantId, opts.repo);
+    if (!activeProject) throw new NoProjectYet();
     // Compiled brain brief first (BRAIN B3), handoff store as the fallback.
     // Handoff-store read and plan read are independent stores — run them
     // concurrently rather than paying both round trips sequentially on this
@@ -468,8 +488,8 @@ export async function buildBootBundle(
       generatedAt: (opts.now?.() ?? new Date()).toISOString(),
     };
   } catch (err) {
-    log.warn({ err }, 'buildBootBundle assembly failed — identity-only');
-    parts = { identity, activeProject: opts.repo?.trim() || MASTER_REPO, generatedAt: new Date().toISOString() };
+    if (!(err instanceof NoProjectYet)) log.warn({ err }, 'buildBootBundle assembly failed — identity-only');
+    parts = { identity, activeProject: opts.repo?.trim() || NO_PROJECT, generatedAt: new Date().toISOString() };
   }
 
   const bundle = renderBundle(parts, budget);

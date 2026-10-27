@@ -2,20 +2,19 @@
 # setup_org_envrc.sh — Multi-Org-Auth Phase 2: per-repo direnv auto-switch.
 #
 # Reads config/repo_org_map.txt and drops a machine-local, gitignored `.envrc`
-# into each mapped Powerhouse/Team repo so that `cd`-ing into it auto-selects the
-# right Claude org via CLAUDE_CONFIG_DIR (no thinking required). Personal repos
-# need no .envrc — the bare `~/.claude` default already covers them.
+# into each mapped repo so that `cd`-ing into it auto-selects the right Claude
+# org via CLAUDE_CONFIG_DIR (no thinking required). Repos on the bare default
+# need no .envrc — `~/.claude` already covers them.
 #
-#   museum   -> export CLAUDE_CONFIG_DIR=$HOME/.claude-museum
-#   tech     -> export CLAUDE_CONFIG_DIR=$HOME/.claude-tech
-#   personal -> (skipped: bare default ~/.claude)
+#   <name>   -> export CLAUDE_CONFIG_DIR=$HOME/.claude-<name>   ([a-z0-9_-])
+#   default  -> (skipped: bare default ~/.claude)
 #
 # The .envrc is kept out of git via each repo's .git/info/exclude (machine-local,
 # never committed) — repos are Dropbox-synced, so a tracked .envrc would leak one
 # machine's absolute paths to another. Re-run safely any time: .envrc is only
 # (re)written when missing or changed; `direnv allow` re-runs after a change.
 #
-# ACTIVATION: once you fill config/repo_org_map.txt with real museum/tech repos,
+# ACTIVATION: once you fill config/repo_org_map.txt with real `<repo> <name>` rows,
 # the auto-switch activates two ways —
 #   1. automatically: the 18-machine-selfheal session hook runs this script on
 #      the next `agent mode` / session start (when direnv is present + the map has
@@ -67,12 +66,12 @@ resolve_dir() {
   # Not found — print nothing.
 }
 
+# Profile names are user data (v1 G6 P4): a key is a profile when
+# ~/.claude-<key> exists on this Mac; anything else is unknown (empty).
 org_dir_for() {
   case "$1" in
-    museum)   printf '%s' "$HOME/.claude-museum" ;;
-    tech)     printf '%s' "$HOME/.claude-tech" ;;
-    personal) printf '%s' "" ;;   # bare default — no .envrc
-    *)        printf '%s' "" ;;
+    default|''|*[!a-z0-9_-]*) printf '%s' "" ;;   # bare default / invalid — no .envrc
+    *) if [ -d "$HOME/.claude-$1" ]; then printf '%s' "$HOME/.claude-$1"; else printf '%s' ""; fi ;;
   esac
 }
 
@@ -112,7 +111,7 @@ main() {
     say ""
   fi
 
-  WROTE=0; SKIPPED=0; UNRESOLVED=0; PERSONAL=0
+  WROTE=0; SKIPPED=0; UNRESOLVED=0; BARE=0
 
   while IFS= read -r line; do
     case "$line" in ''|\#*) continue ;; esac
@@ -122,9 +121,9 @@ main() {
     [ -z "$repo" ] && continue
     [ -z "$orgkey" ] && { say "  ! no org-key for '$repo' — skipping"; SKIPPED=$((SKIPPED+1)); continue; }
 
-    if [ "$orgkey" = "personal" ]; then
-      say "  · $repo -> personal (bare default, no .envrc needed)"
-      PERSONAL=$((PERSONAL+1)); continue
+    if [ "$orgkey" = "default" ]; then
+      say "  · $repo -> default (bare ~/.claude, no .envrc needed)"
+      BARE=$((BARE+1)); continue
     fi
 
     cfgdir=$(org_dir_for "$orgkey")
@@ -185,13 +184,13 @@ export CLAUDE_CONFIG_DIR=\"$cfgdir\""
   say ""
   say "== Summary =="
   say "  written/updated : $WROTE"
-  say "  personal (skip) : $PERSONAL"
+  say "  default (skip)  : $BARE"
   say "  bad org-key     : $SKIPPED"
   say "  unresolved repo : $UNRESOLVED"
   say ""
-  if [ "$WROTE" = "0" ] && [ "$PERSONAL" = "0" ] && [ "$SKIPPED" = "0" ] && [ "$UNRESOLVED" = "0" ]; then
+  if [ "$WROTE" = "0" ] && [ "$BARE" = "0" ] && [ "$SKIPPED" = "0" ] && [ "$UNRESOLVED" = "0" ]; then
     say "Org map has no active (uncommented) entries yet — fill in config/repo_org_map.txt"
-    say "with your museum/tech repos, then re-run this script (or start a new session:"
+    say "with your repos and profile names, then re-run this script (or start a new session:"
     say "the machine-selfheal hook activates it automatically once the map is filled)."
   fi
 }

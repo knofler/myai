@@ -50,7 +50,7 @@ const COMMANDS = [
   { name: 'demo', args: '[args...]', script: 'myai_demo.sh',
     desc: 'Seed the dashboard with realistic sample data — tasks, schedules, plan, repo cards, memory, budget rows (idempotent; --clean removes, --force re-seeds)' },
   { name: 'new-app', args: '[args...]', script: 'myai_new_app.sh',
-    desc: 'Two modes, one verb: `new-app <path>` scaffolds a full-stack app offline from the powerhouse blueprint (init_blueprint.sh flags all still work — --gh-create, --vercel, --mode, etc.); `new-app "<idea>"` (or `--idea "<idea>"`) drives agentFlow\'s headless idea→app pipeline (POST /api/headless/new-app, x-gateway-local-token) and self-registers the produced repo via repos_upsert (ADR-021). Dispatches on argument shape: any whitespace in the first arg means idea mode' },
+    desc: 'Two modes, one verb: `new-app <path>` scaffolds a full-stack app offline from the bundled myAI blueprint (init_blueprint.sh flags all still work — --gh-create, --vercel, --mode, etc.); `new-app "<idea>"` (or `--idea "<idea>"`) drives agentFlow\'s headless idea→app pipeline (POST /api/headless/new-app, x-gateway-local-token) and self-registers the produced repo via repos_upsert (ADR-021). Dispatches on argument shape: any whitespace in the first arg means idea mode' },
   { name: 'connect', args: '[path]', script: 'init_connect.sh',
     desc: 'Install the Connect Hub module into a project' },
   { name: 'plug', args: '[agent...]', script: 'myai_plug.sh',
@@ -68,7 +68,7 @@ const COMMANDS = [
   { name: 'config', args: '[args...]', script: 'myai_config.sh',
     desc: 'Safe front-end for the per-user ~/.myai/config store — view/set keys (org, gateway URL, brain wiring, model routing) with SCHEMA VALIDATION instead of hand-editing the JSON: `config`/`config list` [--json][--reveal] (values redacted where secret-shaped, unknown keys flagged); `config keys` (the schema: every known key + type + description); `config get <key>`; `config set <key> <value>` (per-key validation — URL/enum/path/model-id; unknown keys refused unless --force; secret-named keys ALWAYS refused — credentials live in ~/.myai/credentials via `myai login`/`myai rotate-keys`, never in config); `config unset <key>`; `config path`. Purely local (no gateway round-trip)' },
   { name: 'mcp', args: '[args...]', script: 'myai_mcp.sh',
-    desc: 'Propagate the MCP server config through the installed module (not update_all): `mcp repo [path]` writes/refreshes a repo .mcp.json from the bundled template (deep-merge — framework servers canonical, custom preserved); `mcp sync [museum|tech|personal|all]` refreshes the per-org Claude config dirs from the template; `mcp print` shows the base config. --dry-run supported' },
+    desc: 'Propagate the MCP server config through the installed module (not update_all): `mcp repo [path]` writes/refreshes a repo .mcp.json from the bundled template (deep-merge — framework servers canonical, custom preserved); `mcp add <name>... | --list` adds opt-in servers (shadcn-ui, playwright, dropbox, github, vercel, or all) to a repo .mcp.json; `mcp vscode [path]` does the same for the VS Code .vscode/mcp.json (Copilot/Codex-in-VS-Code agent mode); `mcp sync [<profile>|all]` refreshes the per-org Claude config dirs from the template; `mcp print` shows the base config. --dry-run supported' },
   { name: 'mirror', args: '[args...]', script: 'mongo_mirror.sh',
     desc: 'Keep a LOCAL copy of the gateway memory + registry so localhost is not single-point-of-failure on Atlas. Streams mongodump→mongorestore (Atlas → local by default) in a throwaway mongo:7 container — no host mongo tools. --dry-run previews; --collections a,b scopes; --reverse (local → Atlas) is guarded behind --yes; --install-schedule [--every-minutes N] / --schedule-status / --uninstall-schedule manage the periodic (hourly default) launchd/cron refresh' },
   { name: 'sync', args: '[args...]', script: 'mongo_sync.sh',
@@ -95,8 +95,12 @@ const COMMANDS = [
     desc: 'Snapshot the git-versioned brain repo + ~/.myai config files into one dated .tar.gz archive (--out <file> or [dir] to place it; round-trips with `myai restore`)' },
   { name: 'restore', args: '[args...]', script: 'myai_restore.sh',
     desc: 'Restore a `myai backup` archive — brain repo → this machine\'s resolved dir (or --to <dir>) + config → ~/.myai; refuses to clobber without --force (existing state → .bak; --dry-run previews)' },
+  { name: 'uninstall', args: '[args...]', script: 'myai_uninstall.sh',
+    desc: 'Remove what myAI installed on this machine. Dry run by default (lists exactly what it found); --yes removes it: com.myai.* scheduled jobs, our marked shell-rc blocks only, the statusline, our myai entry in other agents\' MCP configs (every other byte kept), myAI containers/network/images, and the state dir EXCEPT the brain. --volumes also drops the database volume; --purge-brain saves the brain to ~/myai-brain-final-<ts>.bundle first, then removes it; --repo <path> cleans that repo\'s .myai-local, .gitignore line and .mcp.json entry (never commits). Finish with `npm rm -g ai-management`' },
   { name: 'upgrade', args: '[args...]', script: 'myai_upgrade.sh',
     desc: 'Self-update the global CLI (`npm update -g`) then run pending config + brain schema migrations idempotently (--check reports without applying, exit 20 if pending; --dry-run previews; --no-self-update skips the npm step; --json for scripts)' },
+  { name: 'swarm', args: 'master [set|show|list|check|migrate|who|take|release|stop] [args...]', script: 'myai_swarm.sh',
+    desc: 'This device\'s swarm master — every device has exactly one, chosen at install: `swarm master set` lists the agents and profiles detected here and asks which one coordinates (flags --agent/--profile/--repo for scripts), writing the per-host ~/.myai/swarm/master.<host> (never Dropbox); `show` / `list`; `check` = OK/WARN/RED (configured master holds the coordinator lease AND runs its mail watcher); `migrate` writes legacy hosts\' current master + order (run by `myai upgrade`); any other verb goes to scripts/swarm_master.sh (who/take/release/stop)' },
   { name: 'doctor', args: '[args...]', handler: doctor,
     desc: 'Run preflight checks: docker (+engine), node, claude CLI, ANTHROPIC_API_KEY, cloud reachability, ollama availability, brain freshness, mongo mirror schedule (+last run), ports free. --dry-run previews the safe auto-fixes; --fix applies them idempotently (backfill non-secret .env keys from .env.example, redeploy statusline, correct runner cadence, pull latest gateway image) — never touches secrets or restarts the shared stack (--json for CI/scripts; exit 0 = passed)' },
   { name: 'root', args: '[args...]', handler: root,
@@ -168,10 +172,134 @@ function dispatch(cmd, extraArgs) {
 // Every check is recorded as {label, status, detail} into a shared array; the
 // human and --json output paths both render from that ONE result set, so the
 // two can never drift.
+// swarmMasterStatus → {status: 'ok'|'warn'|'fail', detail} from
+// scripts/swarm_master.sh check: rc 0 OK · 1 WARN (incl. "no master yet, and no
+// agent detected" — a fresh install) · 2 lease not held · 3 none configured
+// while an agent/profile exists (FAIL, with its fix).
+function swarmMasterStatus() {
+  const r = spawnSync('bash', [path.join(SCRIPTS_DIR, 'swarm_master.sh'), 'check'], {
+    encoding: 'utf8', timeout: 15000, env: { ...process.env, KL_TIMEOUT: process.env.KL_TIMEOUT || '3' },
+  });
+  const line = String((r && r.stdout) || '').trim().split('\n')[0] || 'check gave no answer';
+  if (r && r.status === 0) return { status: 'ok', detail: line.replace(/^OK — /, '') };
+  if (r && r.status === 3) return { status: 'fail', detail: line.replace(/^RED — /, '') };
+  return { status: 'warn', detail: line.replace(/^(WARN|RED) — /, '') };
+}
+
+// `myai doctor` explains every WARN/FAIL in plain words (v1 gate G6): one
+// entry per check — why it matters and what to do. Keys are the check labels;
+// dynamic labels map through explainKey(). Agent-agnostic on purpose: no
+// lane or profile names, "your agent" where an agent is meant.
+// runtime/tests/unit/doctor-explain.test.ts fails if a check has no entry.
+const DOCTOR_EXPLAIN = {
+  'node >= 20': {
+    why: 'The myai CLI and gateway use Node 20+ features; an older Node fails at start-up.',
+    fix: 'Install Node 20 or newer (nodejs.org, `brew install node`, or your package manager), then re-run `myai doctor`.' },
+  'docker on PATH': {
+    why: 'The gateway, dashboard and database all run as Docker containers.',
+    fix: 'Install Docker Desktop (macOS/Windows) or Docker Engine (Linux).' },
+  'docker engine running': {
+    why: 'Docker is installed but its engine is not running, so no container can start.',
+    fix: 'Start Docker Desktop (or `sudo systemctl start docker` on Linux) and wait until it reports running.' },
+  'docker compose': {
+    why: '`myai up` starts the stack with the Docker Compose v2 plugin.',
+    fix: 'Update Docker Desktop, or install the `docker-compose-plugin` package on Linux.' },
+  'git on PATH': {
+    why: 'The brain is a git repository, and connecting a repo reads its git metadata.',
+    fix: 'Install git (`xcode-select --install` on macOS, or your package manager).' },
+  'tmux on PATH': {
+    why: 'Remote (phone-driven) sessions run inside tmux so they survive the terminal closing.',
+    fix: 'Install tmux (`brew install tmux` or your package manager). Only needed for remote sessions.' },
+  'claude CLI': {
+    why: 'The background task runner drives an agent CLI; with no CLI and no API key, queued tasks cannot run.',
+    fix: "Install your agent's CLI and sign in, or set ANTHROPIC_API_KEY. Optional if you don't use the runner." },
+  'ANTHROPIC_API_KEY': {
+    why: 'A Claude agent (model calls, the task runner) needs either an API key or a signed-in Claude CLI. Not needed without a Claude agent.',
+    fix: 'Add ANTHROPIC_API_KEY=... to the .env next to docker-compose.yml, or sign in to your agent CLI.' },
+  'GATEWAY_LOCAL_TOKEN': {
+    why: 'This token lets local tools call the gateway. The published default is public, so anyone who can reach the port could use it.',
+    fix: 'Run `myai rotate-keys local` to generate a private token.' },
+  'GATEWAY_LOCAL_TOKEN_PREVIOUS': {
+    why: 'The rotation slot accepts an old token for a grace period; holding the public default re-opens the hole.',
+    fix: 'Remove GATEWAY_LOCAL_TOKEN_PREVIOUS from .env, or rotate again with `myai rotate-keys local`.' },
+  'cloud provider reachable': {
+    why: 'Without network access to the model provider, cloud inference is unavailable and myAI falls back to local models.',
+    fix: 'Check your network or proxy settings, or install Ollama for offline use.' },
+  'ollama available': {
+    why: 'Ollama is the offline fallback for inference.',
+    fix: 'Optional: install Ollama (ollama.com) and pull a model with `ollama pull <model>`.' },
+  'offline inference path': {
+    why: 'With neither the cloud nor Ollama available, only read-only access to the brain works.',
+    fix: 'Restore network access, or install Ollama.' },
+  'MCP mode': {
+    why: 'The gateway is not answering, so agents fall back to the local brain server: brain and recall work, but the rest of the myAI tools are missing.',
+    fix: 'Run `myai up`, then restart your agent so it reconnects to the gateway.' },
+  'brain freshness': {
+    why: 'The brain is where sessions are saved. If it is missing or unchanged for a week, your agent starts without recent context.',
+    fix: 'Run `myai brain init` if it is missing; otherwise end sessions with a wrap-up so they commit to the brain.' },
+  'brain integrity': {
+    why: 'A brain with a broken HEAD or missing objects cannot be read or merged, and an upgrade cannot snapshot it safely.',
+    fix: 'Run `git -C <brain dir> fsck` to see the damage, then restore from your latest `myai backup` or a remote copy of the brain.' },
+  'config migrations': {
+    why: 'Your ~/.myai config or brain layout is older than this version expects.',
+    fix: 'Run `myai upgrade` (it snapshots the brain first).' },
+  'scheduled job': {
+    why: 'A myAI background job is installed but not loaded, or points at a script that no longer exists, so it silently never runs.',
+    fix: 'Re-run the matching `--install-schedule` command from your current install, or remove the job with its uninstall option.' },
+  'agent MCP': {
+    why: "Your agent's MCP config is how it reaches the myAI gateway; without the entry it starts without your context.",
+    fix: 'Run `myai plug <agent> --install` (`myai plug` lists the agents), then restart the agent.' },
+  'repo connected': {
+    why: 'This git repo is not connected to myAI, so sessions here will not load or save context.',
+    fix: 'Run `myai init` in this repo.' },
+  'mongo mirror schedule': {
+    why: 'The mirror keeps a local copy of the cloud database for fast and offline reads.',
+    fix: 'Optional: install or repair it with `myai mirror --install-schedule`; see ~/.myai/logs/mongo-mirror.err when runs fail.' },
+  'swarm master': {
+    why: 'Each device has one master session that coordinates the others; without one, parallel sessions are not coordinated.',
+    fix: 'Run `myai swarm master set` and pick your main agent profile.' },
+  'runner backlog well': {
+    why: 'The task runner draws background work from this list; when it runs low a planning task refills it.',
+    fix: 'Usually nothing to do. If it stays low, check the task runner logs.' },
+  'session hook timing': {
+    why: 'Slow start-up hooks delay every new agent session.',
+    fix: 'Run `myai doctor --json` to see the timing, then disable or speed up the slowest hook.' },
+  'scripts/ directory': {
+    why: 'The install is incomplete: the CLI cannot find its scripts.',
+    fix: 'Reinstall with `npm i -g ai-management`.' },
+  'docker-compose.yml': {
+    why: 'Without the compose file, `myai up` cannot start the stack.',
+    fix: 'Reinstall the package, or run from the directory that has docker-compose.yml.' },
+  '.mcp.json': {
+    why: 'Without .mcp.json in this folder, your agent will not connect to the gateway when started here.',
+    fix: 'Run `myai init` in this repo, or `myai mcp repo`.' },
+  'port free': {
+    why: 'Another process holds a port the stack needs, so that container will not start.',
+    fix: 'Stop the process (`lsof -i :<port>` shows it), or run `myai down` if it is an old myAI stack.' },
+};
+
+function explainKey(label) {
+  if (/^port \d+ free$/.test(label)) return 'port free';
+  if (label.startsWith('scheduled job ')) return 'scheduled job';
+  if (label.endsWith(' MCP')) return 'agent MCP';
+  return label;
+}
+
+function explainFor(label) {
+  const key = explainKey(label);
+  const e = DOCTOR_EXPLAIN[key];
+  return e ? { id: key.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), ...e } : null;
+}
+
 function recordInto(checks) {
   return (label, ok, detail) => {
     const status = ok === true ? 'ok' : ok === 'warn' ? 'warn' : 'fail';
-    checks.push({ label, status, detail: detail || '' });
+    const row = { label, status, detail: detail || '' };
+    if (status !== 'ok') {
+      const e = explainFor(label);
+      if (e) Object.assign(row, { id: e.id, why: e.why, fix: e.fix });
+    }
+    checks.push(row);
     return ok === true || ok === 'warn';
   };
 }
@@ -196,20 +324,57 @@ function portInUse(port) {
   return r.status === 0;
 }
 
-// Look for ANTHROPIC_API_KEY in the environment, then in a local .env (cwd or
-// package root). A placeholder value (your_..., empty) does not count as set.
-function findAnthropicKey() {
+// claudeAgentConfigured → true when this machine is set up for a Claude agent
+// even without the CLI on PATH: CLAUDE_CONFIG_DIR is set, or a ~/.claude /
+// ~/.claude-<x> profile dir exists. Used to decide whether a missing
+// ANTHROPIC_API_KEY is worth a WARN (task-51235f67).
+function claudeAgentConfigured() {
+  if (process.env.CLAUDE_CONFIG_DIR) return true;
+  const home = require('node:os').homedir();
+  try {
+    return fs.readdirSync(home).some((n) => (n === '.claude' || n.startsWith('.claude-'))
+      && fs.statSync(path.join(home, n)).isDirectory());
+  } catch { return false; }
+}
+
+// isPlaceholderKey → true for a value that is SET but obviously not a key:
+// your_api_key_here / your-key-here, sk-ant-xxx, <your key>, changeme,
+// anything containing "placeholder".
+function isPlaceholderKey(v) {
+  const t = String(v || '').trim().replace(/^["']|["']$/g, '');
+  return /^your[_-]/i.test(t) || /^<.*>$/.test(t) || /^sk-ant-x+$/i.test(t)
+    || /^x{3,}$/i.test(t) || /^(changeme|change-me|replace[_-]?me|todo)$/i.test(t)
+    || /placeholder/i.test(t);
+}
+
+// anthropicKeyCandidates → every place ANTHROPIC_API_KEY is SET (non-empty),
+// in lookup order: the environment, then a local .env (cwd, package root).
+function anthropicKeyCandidates() {
+  const out = [];
   const envVal = process.env.ANTHROPIC_API_KEY;
-  if (envVal && envVal.trim() && !/^your_/i.test(envVal.trim())) return 'environment';
+  if (envVal && envVal.trim()) out.push({ src: 'environment', value: envVal.trim() });
   for (const dir of [process.cwd(), REPO_ROOT]) {
     const f = path.join(dir, '.env');
     if (!fs.existsSync(f)) continue;
     const m = fs.readFileSync(f, 'utf8').match(/^\s*ANTHROPIC_API_KEY\s*=\s*(.+?)\s*$/m);
-    if (m && m[1] && m[1].trim() && !/^your_/i.test(m[1].trim())) {
-      return path.relative(process.cwd(), f) || '.env';
-    }
+    if (m && m[1] && m[1].trim()) out.push({ src: path.relative(process.cwd(), f) || '.env', value: m[1].trim() });
   }
-  return null;
+  return out;
+}
+
+// Look for ANTHROPIC_API_KEY in the environment, then in a local .env (cwd or
+// package root). A placeholder value (see isPlaceholderKey) or an empty one
+// does not count as set.
+function findAnthropicKey() {
+  const c = anthropicKeyCandidates().find((k) => !isPlaceholderKey(k.value));
+  return c ? c.src : null;
+}
+
+// findAnthropicPlaceholder → where a placeholder ANTHROPIC_API_KEY is set (the
+// first one), or null. A misconfiguration doctor names, never a FAIL.
+function findAnthropicPlaceholder() {
+  const c = anthropicKeyCandidates().find((k) => isPlaceholderKey(k.value));
+  return c ? c.src : null;
 }
 
 // The GATEWAY_LOCAL_TOKEN fallback docker-compose.yml/.mcp.json/templates used
@@ -248,6 +413,19 @@ function hostReachable(host, port, timeoutMs) {
   return r.status === 0;
 }
 
+// The gateway's /health, as the stdio bridge (scripts/lib/mcp_myai_stdio.sh)
+// probes it to pick gateway vs local MCP: MYAI_GATEWAY_MCP_URL, else
+// localhost:${MCP_PORT:-3100}. Up = HTTP 200 within ~1 s.
+function probeGatewayHealth() {
+  const mcpUrl = process.env.MYAI_GATEWAY_MCP_URL || `http://localhost:${process.env.MCP_PORT || 3100}/mcp`;
+  const url = mcpUrl.replace(/\/mcp$/, '') + '/health';
+  const probe =
+    `fetch(${JSON.stringify(url)},{signal:AbortSignal.timeout(1000)})` +
+    `.then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))`;
+  const r = spawnSync(process.execPath, ['-e', probe]);
+  return { up: r.status === 0, url: mcpUrl };
+}
+
 // Probe the local Ollama daemon (BRAIN B6): GET /api/tags on OLLAMA_BASE_URL
 // (default 127.0.0.1:11434). Exit 0 + model count on stdout when it answers.
 function probeOllamaDaemon() {
@@ -276,9 +454,89 @@ function probeOllamaDaemon() {
 // Locate the brain repo (mirrors scripts/lib/brain.sh resolution order:
 // $MYAI_BRAIN_DIR → $MYAI_HOME/brain.path pointer → $MYAI_HOME/brain) and
 // report how fresh brain main is (age of the last commit).
-function brainFreshness() {
+// The per-user state dir, by the same rule as scripts/lib/brain.sh brain_home():
+// MYAI_HOME, unless it points at a framework checkout (its old meaning) —
+// then ~/.myai. Without this, a host exporting MYAI_HOME=<framework repo>
+// had its brain looked up inside the repo.
+function myaiStateHome() {
   const os = require('node:os');
-  const home = process.env.MYAI_HOME || path.join(os.homedir(), '.myai');
+  const h = process.env.MYAI_HOME;
+  const isFramework = h && fs.existsSync(path.join(h, 'scripts', 'lib', 'brain.sh')) && fs.existsSync(path.join(h, 'runtime'));
+  return h && !isFramework ? h : path.join(process.env.HOME || os.homedir(), '.myai');
+}
+
+// Brain repo integrity: HEAD resolves, objects connect, and how many atoms
+// (markdown files) it holds. Read-only.
+function brainIntegrity(dir) {
+  const head = spawnSync('git', ['-C', dir, 'rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' });
+  if (head.status !== 0) return { ok: false, detail: `${dir} — HEAD does not resolve (empty or damaged repo)` };
+  const fsck = spawnSync('git', ['-C', dir, 'fsck', '--connectivity-only', '--no-progress'], { encoding: 'utf8', timeout: 60000 });
+  const files = spawnSync('git', ['-C', dir, 'ls-files'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const atoms = (files.stdout || '').split('\n').filter((f) => f.endsWith('.md')).length;
+  const sha = (head.stdout || '').trim().slice(0, 8);
+  if (fsck.status !== 0) {
+    const why = ((fsck.stderr || fsck.stdout || '').trim().split('\n')[0] || `fsck exited ${fsck.status}`);
+    return { ok: false, detail: `${dir} @ ${sha} — git fsck failed: ${why}` };
+  }
+  return { ok: true, detail: `${dir} @ ${sha} — ${atoms} atom(s), objects connected` };
+}
+
+// Pending config/brain migrations, via the same migrator `myai upgrade` runs.
+function pendingMigrations(home, brainDir) {
+  const migrator = path.join(SCRIPTS_DIR, 'lib', 'myai_migrate.py');
+  if (!fs.existsSync(migrator)) return { status: 'unknown', detail: 'migrator not found in this install' };
+  const r = spawnSync('python3', [migrator, '--home', home, '--brain', brainDir, '--check'], { encoding: 'utf8', timeout: 30000 });
+  if (r.status === 0) return { status: 'ok', detail: 'config and brain layout are current' };
+  if (r.status === 20) return { status: 'pending', detail: 'migrations pending — run `myai upgrade`' };
+  return { status: 'unknown', detail: `could not check (migrator exited ${r.status ?? 'with an error'})` };
+}
+
+// Installed com.myai.* launchd jobs (macOS): loaded, and every script path in
+// ProgramArguments still exists. Elsewhere → [].
+function scheduledJobs() {
+  if (process.platform !== 'darwin') return [];
+  const agents = path.join(process.env.HOME || require('node:os').homedir(), 'Library', 'LaunchAgents');
+  let names = [];
+  try { names = fs.readdirSync(agents).filter((n) => /^com\.myai\..+\.plist$/.test(n)); } catch { return []; }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : '';
+  return names.sort().map((n) => {
+    const label = n.replace(/\.plist$/, '');
+    const file = path.join(agents, n);
+    const pa = spawnSync('plutil', ['-extract', 'ProgramArguments', 'json', '-o', '-', file], { encoding: 'utf8' });
+    let args = [];
+    try { args = JSON.parse(pa.stdout || '[]'); } catch { /* unreadable → no path check */ }
+    const missing = args.filter((a) => typeof a === 'string' && a.startsWith('/') && /\.(sh|py|cjs|js)$/.test(a) && !fs.existsSync(a));
+    const loaded = spawnSync('launchctl', ['print', `gui/${uid}/${label}`], { encoding: 'utf8' }).status === 0;
+    const problems = [];
+    if (!loaded) problems.push('not loaded');
+    if (missing.length) problems.push(`missing ${missing.join(', ')}`);
+    return { label, ok: problems.length === 0, detail: problems.length ? problems.join('; ') : 'loaded' };
+  });
+}
+
+// Other agents' MCP configs written by `myai connect`: reported only when the
+// agent's config file exists (the agent is installed).
+function agentMcpEntries() {
+  const home = process.env.HOME || require('node:os').homedir();
+  const out = [];
+  for (const [name, rel] of [['Cursor', '.cursor/mcp.json'], ['Windsurf', '.codeium/windsurf/mcp_config.json']]) {
+    const file = path.join(home, rel);
+    if (!fs.existsSync(file)) continue;
+    let has = false;
+    try { has = !!(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers || {}).myai; } catch { /* invalid JSON → not connected */ }
+    out.push({ name, has, file });
+  }
+  const codex = path.join(home, '.codex', 'config.toml');
+  if (fs.existsSync(codex)) {
+    let has = false;
+    try { has = fs.readFileSync(codex, 'utf8').split('\n').some((l) => l.trim() === '[mcp_servers.myai]'); } catch { /* unreadable */ }
+    out.push({ name: 'Codex', has, file: codex });
+  }
+  return out;
+}
+
+function brainFreshness() {
+  const home = myaiStateHome();
   let dir = process.env.MYAI_BRAIN_DIR;
   if (!dir) {
     const ptr = path.join(home, 'brain.path');
@@ -444,6 +702,32 @@ function sessionHookTimingStatus(repoRoot) {
   };
 }
 
+// ── Docker gate ──────────────────────────────────────────────────────────────
+// scripts/lib/docker_gate.sh owns the WORDS (what Docker is, why myAI needs it,
+// the exact per-OS step) so doctor, `myai setup` and `myai up` can never drift.
+// A missing bash (native Windows) falls back to one generic line.
+const DOCKER_GATE = path.join(SCRIPTS_DIR, 'lib', 'docker_gate.sh');
+const DOCKER_FALLBACK_REMEDY = 'Install Docker: https://docs.docker.com/get-docker/';
+function dockerGate(verb, state) {
+  const r = spawnSync('bash', [DOCKER_GATE, verb, ...(state ? [state] : [])], { encoding: 'utf8' });
+  if (r.error || r.status !== 0) return null;
+  return (r.stdout || '').replace(/\s+$/, '') || null;
+}
+
+// The next command after a setup that finished WITHOUT Docker re-offers the
+// resume: still missing → a one-line reminder; now up → "run myai up".
+const DOCKER_REMINDER_EXEMPT = new Set(['setup', 'doctor', 'up', 'completions', '__repos', 'root', 'config']);
+function dockerPendingReminder(argv) {
+  const first = (argv || []).slice(2)[0];
+  if (!first || DOCKER_REMINDER_EXEMPT.has(first) || !COMMANDS.some((c) => c.name === first)) return false;
+  if (process.env.MYAI_SKIP_DOCKER_GATE === '1') return false;
+  const os = require('node:os');
+  const home = process.env.MYAI_HOME || path.join(os.homedir(), '.myai');
+  if (!fs.existsSync(path.join(home, 'docker-pending'))) return false;
+  spawnSync('bash', [DOCKER_GATE, 'pending-check'], { stdio: 'inherit' });
+  return true;
+}
+
 // Host ports the self-contained stack binds (docker-compose.yml).
 const STACK_PORTS = [
   [3100, 'gateway HTTP/MCP'],
@@ -464,22 +748,31 @@ function runDoctorChecks() {
 
   const docker = bin('docker');
   allOk &= check('docker on PATH', docker ? true : 'fail', docker || 'not found — install Docker');
+  let dockerState = docker ? 'ok' : 'missing';
 
   // Engine must actually be RUNNING, not merely installed.
   if (docker) {
     const info = spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], { encoding: 'utf8' });
-    const running = info.status === 0 && info.stdout.trim();
+    const running = info.status === 0 && (info.stdout || '').trim();
+    if (!running) dockerState = /permission denied/i.test(info.stderr || '') ? 'no-permission' : 'not-running';
     allOk &= check('docker engine running', running ? true : 'fail',
       running ? `server ${info.stdout.trim()}` : 'engine not reachable — start Docker');
   }
 
   const compose = bin('docker', ['compose', 'version']);
+  if (dockerState === 'ok' && !compose) dockerState = 'no-compose';
   allOk &= check('docker compose', compose ? true : 'fail', compose || 'v2 plugin not found');
+
+  // Every failing docker row carries the exact next step (--json consumers too).
+  if (dockerState !== 'ok') {
+    const remedy = dockerGate('remedy', dockerState) || DOCKER_FALLBACK_REMEDY;
+    for (const c of checks) if (c.label.startsWith('docker') && c.status === 'fail') c.remedy = remedy;
+  }
 
   const git = bin('git');
   allOk &= check('git on PATH', git ? true : 'warn', git || 'not found');
 
-  // tmux backs `remote_fleet.sh start` (task-52b349fb): every museum session
+  // tmux backs `remote_fleet.sh start` (task-52b349fb): every master-doorway session
   // is a named tmux session so the claude process survives iTerm quitting.
   // Without tmux, `remote start` hard-fails outright — surface that here
   // instead of letting an operator discover it while reaching for their phone.
@@ -493,13 +786,19 @@ function runDoctorChecks() {
     claude || 'not found — needed for the off-hours runner (or use ANTHROPIC_API_KEY)');
 
   const keySrc = findAnthropicKey();
-  // The runner can authenticate EITHER via the Claude CLI login OR via the key.
-  // It is only a hard blocker when NEITHER is present.
-  const credOk = !!keySrc || !!claude;
-  allOk &= check('ANTHROPIC_API_KEY', keySrc ? true : credOk ? 'warn' : 'fail',
+  const placeholderSrc = keySrc ? null : findAnthropicPlaceholder();
+  // v1 is agent-agnostic (task-51235f67): the key only matters to a Claude
+  // agent. Never a FAIL — the stack and MCP run without it. With a Claude agent
+  // configured it is a WARN (the CLI login covers it when the CLI is there);
+  // with no Claude agent at all it is not needed. A PLACEHOLDER key is always a
+  // WARN: it was set on purpose but is not a key — a misconfiguration to name.
+  const claudeConfigured = !!claude || claudeAgentConfigured();
+  allOk &= check('ANTHROPIC_API_KEY', keySrc || (!placeholderSrc && !claudeConfigured) ? true : 'warn',
     keySrc ? `set (${keySrc})`
-      : credOk ? 'not set — Claude CLI login will be used instead'
-        : 'not set and no Claude CLI — set one for api/runner access');
+      : placeholderSrc ? `set to a placeholder value (${placeholderSrc}) — replace it with a real key, or remove the line`
+        : !claudeConfigured ? 'not set — not needed: no Claude agent configured (the stack and MCP run without it)'
+          : claude ? 'not set — Claude CLI login will be used instead'
+            : 'not set and no Claude CLI — a Claude profile exists, but the Claude runner/api cannot authenticate');
 
   // ── GATEWAY_LOCAL_TOKEN: never the published default (SECURITY task-7f8b20a3) ──
   // The gateway itself now refuses this value under TENANT_ENFORCE=true
@@ -545,12 +844,39 @@ function runDoctorChecks() {
       'no cloud AND no Ollama — only degraded-read works (git pull brain → read compiled brief/working files)');
   }
 
+  // Which MCP server an agent gets right now (v1 G2 B2): the stdio bridge
+  // probes the same /health at spawn and falls back to the local brain server.
+  const gw = probeGatewayHealth();
+  check('MCP mode', gw.up ? true : 'warn',
+    gw.up ? `gateway — full tool set (${gw.url})`
+      : `offline — agents get the local brain server (brain + recall only); \`myai up\` and restart the agent for the full tool set`);
+
   const brain = brainFreshness();
   check('brain freshness', brain.exists ? (brain.ageDays !== null && brain.ageDays > 7 ? 'warn' : true) : 'warn',
     !brain.exists ? `no brain repo at ${brain.dir} — run \`myai brain init\` (degraded-read needs it)`
       : brain.ageDays === null ? `${brain.dir} — last-commit age unknown`
         : brain.ageDays > 7 ? `${brain.dir} — last commit ${Math.round(brain.ageDays)}d ago (stale; run \`wrap up\` / \`myai brain session merge\`)`
           : `${brain.dir} — last commit ${brain.ageDays < 1 ? 'today' : Math.round(brain.ageDays) + 'd ago'}`);
+
+  if (brain.exists) {
+    const integrity = brainIntegrity(brain.dir);
+    allOk &= check('brain integrity', integrity.ok ? true : 'fail', integrity.detail);
+  }
+  const mig = pendingMigrations(myaiStateHome(), brain.dir);
+  check('config migrations', mig.status === 'ok' ? true : 'warn', mig.detail);
+
+  for (const job of scheduledJobs()) check(`scheduled job ${job.label}`, job.ok ? true : 'warn', job.detail);
+  for (const a of agentMcpEntries()) {
+    check(`${a.name} MCP`, a.has ? true : 'warn',
+      a.has ? `connected (${a.file})` : `${a.file} has no myai entry — run \`myai connect ${a.name.toLowerCase()}\``);
+  }
+  // The repo you run doctor in: connected to myAI (has .myai-local)?
+  const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  if (top.status === 0) {
+    const repo = (top.stdout || '').trim();
+    const linked = fs.existsSync(path.join(repo, '.myai-local'));
+    check('repo connected', linked ? true : 'warn', linked ? `${repo} (.myai-local present)` : `${repo} has no .myai-local`);
+  }
 
   // ── mongo mirror schedule — warn-only: the periodic Atlas→local mirror is
   //    optional by design (never auto-installed, MONGO_MIRROR.md), but once
@@ -577,6 +903,13 @@ function runDoctorChecks() {
   } else {
     check('mongo mirror schedule', true, `${mirrorCadence} — last run ok ${mirrorAgo}`);
   }
+
+  // ── swarm master (operator rule 2026-10-22): every device has exactly one,
+  //    chosen at install. No config is a FAIL with its fix; a master that does
+  //    not hold the lease or has no mail watcher is a warning here (doctor runs
+  //    outside the master's session) — boot phase 9c is the strict gate.
+  const swarm = swarmMasterStatus();
+  check('swarm master', swarm.status === 'ok' ? true : swarm.status, swarm.detail);
 
   // ── runner-backlog WELL health — warn-only: queue_topup.sh already
   //    auto-enqueues a PLANNER task when this drops low, but only from inside
@@ -635,7 +968,7 @@ function runDoctorChecks() {
       used ? `IN USE — needed by ${svc} (stop the process or run \`myai down\`)` : `free (${svc})`);
   }
 
-  return { checks, ok: !!allOk };
+  return { checks, ok: !!allOk, dockerState };
 }
 
 // ── doctor --fix: idempotent auto-remediation ────────────────────────────────
@@ -867,6 +1200,14 @@ function doctor(extraArgs) {
   for (const c of result.checks) {
     const mark = c.status === 'ok' ? 'OK  ' : c.status === 'warn' ? 'WARN' : 'FAIL';
     console.log(`  [${mark}] ${c.label}${c.detail ? ` — ${c.detail}` : ''}`);
+    if (c.status !== 'ok' && c.why) {
+      console.log(`         why: ${c.why}`);
+      console.log(`         fix: ${c.fix}`);
+    }
+  }
+  if (result.dockerState && result.dockerState !== 'ok') {
+    console.log(dockerGate('explain', result.dockerState)
+      || `\n  DOCKER REQUIRED — myAI's gateway, Mongo RAG, brain sync, runner and local CI all run in Docker.\n  ${DOCKER_FALLBACK_REMEDY}`);
   }
   console.log(`\n${result.ok ? 'Preflight passed (warnings are non-fatal).' : 'Preflight found blocking issues — fix the FAIL lines before `myai up`.'}`);
 
@@ -1276,11 +1617,16 @@ function needsAutoSetup(argv) {
   return !fs.existsSync(path.join(home, 'config'));
 }
 
-function autoRunSetup() {
+function autoRunSetup(argv) {
   const setupScript = path.join(SCRIPTS_DIR, 'myai_setup.sh');
   if (!fs.existsSync(setupScript)) return;
   console.log('myai: no ~/.myai/config found — running first-run setup (myai setup)…');
-  spawnSync('bash', [setupScript], { stdio: 'inherit', cwd: process.cwd() });
+  // MYAI_SETUP_PARENT: the setup's Docker gate must not start the stack itself
+  // when the command that triggered it is `myai up` (that would run it twice).
+  const parent = ((argv || process.argv).slice(2)[0]) || '';
+  spawnSync('bash', [setupScript], {
+    stdio: 'inherit', cwd: process.cwd(), env: { ...process.env, MYAI_SETUP_PARENT: parent },
+  });
 }
 
 // ── entrypoint ────────────────────────────────────────────────────────────────
@@ -1292,7 +1638,8 @@ function main() {
     printCommandHelp(helpCmd);
     process.exit(0);
   }
-  if (needsAutoSetup(process.argv)) autoRunSetup();
+  if (needsAutoSetup(process.argv)) autoRunSetup(process.argv);
+  else dockerPendingReminder(process.argv);
   let Command = null;
   try {
     ({ Command } = require('commander'));
@@ -1306,6 +1653,9 @@ function main() {
 // Exported for the unit suite (runtime/tests/unit/cli-dispatch.test.ts). As a
 // bin, require.main === module and main() runs exactly as before.
 module.exports = {
+  DOCTOR_EXPLAIN,
+  explainFor,
+  myaiStateHome,
   COMMANDS,
   STACK_PORTS,
   resolvePathArg,
@@ -1339,6 +1689,8 @@ module.exports = {
   reposSeedEntries,
   reposPathsFromGateway,
   findAnthropicKey,
+  findAnthropicPlaceholder,
+  isPlaceholderKey,
   portInUse,
   hostReachable,
   probeOllamaDaemon,
@@ -1350,6 +1702,8 @@ module.exports = {
   runFallback,
   needsAutoSetup,
   autoRunSetup,
+  dockerGate,
+  dockerPendingReminder,
   main,
 };
 

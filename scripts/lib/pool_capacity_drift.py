@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """pool_capacity_drift.py — ground-truth cross-check for pool-capacity.json's
-claude-tech daily/weekly spent-token figures (task-0824a68e).
+runner-pool daily/weekly spent-token figures (task-0824a68e).
 
-pool_capacity_snapshot.sh's claude-tech numbers come from an INCREMENTAL
+pool_capacity_snapshot.sh's runner-pool numbers come from an INCREMENTAL
 ledger (scripts/lib/session_tokens.py snapshot/delta, wired into
 cli_task_runner.sh): each runner fire snapshots every transcript's byte-offset
 before a session and adds only the output-token delta parsed past that offset.
@@ -152,6 +152,13 @@ def _write_status_json(path, payload):
         pass
 
 
+def pool_label(cfg):
+    """The runner pool's label: the config dir's basename, dot stripped
+    (~/.claude-<x> → claude-<x>) — the same rule pool_capacity_snapshot.sh
+    and cli_task_runner.sh (RUNNER_POOL) use when they write and read it."""
+    return os.path.basename(cfg.rstrip("/")).lstrip(".")
+
+
 def main(argv):
     if len(argv) < 3:
         print("usage: pool_capacity_drift.py <pool-capacity.json> <config-dir> [tolerance_pct] [tolerance_floor]")
@@ -172,10 +179,11 @@ def main(argv):
 
     generated_at = data.get("generatedAt")
     pools = data.get("pools") or []
-    pool = next((p for p in pools if isinstance(p, dict) and p.get("pool") == "claude-tech"), None)
+    pool_name = pool_label(cfg)
+    pool = next((p for p in pools if isinstance(p, dict) and p.get("pool") == pool_name), None)
     if not generated_at or pool is None:
-        print("SKIP claude-tech-pool-missing")
-        _write_status_json(status_out, {"checkedAt": checked_at, "skipped": "claude-tech-pool-missing", "anyDrift": False, "windows": []})
+        print(f"SKIP {pool_name}-pool-missing")
+        _write_status_json(status_out, {"checkedAt": checked_at, "skipped": f"{pool_name}-pool-missing", "anyDrift": False, "windows": []})
         return 0
 
     try:
@@ -220,7 +228,7 @@ def main(argv):
     _write_status_json(status_out, {
         "checkedAt": checked_at,
         "generatedAt": generated_at,
-        "pool": "claude-tech",
+        "pool": pool_name,
         "skipped": None,
         "anyDrift": any_drift,
         "windows": windows,

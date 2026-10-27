@@ -58,7 +58,7 @@ export default function DemoPage() {
   return (
     <main className="max-w-5xl mx-auto px-4 py-10 space-y-8">
       <header className="space-y-3">
-        <h1 className="text-3xl font-bold" style={{ color: 'var(--brand-orange, #D97757)' }}>
+        <h1 className="text-title font-bold tracking-tight text-[rgb(var(--text-primary))]">
           The cheapest AI, punching like a frontier model
         </h1>
         <p className="text-[rgb(var(--text-secondary))] max-w-3xl">

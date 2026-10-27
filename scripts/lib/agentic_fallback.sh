@@ -16,6 +16,8 @@
 #     and completely separate from the Claude pacing ledger
 #   - keys via env / .env named-key extraction only (never blanket-source .env)
 # Not executed directly — sourced by cli_task_runner.sh (and the test suite).
+# shellcheck source=runner_pr_gate.sh
+[ -f "$(dirname "${BASH_SOURCE[0]}")/runner_pr_gate.sh" ] && . "$(dirname "${BASH_SOURCE[0]}")/runner_pr_gate.sh"
 
 AGENTIC_FALLBACK=${AGENTIC_FALLBACK:-off}
 AGENTIC_FALLBACK_MODELS=${AGENTIC_FALLBACK_MODELS:-deepseek-chat}
@@ -457,6 +459,12 @@ _agentic_run_inner() {
         commit --quiet -m "fix: agentic-fallback automated task ($model)"; then
         echo "[agentic] commit failed — falling back"
         agentic_record_outcome "$provider" "commit-failed" "$task_id"
+        return 1
+    fi
+
+    if declare -f runner_should_defer_push >/dev/null 2>&1 && runner_should_defer_push "$workdir"; then
+        echo "[agentic] test->main PR has active CI checks — deferring push to test"
+        agentic_record_outcome "$provider" "push-deferred-pr-checks" "$task_id"
         return 1
     fi
 

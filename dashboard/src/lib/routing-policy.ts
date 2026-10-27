@@ -28,18 +28,25 @@ export interface ModelOption {
   label: string;
   /** Which cost tier this model sits in. */
   tier: Tier;
+  /**
+   * Metered = bills real per-token API dollars (DeepSeek, GPT) as
+   * opposed to the flat-rate Claude subscription lanes or the free local CLI.
+   * The UI must flag these so an operator never routes to paid spend by
+   * accident, and they must never be pre-selected as a silent default.
+   */
+  metered?: boolean;
 }
 
 // Curated selectable models, mirroring the provider cost table in
 // documentation/COST_AWARE_ROUTING.md. Ordered cheapest → most expensive.
+// `metered: true` marks pay-per-token external APIs — the Claude lanes ride the
+// flat subscription and `local-cli` is free, so neither is metered.
 export const MODEL_OPTIONS: ModelOption[] = [
   { id: 'local-cli', label: 'Local CLI (free)', tier: 'budget' },
-  { id: 'gemini-flash', label: 'Gemini Flash', tier: 'budget' },
-  { id: 'gpt-4o-mini', label: 'GPT-4o mini', tier: 'budget' },
-  { id: 'deepseek-v3', label: 'DeepSeek V3', tier: 'standard' },
+  { id: 'gpt-4o-mini', label: 'GPT-4o mini', tier: 'budget', metered: true },
+  { id: 'deepseek-v3', label: 'DeepSeek V3', tier: 'standard', metered: true },
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', tier: 'standard' },
-  { id: 'gemini-pro', label: 'Gemini Pro', tier: 'premium' },
-  { id: 'gpt-4o', label: 'GPT-4o', tier: 'premium' },
+  { id: 'gpt-4o', label: 'GPT-4o', tier: 'premium', metered: true },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', tier: 'premium' },
   { id: 'claude-opus-4-7', label: 'Claude Opus 4.7', tier: 'ultra' },
 ];
@@ -52,6 +59,15 @@ export function isValidModel(id: unknown): id is string {
 
 export function modelOption(id: string): ModelOption | undefined {
   return MODEL_OPTIONS.find((m) => m.id === id);
+}
+
+/**
+ * True when routing to this model spends real per-token API dollars (DeepSeek,
+ * GPT) rather than the flat Claude subscription or the free local CLI.
+ * Unknown ids are treated as non-metered (they can't route to paid spend).
+ */
+export function isMeteredModel(id: unknown): boolean {
+  return typeof id === 'string' && modelOption(id)?.metered === true;
 }
 
 /* ── Priorities ─────────────────────────────────────────────── */
@@ -82,12 +98,15 @@ export interface RoutingPolicy {
   hardLimitPct: number;
 }
 
+// Defaults route only to non-metered lanes (Claude subscription + free local
+// CLI). A metered provider like DeepSeek must be an explicit operator choice —
+// never a silent default that quietly bills real API dollars (task-f059b995).
 export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   enabled: false,
   defaultModel: 'claude-sonnet-4-6',
   priorityOverrides: {
     P0: 'claude-opus-4-7',
-    P3: 'deepseek-v3',
+    P3: 'local-cli',
   },
   monthlyBudgetUsd: 50,
   softLimitPct: 0.8,

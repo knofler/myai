@@ -9,6 +9,11 @@ export default defineConfig({
     exclude: ['node_modules/**', 'node_modules_test/**', 'dist/**'],
     globals: true,
     environment: 'node',
+    // Cheap bcrypt rounds for the suite only (see BCRYPT_ROUNDS in
+    // src/core/user-auth.ts): cost 12 pure-JS hashing made the auth lockout
+    // tests exceed testTimeout deterministically. Honoured only under
+    // NODE_ENV=test, floored at 4 — it cannot affect a running service.
+    env: { AUTH_BCRYPT_ROUNDS: '4' },
     testTimeout: 10000,
     hookTimeout: 10000,
     setupFiles: ['tests/setup.ts'],
@@ -31,27 +36,35 @@ export default defineConfig({
       provider: 'v8',
       include: ['src/**/*.ts'],
       exclude: ['src/cli/**', 'src/shared/logger.ts'],
-      // Baseline re-measured 2026-08-28 (`npm run test:coverage`, node:22 image
+      // Baseline re-measured 2026-09-24 (`npm run test:coverage`, node:22 image
       // with git installed — several tests spawn `git` subprocesses and
-      // misreport as failures on a git-less image): all files 80.02%
-      // stmts/lines, 83.87% branch, 86.52% funcs (up from the 2026-07-26
-      // baseline of 74.66/82.59/82.58). Thresholds below are raised one notch
-      // — a few points under the new measured baseline, globally and per
-      // top-level src/ directory — so real regressions keep failing CI without
-      // the gate being so tight that normal churn trips it. Directories that
-      // are near-zero today (unused/aspirational integrations — channels,
-      // hooks/builtin, rules, scripts, ws) stay floored at their prior value,
-      // not zero, so newly-added dead weight there still can't drop further —
-      // they're intentionally excluded from this notch-up since "current
-      // value" for them hasn't materially changed.
+      // misreport as failures on a git-less image): all files 80.49%
+      // stmts/lines, 84.01% branch, 87.19% funcs (up from the 2026-08-28
+      // baseline of 80.02/83.87/86.52). Global thresholds below are raised one
+      // more notch — a couple points under the new measured baseline — so real
+      // regressions keep failing CI without the gate being so tight that
+      // normal churn trips it. Per-directory floors are left at their
+      // 2026-08-28 values: every directory still clears its floor by a healthy
+      // margin at this baseline (e.g. tasks/** measured 95.28/86.03/97.95
+      // lines/branches/funcs against a 93/83/95 floor), so re-tightening them
+      // individually isn't a "close the gap" fix this pass, just churn.
+      // Directories that are near-zero today (unused/aspirational integrations
+      // — channels, hooks/builtin, rules, scripts, ws) stay floored at their
+      // prior value, not zero, so newly-added dead weight there still can't
+      // drop further.
       // rbac.ts / task-store.ts / router.ts get tighter per-file floors — they
       // gate RBAC, task persistence, and LLM routing, the highest-blast-radius
-      // modules in runtime/src.
+      // modules in runtime/src. task-store.ts's claimTaskImpl queue path now
+      // runs its three independent read-only claim-gate lookups (budget gate,
+      // dependency-ready snapshot, per-member blocklist) concurrently via
+      // Promise.all instead of sequentially (tasks_claim is a named
+      // perf-metrics.ts hot path) — measured 95.21/85.71/96.42
+      // lines/branches/funcs post-change, still clear of the floor below.
       thresholds: {
-        statements: 76,
-        lines: 76,
-        functions: 83,
-        branches: 82,
+        statements: 78,
+        lines: 78,
+        functions: 85,
+        branches: 83,
 
         'src/agents/**': { lines: 78, functions: 83, branches: 78 },
         'src/analytics/**': { lines: 97, functions: 97, branches: 93 },

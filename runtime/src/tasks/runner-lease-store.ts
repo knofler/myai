@@ -28,7 +28,7 @@ import { emitNotifyEvent } from '../notifications/event-bus.js';
 
 const log = createChildLogger({ module: 'runner-lease-store' });
 
-/** ADR-011: slots = active Claude accounts (claude-tech + claude-personal). */
+/** ADR-011: slots = active Claude accounts (default 2). */
 export const DEFAULT_LEASE_SLOTS = 2;
 /** Covers the runner's 45-min session cap with margin, so a runner that never
  *  heartbeats (old script version) still can't lose its slot mid-run. */

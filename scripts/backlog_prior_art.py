@@ -93,7 +93,7 @@ SKIP_PREFIXES = (
 def resolve_repo_root(repo: str, explicit: str | None) -> str | None:
     """Map a backlog `repo` name to a local checkout, or None."""
     if explicit:
-        return explicit if os.path.isdir(os.path.join(explicit, ".git")) else None
+        return explicit if os.path.exists(os.path.join(explicit, ".git")) else None
     roster = os.environ.get("MANAGED_REPOS_FILE") or os.path.join(
         os.path.dirname(_HERE), "config", "managed_repos.txt"
     )
@@ -108,7 +108,7 @@ def resolve_repo_root(repo: str, explicit: str | None) -> str | None:
     # the master repo itself is the parent of scripts/
     candidates.append(os.path.dirname(_HERE))
     for path in candidates:
-        if not os.path.isdir(os.path.join(path, ".git")):
+        if not os.path.exists(os.path.join(path, ".git")):
             continue
         if os.path.basename(path.rstrip("/")) == repo:
             return path
@@ -183,8 +183,11 @@ def preamble(score: float, sha: str, date: str, subj: str) -> str:
         f"If it IS: remove this item's line from config/runner_backlog.jsonl, "
         f"note the SHA in one line, commit that, and STOP — do not re-implement, "
         f"do not re-run the test suites, and do not write a re-verification "
-        f"report. If it is NOT (or only partly): say so in one line and do the "
-        f"work as normal. This hint is a ranked guess, not a verdict.\n\n"
+        f"report — and end your final output with 'RESULT: ALREADY-SHIPPED "
+        f"{sha} — <one line>' so the runner closes this task terminally as "
+        f"done (resolution: already-shipped) instead of leaving it to "
+        f"re-dispatch. If it is NOT (or only partly): say so in one line and "
+        f"do the work as normal. This hint is a ranked guess, not a verdict.\n\n"
     )
 
 

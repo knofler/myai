@@ -17,6 +17,14 @@ set +e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENVF="$ROOT/.env"
 
+# Per-host gateway mem cap (config/stack_limits.txt, keyed by `hostname -s`;
+# compose default 1g). Exported so the adoption `docker compose up -d gateway
+# dashboard` below sizes the gateway per host without leaking a host value into
+# .env/Dropbox (mirrors gh_runner_mem.txt).
+# shellcheck source=scripts/lib/stack_limits.sh
+. "$ROOT/scripts/lib/stack_limits.sh"
+export GATEWAY_MEM_LIMIT="${GATEWAY_MEM_LIMIT:-$(resolve_gateway_mem)}"
+
 [ -f "$ENVF" ] || exit 0
 DESIRED=$(grep -E '^MONGODB_URI=' "$ENVF" 2>/dev/null | head -1 | cut -d= -f2-)
 # Only act when .env specifies an Atlas SRV URI (mongodb+srv://…). Local URIs → skip.

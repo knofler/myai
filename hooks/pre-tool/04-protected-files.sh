@@ -123,4 +123,26 @@ if [ "$TOOL" = "Write" ] && [ -n "$FILE_PATH" ]; then
   done
 fi
 
+# ── Claims (plan/SWARM_COORDINATOR_PLAN.md row 5) — WARN ONLY, never blocks ──
+# Edit/Write on a file another session has claimed (scripts/claim.sh; a
+# directory claim covers everything under it) prints a visible warning and lets
+# the edit proceed. Skipped entirely (no gateway call) unless a swarm is active
+# on this Mac (~/.myai/swarm/active.<host>, written by `swarm master take`);
+# a slow/unreachable gateway is skipped too (2s budget). Missing claim.sh
+# (older managed repo) → no check.
+if { [ "$TOOL" = "Edit" ] || [ "$TOOL" = "Write" ]; } && [ -n "$FILE_PATH" ]; then
+  _CL_HOST=$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  if [ -f "${SWARM_DIR:-$HOME/.myai/swarm}/active.$_CL_HOST" ]; then
+    _CLAIM="${CLAIM_SCRIPT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)/scripts/claim.sh}"
+    if [ -f "$_CLAIM" ]; then
+      _CL_OUT=$(KL_TIMEOUT=2 bash "$_CLAIM" check "$FILE_PATH" 2>/dev/null)
+      if [ $? -eq 1 ] && [ -n "$_CL_OUT" ]; then
+        _CL_MSG="CLAIMED by another session — $_CL_OUT. Editing anyway (claims are advisory): coordinate first — mail the holder, or see: claim list"
+        echo "⚠ $_CL_MSG" >&2
+        jq -nc --arg m "⚠ $_CL_MSG" '{systemMessage:$m, hookSpecificOutput:{hookEventName:"PreToolUse", additionalContext:$m}}' 2>/dev/null
+      fi
+    fi
+  fi
+fi
+
 exit 0

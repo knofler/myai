@@ -13,13 +13,23 @@
  *
  * Environment:
  *   BRIDGE_PORT (default: 3202)
+ *   BRIDGE_HOST (default: 127.0.0.1)
+ *   LLM_BRIDGE_TOKEN (required; the gateway sends the same value)
  */
 
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
+import { BRIDGE_TOKEN_HEADER, bridgeBindHost, bridgeRequestAuthorized, bridgeToken } from './bridge-guard.js';
 
 const PORT = Number(process.env.BRIDGE_PORT || 3202);
 const TIMEOUT_MS = Number(process.env.BRIDGE_TIMEOUT || 180_000); // 3 minutes
+const HOST = bridgeBindHost();
+const TOKEN = bridgeToken();
+if (!TOKEN) {
+  console.error('[bridge] LLM_BRIDGE_TOKEN is not set. Set the same random value for the bridge and the gateway, e.g.\n'
+    + '  export LLM_BRIDGE_TOKEN=$(openssl rand -hex 32)');
+  process.exit(1);
+}
 
 function callClaude(prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -73,6 +83,11 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
   // Prompt endpoint
   if (req.method === 'POST' && req.url === '/') {
+    if (!bridgeRequestAuthorized(req.headers[BRIDGE_TOKEN_HEADER], TOKEN)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'bridge token required' }));
+      return;
+    }
     try {
       const body = JSON.parse(await readBody(req));
       const prompt = body.prompt;
@@ -103,7 +118,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   res.end('Not found');
 });
 
-server.listen(PORT, () => {
-  console.log(`[bridge] Claude CLI bridge listening on http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`[bridge] Claude CLI bridge listening on http://${HOST}:${PORT}`);
   console.log(`[bridge] Docker containers use: http://host.docker.internal:${PORT}`);
 });

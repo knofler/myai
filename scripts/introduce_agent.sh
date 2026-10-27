@@ -162,7 +162,7 @@ You are **${agent_label}**. You are **NOT Claude**. In every banner, status line
 - Identify yourself as **${agent_label}** — never write "Claude" or "Claude Code" as your own name.
 - Your banner/status color is **${dot_color}** — use this dot, not Claude's 🟣.
 - Write logs to \`${log_file}\` only — never to \`AI/logs/claude_log.md\`.
-- **Do NOT print Claude's org context.** The \`claude-museum\` / "Powerhouse Museum" org label is resolved from Claude's \`CLAUDE_CONFIG_DIR\` and is **Claude-specific** — it does not apply to you. If you have no org of your own, omit the ORG line or set it to "${agent_label}".
+- **Do NOT print Claude's org context.** Claude's org label (e.g. a \`claude-<profile>\` profile's) is resolved from Claude's \`CLAUDE_CONFIG_DIR\` and is **Claude-specific** — it does not apply to you. If you have no org of your own, omit the ORG line or set it to "${agent_label}".
 
 > If you are a *different* tool reading this file (some files are shared across tools), identify as **yourself** using this table — never as Claude: Claude 🟣 · Gemini 🔵 · Antigravity 🟠 · Codex 🟢 · Cursor 🟡 · Copilot ⚫ · Windsurf 🩵 · Cline 🟤 · Aider 🔴.
 
@@ -269,7 +269,7 @@ This file is read by **multiple tools**. Identify as **whichever tool you are** 
 
 - Use **your own** name and color in every banner/status line/log. Color table: Codex 🟢 · Antigravity 🟠 · Cursor 🟡 · Gemini 🔵 · (other) ⚪. Claude's is 🟣 — not yours.
 - Write logs to **your own** file under \`AI/logs/\` (e.g. \`AI/logs/codex.md\`, \`AI/logs/antigravity.md\`) — never \`AI/logs/claude_log.md\`.
-- **Never print the \`claude-museum\` / "Powerhouse Museum" org label** — it comes from Claude's \`CLAUDE_CONFIG_DIR\` and is Claude-specific. Omit the ORG line, or use your own tool name.
+- **Never print Claude's org label** (e.g. a \`claude-<profile>\` profile's) — it comes from Claude's \`CLAUDE_CONFIG_DIR\` and is Claude-specific. Omit the ORG line, or use your own tool name.
 
 ## Wrap-up banner (MANDATORY on session close)
 

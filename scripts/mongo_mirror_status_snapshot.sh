@@ -31,6 +31,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT="${MONGO_MIRROR_STATUS_OUT:-$REPO_ROOT/state/mongo-mirror-status.json}"
 MYAI_HOME="${MYAI_HOME:-$HOME/.myai}"
 LAST_FILE="$MYAI_HOME/mongo-mirror.last"
+COUNTS_FILE="$MYAI_HOME/mongo-mirror-counts.json"
 
 mkdir -p "$(dirname "$OUT")"
 
@@ -66,6 +67,19 @@ if [ -f "$LAST_FILE" ]; then
   esac
 fi
 
+# Coverage artifact (per-collection delta + freshness) written by
+# mongo_mirror.sh's capture_coverage(). Inlined verbatim so the gateway/dashboard
+# can read "local replica: N/73 collections" straight off the repo mount — same
+# host→repo bridge reason as the rest of this file. A missing/malformed file is
+# a normal "no coverage yet" (null), never an error.
+coverage_json=null
+if [ -f "$COUNTS_FILE" ]; then
+  c="$(tr -d '\n' < "$COUNTS_FILE" 2>/dev/null || true)"
+  case "$c" in
+    '{'*'}') coverage_json="$c" ;;
+  esac
+fi
+
 generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 tmp="$(mktemp "${OUT}.XXXXXX")"
@@ -75,9 +89,10 @@ cat > "$tmp" <<EOF
   "source": "mongo_mirror_status_snapshot.sh ($MYAI_HOME)",
   "installed": $installed,
   "intervalSec": $interval_sec,
-  "last": $last_json
+  "last": $last_json,
+  "coverage": $coverage_json
 }
 EOF
 mv "$tmp" "$OUT"
 
-echo "mongo_mirror_status: installed=$installed intervalSec=$interval_sec last=$last_json → $OUT"
+echo "mongo_mirror_status: installed=$installed intervalSec=$interval_sec last=$last_json coverage=$([ "$coverage_json" = null ] && echo none || echo present) → $OUT"

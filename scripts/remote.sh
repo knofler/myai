@@ -60,7 +60,7 @@ claude --remote-control "$PROJECT_NAME" || {
     echo "  - Organization policy blocks remote-control — as an Enterprise admin/"
     echo "    primary owner, enable it in the claude.ai Admin console (Claude Code settings)"
     echo "  - Not authenticated (run: claude auth) or wrong org profile"
-    echo "    (run under the intended CLAUDE_CONFIG_DIR, e.g. claude-museum alias)"
+    echo "    (run under the intended CLAUDE_CONFIG_DIR, e.g. its claude-<profile> alias)"
     echo "  - Claude Code needs updating (run: claude update)"
   fi
   exit $EXIT_CODE

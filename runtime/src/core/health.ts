@@ -7,6 +7,7 @@ import { isConfigured as isLlmConfigured } from '../llm/provider.js';
 import { getAgentCount, getSkillCount } from '../agents/loader.js';
 import { listAdapters, getChannelSessionCount } from '../channels/registry.js';
 import { getVectorCount } from '../memory/vector-store.js';
+import { getMongoReconnectState } from './db-reconnect.js';
 
 const log = createChildLogger({ module: 'health' });
 
@@ -64,9 +65,16 @@ async function checkMongodb(): Promise<ComponentHealth> {
   const connected = isConnected();
   if (!connected) {
     const bootFailure = getMongoBootFailure();
+    // While the background reconnect runs, show its progress (attempts, last
+    // error, next retry) so "down" says whether it is still trying.
+    const reconnect = getMongoReconnectState();
     return {
       status: 'down',
-      details: bootFailure ? { state: 'disconnected', bootFailure } : { state: 'disconnected' },
+      details: {
+        state: 'disconnected',
+        ...(bootFailure ? { bootFailure } : {}),
+        ...(reconnect.active || reconnect.attempts > 0 ? { reconnect } : {}),
+      },
     };
   }
 
@@ -103,7 +111,6 @@ function checkLlm(): ComponentHealth {
   if (process.env.ANTHROPIC_API_KEY) providers.push('anthropic');
   if (process.env.DEEPSEEK_API_KEY) providers.push('deepseek');
   if (process.env.MOONSHOT_API_KEY || process.env.OPENROUTER_API_KEY) providers.push('moonshot');
-  if (process.env.GEMINI_API_KEY) providers.push('gemini');
   // Ollama is always locally available when enabled
   if (process.env.OLLAMA_BASE_URL || process.env.LLM_MODE === 'ollama') providers.push('ollama');
 

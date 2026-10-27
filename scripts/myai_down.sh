@@ -38,8 +38,17 @@ c_err() { printf '  %s✗%s %s\n' "$RED" "$RESET" "$1"; }
 for _envf in "$CALLER_PWD/.env" "$CALLER_PWD/AI/.env"; do
     [ -f "$_envf" ] && { set -a; . "$_envf" 2>/dev/null || true; set +a; }
 done
-[ -n "${MYAI_HOME:-}" ] || MYAI_HOME="$REPO_ROOT"
-export MYAI_HOME
+# Framework install dir (the portable compose's build context) has its OWN
+# name. It used to be exported as MYAI_HOME — but MYAI_HOME is the per-user
+# STATE dir (~/.myai) to every brain/session/usage writer, so everything this
+# script started wrote state into the framework checkout (2026-10-18). A
+# legacy .env that still sets MYAI_HOME to a framework checkout is translated.
+if [ -z "${MYAI_FRAMEWORK_DIR:-}" ] && [ -n "${MYAI_HOME:-}" ] \
+   && [ -f "$MYAI_HOME/scripts/lib/brain.sh" ] && [ -d "$MYAI_HOME/runtime" ]; then
+    MYAI_FRAMEWORK_DIR="$MYAI_HOME"; unset MYAI_HOME
+fi
+[ -n "${MYAI_FRAMEWORK_DIR:-}" ] || MYAI_FRAMEWORK_DIR="$REPO_ROOT"
+export MYAI_FRAMEWORK_DIR
 STANDALONE_DIR="${MYAI_STANDALONE_DIR:-$HOME/.myai/standalone}"
 IS_MASTER_REPO=0
 [ -f "$REPO_ROOT/scripts/update_all.sh" ] && [ -f "$REPO_ROOT/config/managed_repos.txt" ] && IS_MASTER_REPO=1

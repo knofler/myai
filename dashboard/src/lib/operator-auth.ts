@@ -141,15 +141,13 @@ export async function verifyOperatorToken(token: string | undefined, nowMs = Dat
   const payloadB64 = token.slice(0, dot);
   const sigB64 = token.slice(dot + 1);
 
-  let sig: Uint8Array;
-  try {
-    sig = bytesFromB64url(sigB64);
-  } catch {
-    return null;
-  }
-
+  // Compare the presented signature STRING against the canonical encoding of
+  // the expected HMAC — never the decoded bytes. A 32-byte HMAC is 43 base64url
+  // chars whose last one carries 2 padding bits that atob ignores, so decoding
+  // first let four different last chars (and `=`-padded or `+/` spellings)
+  // verify as the same signature (issue #616). One token, one valid encoding.
   const expected = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(payloadB64)));
-  if (!timingSafeEqual(sig, expected)) return null;
+  if (!timingSafeEqual(enc.encode(sigB64), enc.encode(b64urlFromBytes(expected)))) return null;
 
   try {
     const claims = JSON.parse(new TextDecoder().decode(bytesFromB64url(payloadB64))) as {
@@ -162,4 +160,15 @@ export async function verifyOperatorToken(token: string | undefined, nowMs = Dat
   } catch {
     return null;
   }
+}
+
+/**
+ * The verified operator behind a route request, or null. For write routes that
+ * must not ride on the loopback auto-login (which skips the cookie in
+ * middleware): the swarm actions re-check the operator here on every call.
+ */
+export async function operatorFromRequest(req: Request): Promise<string | null> {
+  const cookie = req.headers.get('cookie') ?? '';
+  const match = cookie.match(new RegExp(`(?:^|;\\s*)${OPERATOR_COOKIE}=([^;]*)`));
+  return verifyOperatorToken(match?.[1] ? decodeURIComponent(match[1]) : undefined);
 }

@@ -70,7 +70,7 @@ export function HookList({ hooks: initial }: { hooks: HookItem[] }) {
   return (
     <div>
       {error && (
-        <p className="mb-3 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2">{error}</p>
+        <p role="alert" className="mb-3 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-3 py-2">{error}</p>
       )}
 
       <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg overflow-hidden">
@@ -96,13 +96,13 @@ export function HookList({ hooks: initial }: { hooks: HookItem[] }) {
                 <td data-label="Events" className="px-4 py-2.5">
                   <div className="flex flex-wrap gap-1 justify-end md:justify-start">
                     {h.events.map(e => (
-                      <span key={e} className="text-[10px] font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-emerald-400">{e}</span>
+                      <span key={e} className="text-label font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-emerald-400">{e}</span>
                     ))}
                   </div>
                 </td>
                 <td data-label="Priority" className="px-4 py-2.5 text-center text-xs text-[rgb(var(--text-secondary))]">{h.priority}</td>
                 <td data-label="Source" className="px-4 py-2.5 text-center">
-                  <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                  <span className={`text-label font-mono px-1.5 py-0.5 rounded ${
                     h.source === 'builtin' ? 'bg-blue-500/10 text-blue-400' :
                     h.source === 'bash' ? 'bg-orange-500/10 text-orange-400' :
                     'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-secondary))]'

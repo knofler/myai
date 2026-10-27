@@ -6,9 +6,9 @@ export default function Home() {
       <h1 className="text-4xl font-bold tracking-tight">{branding.name}</h1>
       <p className="text-lg text-muted-foreground">{branding.description}</p>
       <div className="rounded-lg border border-border bg-card p-6 text-left text-sm">
-        <p className="font-semibold">Scaffolded from the Powerhouse Blueprint.</p>
+        <p className="font-semibold">Scaffolded from the myAI Blueprint.</p>
         <ul className="mt-3 list-inside list-disc space-y-1 text-muted-foreground">
-          <li>Next.js 15 (App Router) + TypeScript strict</li>
+          <li>Next.js 16 (App Router) + TypeScript strict</li>
           <li>Tailwind v4 + shadcn/ui</li>
           <li>MongoDB (Mongoose) + Anthropic SDK + Sentry</li>
           <li>Vitest + Playwright + 4 GitHub Actions workflows</li>

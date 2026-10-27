@@ -46,7 +46,6 @@ export const FRAMEWORK_DOCS: FrameworkDoc[] = [
   { slug: 'ai-rules', title: 'AI Rules', file: 'documentation/AI_RULES.md' },
   { slug: 'routing', title: 'Multi-Agent Routing', file: 'documentation/MULTI_AGENT_ROUTING.md' },
   { slug: 'keywords', title: 'Keywords Reference', file: 'documentation/KEYWORDS_REFERENCE.md' },
-  { slug: 'powerhouse-keywords', title: 'Powerhouse Keywords', file: 'documentation/POWERHOUSE_KEYWORDS.md' },
   { slug: 'design-system', title: 'Design System', file: 'documentation/DESIGN_SYSTEM.md' },
   { slug: 'swarm', title: 'Swarm Coordination', file: 'documentation/SWARM_COORDINATION.md' },
   { slug: 'multi-machine', title: 'Multi-Machine Workflow', file: 'documentation/MULTI_MACHINE_WORKFLOW.md' },

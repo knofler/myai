@@ -9,6 +9,7 @@ import { notifyLifecycleMilestone } from '../notifications/lifecycle-emails.js';
 import type { NotificationLevel } from '../notifications/notifier.js';
 import { recordUsage, usageEventId } from '../shared/usage-store.js';
 import { recordTaskDefer, clearTaskDeferCount } from '../monitoring/task-defer-alerter.js';
+import { recordNoopDispatch, clearNoopDispatchCount } from '../monitoring/task-noop-dispatch-alerter.js';
 import { preemptForUrgentTask, resumeTasksPreemptedBy } from './preemption.js';
 import { recordSpan } from '../tracing/tracer.js';
 import { isFleetPaused } from './fleet-maintenance-store.js';
@@ -162,8 +163,21 @@ async function assertValidDependencies(
 }
 
 /**
- * Which of `deps` are not yet satisfied — an upstream counts as satisfied
- * ONLY when it exists and is status 'done'. A missing upstream (deleted out
+ * Whether one upstream satisfies a downstream's dependsOn edge. A plain task
+ * counts ONLY at 'done'. A SWARM child also counts at 'review': the runner has
+ * already pushed its work to `test` (the next child's worktree branches off
+ * origin/test), and with auto-ship off nothing ever moves a no-PR task from
+ * review to done — so a done-only gate stalled every swarm after its first
+ * child (E2E smoke 2026-10-02). Matches swarm-store's childDisplayStatus,
+ * which already shows review as done.
+ */
+export function upstreamSatisfied(u: Pick<ITask, 'status' | 'swarmId'>): boolean {
+  return u.status === 'done' || (Boolean(u.swarmId) && u.status === 'review');
+}
+
+/**
+ * Which of `deps` are not yet satisfied (see upstreamSatisfied).
+ * A missing upstream (deleted out
  * from under the graph) is conservatively unmet: the downstream task stays
  * unclaimable until an operator clears/repairs its dependsOn, never silently
  * runs out of order. Exported for the gateway inline lane (inline-executor.ts),
@@ -176,7 +190,7 @@ export async function unmetDependencies(
 ): Promise<string[]> {
   if (!deps.length) return [];
   const upstreams = await scopedFind(TaskModel, tenantId, { taskId: { $in: deps } }, connection).exec() as unknown as ITask[];
-  const done = new Set(upstreams.filter((u) => u.status === 'done').map((u) => u.taskId));
+  const done = new Set(upstreams.filter(upstreamSatisfied).map((u) => u.taskId));
   return deps.filter((d) => !done.has(d));
 }
 
@@ -187,6 +201,9 @@ export interface CreateTaskInput {
   priority?: TaskPriority;
   assignedAgent?: string;
   recommendedModel?: string;
+  /** See ITask.recommendedModelPreference (shared/db.ts) — true marks this as
+   *  a demotable preference rather than an absolute pin. */
+  recommendedModelPreference?: boolean;
   source?: TaskSource;
   sourceId?: string;
   notes?: string;
@@ -196,6 +213,14 @@ export interface CreateTaskInput {
   /** Task dependency graph (task-cafdd778) — upstream taskIds that must all be
    *  'done' before this task is claimable. Validated: upstreams must exist. */
   dependsOn?: string[];
+  /** Initial status. Only `paused` is accepted besides the default `pending`
+   *  — the swarm store (swarm-store.ts) creates children paused so no runner
+   *  can claim one between create and the operator's swarm_approve. */
+  initialStatus?: 'pending' | 'paused';
+  /** Swarm task model (SWARM_MESSAGING P2) — the owning swarm, and an
+   *  optional coordinator task the child hangs off. */
+  swarmId?: string;
+  parentTaskId?: string;
 }
 
 export interface UpdateTaskInput {
@@ -207,6 +232,7 @@ export interface UpdateTaskInput {
   priority?: TaskPriority;
   assignedAgent?: string;
   recommendedModel?: string;
+  recommendedModelPreference?: boolean;
   prUrl?: string;
   notes?: string;
   telegramMessageId?: number;
@@ -241,10 +267,40 @@ export interface UpdateTaskInput {
    *  CONSECUTIVE defers for this task via monitoring/task-defer-alerter.ts —
    *  distinct from a genuine failure/retry, which goes through failTask. */
   routeExhausted?: boolean;
+  /** RUNNER: repeat-dispatch WARN — set true alongside a review-flip when the
+   *  commits this fire pushed touched only docs/state paths (no real code
+   *  change), so task-store can track a CONSECUTIVE no-op-dispatch streak via
+   *  monitoring/task-noop-dispatch-alerter.ts. Set false (or omit) when this
+   *  fire's commits touched real code, resetting the streak. */
+  noopDispatch?: boolean;
+  /** Runner churn fix (task-d85ea318): set true alongside status:'pending' by a
+   *  POST-CLAIM pacing/routing gate that releases a claimed task back to the
+   *  queue BEFORE it ever routed (reserve-floor restriction, predictive budget
+   *  gate). Bumps `pacingDeferCount` so the claim→release churn is queryable the
+   *  same way deferCount/noopDispatchCount are. Reset (to 0) on a working
+   *  re-stamp. Distinct from `routeExhausted` (which has its own deferCount
+   *  streak + starvation alert); this counts the pacing-gate releases that were
+   *  previously uncounted. Pair with `deferSeconds` to also back off the re-claim. */
+  pacingDefer?: boolean;
+  /** Runner churn fix (task-d85ea318): when releasing a claimed task back to
+   *  'pending' for a pacing/routing reason, push `nextRetryAt` out by this many
+   *  seconds so the SAME head-of-queue task is not re-claimed on the very next
+   *  10-min fire (the tight claim/release loop behind the 24:1 ratio). Only
+   *  honoured alongside status:'pending'; clamped to [0, 6h]. A new task (no
+   *  nextRetryAt) is unaffected, so trivial work created mid-window still gets
+   *  picked up promptly. */
+  deferSeconds?: number;
   /** Task dependency graph (task-cafdd778) — REPLACES the task's upstream
    *  list. Validated: upstreams exist, no self-reference, no cycle. Empty
    *  array clears all dependencies (operator repair for a broken graph). */
   dependsOn?: string[];
+  /** Swarm token-budget guardrail (SWARM_MESSAGING P5 follow-up) — this
+   *  fire's actual output-token spend (runner session-token delta). Added
+   *  onto the task's running outputTokens total; when the task carries a
+   *  swarmId, the same delta is applied to the owning swarm's cumulative
+   *  spend and checked against its token budget (swarm-store.ts). Omit or
+   *  pass 0 when nothing was spent (e.g. a pre-claim release). */
+  outputTokens?: number;
 }
 
 export interface ListTasksFilter {
@@ -287,6 +343,17 @@ export interface ClaimTaskInput {
   ignoreRepos?: string[];
   /** Lease TTL in seconds; a working task past leaseUntil is reclaimable. Default 3600. */
   leaseSeconds?: number;
+  /** Host-aware claiming (task-972913b7): the local Ollama models THIS runner's
+   *  host actually has installed (config/runner_lanes.txt), e.g.
+   *  ["qwen3-coder:30b", "gpt-oss:20b"]. A pending task whose recommendedModel
+   *  looks like a local-lane model id (the Ollama "name:tag" convention —
+   *  see isLocalLaneModelId) but isn't in this list is skipped by THIS claim
+   *  (left pending for a host that does have it) instead of being claimed and
+   *  immediately falling over to a paid Claude fallback. Omitted entirely by
+   *  an older/undeclared caller — the gate never filters in that case, so this
+   *  is backward compatible with any runner that hasn't been upgraded yet.
+   */
+  localModels?: string[];
 }
 
 export interface TaskView {
@@ -298,6 +365,7 @@ export interface TaskView {
   status: TaskStatus;
   assignedAgent?: string;
   recommendedModel?: string;
+  recommendedModelPreference?: boolean;
   source: TaskSource;
   sourceId?: string;
   prUrl?: string;
@@ -316,6 +384,7 @@ export interface TaskView {
   leaseUntil?: Date;
   startedAt?: Date;
   completedAt?: Date;
+  reviewEnteredAt?: Date;
   supersededBy?: string;
   retryCount: number;
   maxRetries: number;
@@ -323,8 +392,13 @@ export interface TaskView {
   deadLetteredAt?: Date;
   lastError?: string;
   deferCount?: number;
+  noopDispatchCount?: number;
+  pacingDeferCount?: number;
   requestedByUserId?: string;
   dependsOn?: string[];
+  swarmId?: string;
+  parentTaskId?: string;
+  outputTokens?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -339,6 +413,7 @@ function toView(doc: ITask): TaskView {
     status: doc.status,
     assignedAgent: doc.assignedAgent,
     recommendedModel: doc.recommendedModel,
+    recommendedModelPreference: doc.recommendedModelPreference,
     source: doc.source,
     sourceId: doc.sourceId,
     prUrl: doc.prUrl,
@@ -357,6 +432,7 @@ function toView(doc: ITask): TaskView {
     leaseUntil: doc.leaseUntil,
     startedAt: doc.startedAt,
     completedAt: doc.completedAt,
+    reviewEnteredAt: doc.reviewEnteredAt,
     supersededBy: doc.supersededBy,
     retryCount: doc.retryCount,
     maxRetries: doc.maxRetries,
@@ -364,8 +440,13 @@ function toView(doc: ITask): TaskView {
     deadLetteredAt: doc.deadLetteredAt,
     lastError: doc.lastError,
     deferCount: doc.deferCount,
+    noopDispatchCount: doc.noopDispatchCount,
+    pacingDeferCount: doc.pacingDeferCount,
     requestedByUserId: doc.requestedByUserId,
     dependsOn: doc.dependsOn && doc.dependsOn.length ? [...doc.dependsOn] : undefined,
+    swarmId: doc.swarmId,
+    parentTaskId: doc.parentTaskId,
+    outputTokens: doc.outputTokens,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
@@ -393,14 +474,17 @@ export async function createTask(tenantId: string, input: CreateTaskInput, conne
     title: input.title,
     description: input.description ?? '',
     priority: input.priority ?? 'P2',
-    status: 'pending',
+    status: input.initialStatus === 'paused' ? 'paused' : 'pending',
     assignedAgent: input.assignedAgent,
     recommendedModel: input.recommendedModel,
+    recommendedModelPreference: input.recommendedModelPreference,
     source: input.source ?? 'manual',
     sourceId: input.sourceId,
     notes: input.notes,
     requestedByUserId: input.requestedByUserId,
     ...(dependsOn.length ? { dependsOn } : {}),
+    ...(input.swarmId ? { swarmId: input.swarmId } : {}),
+    ...(input.parentTaskId ? { parentTaskId: input.parentTaskId } : {}),
   });
   log.info({ taskId: doc.taskId, repo: doc.repo, priority: doc.priority }, 'Task created');
   emitNotifyEvent({
@@ -419,8 +503,9 @@ export async function createTask(tenantId: string, input: CreateTaskInput, conne
 
   // Priority preemption (ADR-011 follow-on): a freshly-arrived P0/P1 task may
   // need to bump a lower-priority in-flight task out of a busy runner-lease
-  // slot. Never lets a preemption-check failure fail task creation.
-  if (doc.priority === 'P0' || doc.priority === 'P1') {
+  // slot. Never lets a preemption-check failure fail task creation. A task
+  // created paused isn't claimable yet, so it has nothing to preempt for.
+  if (doc.status === 'pending' && (doc.priority === 'P0' || doc.priority === 'P1')) {
     await preemptForUrgentTask(tenantId, { taskId: doc.taskId, priority: doc.priority }).catch((err) => {
       log.warn({ err, taskId: doc.taskId }, 'Preemption check failed on task creation');
     });
@@ -506,6 +591,15 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput, connecti
     if ((input.status === 'done' || input.status === 'blocked' || input.status === 'dead_letter') && !existing.completedAt) {
       existing.completedAt = new Date();
     }
+    // Review-entry stamp (PR #479 follow-up) — set once on the transition into
+    // 'review' so worker-lane-status.ts's executionFinishedAt() can count a
+    // review-held task at the moment it actually entered review instead of
+    // updatedAt, which the reconciler bumps on every pass it merely touches
+    // the task, re-counting the same execution in executions24h every day it
+    // sits there.
+    if (input.status === 'review' && !existing.reviewEnteredAt) {
+      existing.reviewEnteredAt = new Date();
+    }
     // Operator triage replay (mirrors WebhookDelivery.replayDelivery): manually
     // requeuing a blocked/dead-lettered task clears its retry ledger so it gets
     // a fresh attempt chain instead of dead-lettering again on the next failure.
@@ -541,6 +635,57 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput, connecti
     existing.deferCount = 0;
   }
 
+  // Repeat-dispatch no-op tracking (RUNNER: repeat-dispatch WARN): the same
+  // task firing over and over while only ever touching docs/state (e.g. a
+  // "still resolved, Nth re-dispatch" loop) looks like a clean success on
+  // every individual run — deferCount above only catches routing failure, not
+  // a task that routes and "completes" every time. Mirror the in-process
+  // counter onto the doc the same way deferCount does, so it's queryable by
+  // the boot SCHEDULE banner (a separate process with no view into
+  // task-noop-dispatch-alerter.ts's in-memory map).
+  if (input.noopDispatch === true) {
+    const noopResult = recordNoopDispatch({ taskId: existing.taskId, tenantId, repo: existing.repo });
+    existing.noopDispatchCount = noopResult.count;
+  } else if (input.noopDispatch === false) {
+    clearNoopDispatchCount({ taskId: existing.taskId, tenantId });
+    existing.noopDispatchCount = 0;
+  }
+
+  // Pacing-defer churn tracking (task-d85ea318, "runner churn" 24:1): a
+  // POST-CLAIM pacing/routing gate releasing a claimed task straight back to
+  // 'pending' before it ever routed (reserve-floor restriction on a non-trivial
+  // pick, predictive budget gate). Mirror the count onto the doc the same way
+  // deferCount/noopDispatchCount are so the otherwise-invisible churn is
+  // queryable — before this, a released task just read 'pending' again with
+  // claimedAt set and no routedProfile/routedModel, which is exactly the
+  // "claimed, never routed" signature behind the ratio. Reset to 0 when the task
+  // finally routes (a working re-stamp carries a real routedModel), same
+  // semantics as deferCount's reset above.
+  if (input.pacingDefer === true && input.status === 'pending') {
+    existing.pacingDeferCount = (existing.pacingDeferCount ?? 0) + 1;
+  } else if (input.status === 'working') {
+    existing.pacingDeferCount = 0;
+  }
+
+  // Pacing-defer backoff (task-d85ea318): the root cause of the churn is that a
+  // post-claim pacing release left the task immediately claimable, so the SAME
+  // head-of-queue task was re-claimed on the very next 10-min fire and released
+  // again — a claim/release loop that never routed. Push nextRetryAt out by
+  // deferSeconds so the released task sits out the pacing window while the
+  // runner's next fire moves on to other due work; claimTask's dueFilter already
+  // honours nextRetryAt. Only on a pending release, clamped to [0,
+  // MAX_RETRY_DELAY_MS]. A brand-new task carries no nextRetryAt, so trivial work
+  // created mid-window is still picked up promptly.
+  if (
+    input.status === 'pending' &&
+    typeof input.deferSeconds === 'number' &&
+    Number.isFinite(input.deferSeconds) &&
+    input.deferSeconds > 0
+  ) {
+    const delayMs = Math.min(Math.floor(input.deferSeconds) * 1000, MAX_RETRY_DELAY_MS);
+    existing.nextRetryAt = new Date(Date.now() + delayMs);
+  }
+
   // Dependency graph edit (task-cafdd778): REPLACE semantics. This is the one
   // write path that can close a loop in an existing graph, so the cycle check
   // runs here on every edit; an empty array is the operator escape hatch that
@@ -558,6 +703,7 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput, connecti
   if (input.priority) existing.priority = input.priority;
   if (input.assignedAgent !== undefined) existing.assignedAgent = input.assignedAgent;
   if (input.recommendedModel !== undefined) existing.recommendedModel = input.recommendedModel;
+  if (input.recommendedModelPreference !== undefined) existing.recommendedModelPreference = input.recommendedModelPreference;
   if (input.prUrl !== undefined) existing.prUrl = input.prUrl;
   if (input.notes !== undefined) existing.notes = input.notes;
   if (input.telegramMessageId !== undefined) existing.telegramMessageId = input.telegramMessageId;
@@ -570,8 +716,33 @@ async function updateTaskImpl(tenantId: string, input: UpdateTaskInput, connecti
   if (input.workTypeTier !== undefined) existing.workTypeTier = input.workTypeTier;
   if (input.workTypeFailoverHop !== undefined) existing.workTypeFailoverHop = input.workTypeFailoverHop;
 
+  // Swarm token-budget guardrail (SWARM_MESSAGING P5 follow-up): accumulate
+  // this fire's actual spend onto the task's running total — a task can fire
+  // more than once (retries), so ADD rather than overwrite.
+  let outputTokenDelta = 0;
+  if (typeof input.outputTokens === 'number' && Number.isFinite(input.outputTokens) && input.outputTokens > 0) {
+    outputTokenDelta = Math.floor(input.outputTokens);
+    existing.outputTokens = (existing.outputTokens ?? 0) + outputTokenDelta;
+  }
+
   await existing.save();
   log.info({ taskId: existing.taskId, status: existing.status }, 'Task updated');
+
+  // A swarm child reporting spend: apply the same delta to the owning swarm's
+  // cumulative tokenSpent and enforce guardrails.checkTokenBudget there — a
+  // pause_and_notify verdict stops the swarm and mails the operator. Dynamic
+  // import breaks the swarm-store ↔ task-store cycle (swarm-store itself
+  // calls createTask/updateTask) — same pattern as channels/registry.ts's
+  // lazy import of mcp/tools.js. Best-effort: never let a metering bug fail
+  // the task update that triggered it.
+  if (existing.swarmId && outputTokenDelta > 0) {
+    try {
+      const { recordSwarmChildTokens } = await import('./swarm-store.js');
+      await recordSwarmChildTokens(tenantId, existing.swarmId, outputTokenDelta);
+    } catch (err) {
+      log.warn({ err, taskId: existing.taskId, swarmId: existing.swarmId }, 'Swarm token-budget check failed');
+    }
+  }
 
   // Emit a real-time event only on a genuine status transition — field-only
   // edits (notes, priority, prUrl) don't warrant a notification.
@@ -760,6 +931,55 @@ function dueFilter(now: Date): Record<string, unknown> {
 }
 
 /**
+ * Host-aware claiming (task-972913b7) — a `recommendedModel` is "local-lane
+ * pinned" when it looks like an Ollama model id (the "name:tag" convention
+ * every installed local model uses — "qwen3-coder:30b", "gpt-oss:20b",
+ * "qwen3:8b"), as opposed to a Claude id ("claude-sonnet-5"), an agentic-lane
+ * id ("deepseek-chat", "kimi-k2"), or an external-CLI id ("codex-*",
+ * "agy-*") — none of which contain a colon. This is exactly the same
+ * "colon = Ollama tag" convention scripts/lib/runner_lanes.sh uses on the
+ * runner side, so the gateway and the bash runner never disagree about what
+ * counts as a local-lane model.
+ */
+function isLocalLaneModelId(model: string | undefined): model is string {
+  return !!model && model.includes(':');
+}
+
+/**
+ * rc true when this host can actually serve `recommendedModel` — either it
+ * isn't a local-lane id at all (Claude/agentic/external-CLI tasks are never
+ * gated here), or it is and the caller declared it among its installed
+ * `localModels`. `localModels` undefined (an older/undeclared caller) never
+ * gates — back-compatible with any runner that hasn't adopted lane reporting.
+ */
+function hostCanServeModel(recommendedModel: string | undefined, localModels: string[] | undefined): boolean {
+  if (!isLocalLaneModelId(recommendedModel)) return true;
+  if (!localModels) return true;
+  return localModels.includes(recommendedModel);
+}
+
+/**
+ * Mongo `$or` filter form of hostCanServeModel, for the queue-sweep claim path
+ * (an findOneAndUpdate filter, not a fetch-then-check). Undefined when
+ * `localModels` wasn't declared — the caller composes it away, same as
+ * depGate.
+ */
+function localLaneGateFilter(localModels: string[] | undefined): Record<string, unknown> | undefined {
+  if (!localModels) return undefined;
+  return {
+    $or: [
+      { recommendedModel: { $exists: false } },
+      // No-colon ⇒ not a local-lane id at all (Claude/agentic/external-CLI),
+      // so it's never gated. A positive regex (rather than $not) so this
+      // composes the same way in both real MongoDB and the hand-rolled query
+      // matcher the task-store unit tests use (tests/unit/task-store.test.ts).
+      { recommendedModel: { $regex: '^[^:]*$' } },
+      { recommendedModel: { $in: localModels } },
+    ],
+  };
+}
+
+/**
  * On-runner-fire stale-lease reclaim (task-98c28a7c).
  *
  * claimTask stamps `leaseUntil` "for stale-runner reclaim", but the atomic
@@ -894,14 +1114,6 @@ async function claimTaskImpl(tenantId: string, input: ClaimTaskInput, connection
   // (return null, nothing is touched) rather than fail — the same pending task
   // is simply reconsidered on the runner's next poll and claims normally once
   // the window rolls over.
-  if (!input.taskId) {
-    const gate = await getTenantBudgetGateStatus(tenantId, connection, now);
-    if (gate.blocked) {
-      await notifyTenantBudgetExhausted(tenantId, gate, connection);
-      return null;
-    }
-  }
-
   // Dependency gate, explicit --task-id path (task-cafdd778): unlike the
   // pacing/budget guards above, DAG ordering is a CORRECTNESS constraint, not
   // a throttle — an operator retry must not run "build UI" before "migrate
@@ -916,45 +1128,84 @@ async function claimTaskImpl(tenantId: string, input: ClaimTaskInput, connection
         return null;
       }
     }
+    // Host-aware claiming (task-972913b7) — same correctness-gate treatment as
+    // dependsOn above: an explicit --task-id retry on a host that lacks the
+    // pinned local model is deferred, not forced onto a paid fallback.
+    if (target && !hostCanServeModel(target.recommendedModel, input.localModels)) {
+      log.info(
+        { taskId: input.taskId, recommendedModel: target.recommendedModel, localModels: input.localModels },
+        'Claim deferred — task pinned to a local-lane model this host does not have installed',
+      );
+      return null;
+    }
   }
 
-  // Dependency gate, queue path (task-cafdd778): snapshot which dep-carrying
-  // pending tasks have every upstream 'done', then constrain the atomic claim
-  // to dependency-free tasks OR that ready allow-list. Allow-list (not a
-  // blocked-list $nin) so a dep task created between this snapshot and the
-  // findOneAndUpdate can only be missed for one poll — never claimed early.
+  // Queue path (no explicit --task-id): the budget gate, the dependency-ready
+  // snapshot, and the per-member blocklist are three independent read-only
+  // lookups — none consumes another's result — so they run concurrently
+  // instead of back-to-back (perf-metrics.ts names tasks_claim a hot path;
+  // this is the common poll-with-no-taskId case a runner hits every cycle).
+  // The rare budget-blocked case still pays for the other two reads it no
+  // longer skips early; that trade favors the hot path.
   let depGate: Record<string, unknown> | undefined;
+  let blockedUserIds: string[] = [];
+  // Host-aware claiming (task-972913b7), queue-sweep path — same gate as the
+  // explicit --task-id branch above, expressed as a Mongo filter instead of a
+  // fetch-then-check: skip any pending task pinned to a local-lane model this
+  // runner doesn't have, leaving it for a host that does.
+  const laneGate = localLaneGateFilter(input.localModels);
   if (!input.taskId) {
-    const candidateBase: Record<string, unknown> = { status: 'pending', dependsOn: { $exists: true, $ne: [] } };
-    if (input.repo) candidateBase.repo = input.repo;
-    if (input.ignoreRepos && input.ignoreRepos.length) candidateBase.repo = { $nin: input.ignoreRepos };
-    const withDeps = await scopedFind(TaskModel, tenantId, candidateBase, connection).exec() as unknown as ITask[];
-    if (withDeps.length) {
+    // Dependency gate, queue path (task-cafdd778): snapshot which dep-carrying
+    // pending tasks have every upstream 'done', then constrain the atomic claim
+    // to dependency-free tasks OR that ready allow-list. Allow-list (not a
+    // blocked-list $nin) so a dep task created between this snapshot and the
+    // findOneAndUpdate can only be missed for one poll — never claimed early.
+    const computeDepGate = async (): Promise<Record<string, unknown> | undefined> => {
+      const candidateBase: Record<string, unknown> = { status: 'pending', dependsOn: { $exists: true, $ne: [] } };
+      if (input.repo) candidateBase.repo = input.repo;
+      if (input.ignoreRepos && input.ignoreRepos.length) candidateBase.repo = { $nin: input.ignoreRepos };
+      const withDeps = await scopedFind(TaskModel, tenantId, candidateBase, connection).exec() as unknown as ITask[];
+      if (!withDeps.length) return undefined;
       const upstreamIds = [...new Set(withDeps.flatMap((t) => t.dependsOn ?? []))];
       const upstreams = await scopedFind(TaskModel, tenantId, { taskId: { $in: upstreamIds } }, connection).exec() as unknown as ITask[];
-      const doneSet = new Set(upstreams.filter((u) => u.status === 'done').map((u) => u.taskId));
+      const doneSet = new Set(upstreams.filter(upstreamSatisfied).map((u) => u.taskId));
       const readyIds = withDeps
         .filter((t) => (t.dependsOn ?? []).every((d) => doneSet.has(d)))
         .map((t) => t.taskId);
-      depGate = {
+      return {
         $or: [
           { dependsOn: { $exists: false } },
           { dependsOn: { $size: 0 } },
           { taskId: { $in: readyIds } },
         ],
       };
+    };
+
+    const [gate, resolvedDepGate, resolvedBlockedUserIds] = await Promise.all([
+      getTenantBudgetGateStatus(tenantId, connection, now),
+      computeDepGate(),
+      getBlockedMemberIds(tenantId, connection),
+    ]);
+    if (gate.blocked) {
+      await notifyTenantBudgetExhausted(tenantId, gate, connection);
+      return null;
     }
+    depGate = resolvedDepGate;
+    blockedUserIds = resolvedBlockedUserIds;
   }
 
   // A specific --task-id claim is an explicit operator/runner override — bypass
   // the backoff the same way pacing/off-hours guards are bypassed by --task-id
   // (cli_task_runner.sh), so a manual retry is never blocked by its own cooldown.
-  // dueFilter and depGate are both $or conditions, so they compose under $and.
+  // dueFilter, depGate and laneGate are all $or conditions, so they compose under $and.
+  const queueAndClauses = [dueFilter(now), depGate, laneGate].filter(
+    (c): c is Record<string, unknown> => c !== undefined,
+  );
   const filter: Record<string, unknown> = input.taskId
     ? { status: 'pending' }
-    : depGate
-      ? { status: 'pending', $and: [dueFilter(now), depGate] }
-      : { status: 'pending', ...dueFilter(now) };
+    : queueAndClauses.length
+      ? { status: 'pending', $and: queueAndClauses }
+      : { status: 'pending' };
   if (input.taskId) filter.taskId = input.taskId;
   else if (input.repo) filter.repo = input.repo;
   if (input.ignoreRepos && input.ignoreRepos.length) filter.repo = { $nin: input.ignoreRepos };
@@ -963,10 +1214,7 @@ async function claimTaskImpl(tenantId: string, input: ClaimTaskInput, connection
   // attributed to a member whose $ spend or off-hours-minutes cap has tripped
   // from the claimable set. Same explicit-override exemption as the backoff/
   // off-hours pacing guards above: a specific --task-id claim bypasses it too.
-  if (!input.taskId) {
-    const blockedUserIds = await getBlockedMemberIds(tenantId, connection);
-    if (blockedUserIds.length) filter.requestedByUserId = { $nin: blockedUserIds };
-  }
+  if (!input.taskId && blockedUserIds.length) filter.requestedByUserId = { $nin: blockedUserIds };
 
   const leaseMs = (input.leaseSeconds ?? 3600) * 1000;
   const doc = await scopedFindOneAndUpdate(

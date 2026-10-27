@@ -7,7 +7,7 @@
  * login returns 503 and every protected surface stays closed to everyone.
  * That is deliberate.
  *
- * Lives under /api/auth, which middleware.ts treats as public — otherwise
+ * Lives under /api/auth, which proxy.ts treats as public — otherwise
  * logging in would require already being logged in.
  */
 import { NextResponse } from "next/server";

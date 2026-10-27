@@ -74,7 +74,7 @@ product is degraded and without a login.
 | API Gateway | gateway `GET /health/deep` (`healthy`/`degraded`/`unhealthy`). |
 | Dashboard | dashboard's own MongoDB reachability. |
 | Database (MongoDB) | `checks.mongodb` from the gateway deep health. |
-| CLI Task Runner | `state/runner-health.json` (stall flag → degraded). |
+| CLI Task Runner | `state/runner-health.<host>.json` (per-host by name since task-1eba9e51; freshest available host wins; stall flag → degraded). |
 
 Overall status is the worst component, escalated to `degraded` whenever an
 unresolved incident is present.

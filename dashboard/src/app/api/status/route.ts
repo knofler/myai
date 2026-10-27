@@ -15,5 +15,13 @@ export async function GET() {
   const status = await getPublicStatus();
   // Map overall status to an HTTP code so a probe can alert on non-200.
   const httpStatus = status.status === 'down' ? 503 : 200;
-  return NextResponse.json(status, { status: httpStatus });
+  // CDN cache (web-perceived-performance playbook, layer "safe read route"):
+  // this is public, un-tenanted, and changes slowly, so Vercel's edge can
+  // answer most hits without touching the gateway. 'down' is deliberately
+  // excluded — never let the CDN serve a cached outage past its TTL; an
+  // operational/degraded read is safe to go briefly stale while refreshing
+  // behind it.
+  const headers: Record<string, string> =
+    httpStatus === 200 ? { 'cache-control': 'public, s-maxage=15, stale-while-revalidate=45' } : {};
+  return NextResponse.json(status, { status: httpStatus, headers });
 }

@@ -109,6 +109,16 @@ export async function listReposUnified(tenantId: string): Promise<RepoInfo[]> {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * One tenant's OWN roster: its DB `repos` rows only, never the operator's
+ * managed_repos.txt seed (G5 N-2). The runner uses it to bind a non-default
+ * tenant's task to that tenant's repos.
+ */
+export async function listTenantRoster(tenantId: string): Promise<RepoInfo[]> {
+  const dbRepos = await listRepos(tenantId);
+  return dbRepos.map(r => repoInfoFromPath(r.path)).sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export interface RepoPathEntry {
   name: string;
   path: string;
@@ -163,7 +173,7 @@ export async function resolveRepoPaths(tenantId: string): Promise<RepoPathEntry[
  * DB roster if absent. Insert-only (never overwrites a self-registered / manually
  * edited row), so it is safe to run on every gateway boot. Card-only repos (a
  * RepoCard with no local checkout path) are left to Phase-2 self-registration
- * (`myai init` supplies the path). Astrovia is already absent from the txt seed.
+ * (`myai init` supplies the path).
  */
 export async function seedReposFromManagedFile(tenantId: string): Promise<{ seeded: number; existing: number }> {
   const seed = listRepoPaths();

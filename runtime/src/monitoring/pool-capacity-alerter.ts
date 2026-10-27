@@ -70,7 +70,7 @@ const log = createChildLogger({ module: 'pool-capacity-alerter' });
 
 /** One subscription pool's weekly capacity, as written by the snapshot script. */
 export interface PoolCapacityEntry {
-  /** Pool label, e.g. "claude-tech" (the paid shared tier the ledger paces). */
+  /** Pool label, e.g. "claude-work" (the paid shared tier the ledger paces). */
   pool: string;
   /** Runner's weekly token budget for this pool. 0/absent = no declared budget → never alerts. */
   weeklyBudgetTokens: number;

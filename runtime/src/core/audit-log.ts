@@ -157,6 +157,10 @@ export const AUDIT_ACTIONS = [
   // tokens) and every proxied invocation (name, ok/error, latency).
   'plugintool.change',
   'plugintool.invoke',
+  // Operator writes from the dashboard Control Room (swarm/operator-actions.ts):
+  // tell / ack / release_claim / handoff / stop_swarm — one row per attempt,
+  // refused or done, with the verified dashboard sign-in in `detail.operator`.
+  'swarm.action',
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

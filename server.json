@@ -6,14 +6,14 @@
     "url": "https://github.com/knofler/myai",
     "source": "github"
   },
-  "version": "0.9.0",
+  "version": "0.10.0",
   "websiteUrl": "https://github.com/knofler/myai",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "ai-management",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:3100/mcp"

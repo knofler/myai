@@ -23,6 +23,11 @@
 #                                        (silent — no output — when there's nothing to
 #                                        report yet, so callers like the SCHEDULE banner
 #                                        can splice it in without extra noise checks)
+#   scripts/queue_topup.sh --seed-ledger [--dry-run]
+#                                        one-shot backfill: record the title of every
+#                                        live-file line before the current cursor in the
+#                                        durable ledger (lines consumed before pop-time
+#                                        ledger writes existed, task-75e3bb46). Idempotent.
 # =============================================================================
 set +e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -38,7 +43,8 @@ BACKLOG_MIN="${RUNNER_BACKLOG_MIN:-6}"
 DRY=false
 REPORT=false
 SUMMARY=false
-while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=true;; --floor) shift; FLOOR="${1:-12}";; --report) REPORT=true;; --summary) REPORT=true; SUMMARY=true;; esac; shift; done
+SEED_LEDGER=false
+while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=true;; --floor) shift; FLOOR="${1:-12}";; --report) REPORT=true;; --summary) REPORT=true; SUMMARY=true;; --seed-ledger) SEED_LEDGER=true;; esac; shift; done
 
 . "$SCRIPT_DIR/lib/gateway.sh" 2>/dev/null || true
 log(){ echo "[queue-topup $(TZ=Australia/Sydney date '+%H:%M AEST')] $*"; }
@@ -176,6 +182,63 @@ if [ "$REPORT" = true ]; then
   exit 0
 fi
 
+# =============================================================================
+# --seed-ledger (task-75e3bb46): one-shot backfill of the durable ledger.
+#
+# Until task-75e3bb46 the pop loop recorded only DEDUPE-SKIPPED titles in the
+# ledger — never the ones it actually enqueued — so the ledger held a sparse
+# sample (~280 of 764 consumed lines on 2026-10-22) and the self-heal walk still
+# stopped at the first aged-out, never-ledgered line and rewound the cursor.
+# Pop-time writes close that for every line consumed from now on; this flag
+# closes it for history by trusting the CURRENT cursor (the same trust every
+# pop already places in it) for the live file's prefix. Archived lines are not
+# seeded: they sit before the live file, so neither walk ever reaches them.
+# =============================================================================
+if [ "$SEED_LEDGER" = true ]; then
+  [ -f "$BACKLOG" ] || { log "seed-ledger: no backlog file ($BACKLOG) — nothing to seed"; exit 0; }
+  CONSUMED=$(gw_backlog_cursor_get)
+  if [ -z "$CONSUMED" ]; then
+    log "seed-ledger: could not read the backlog cursor from the gateway — nothing seeded"
+    exit 1
+  fi
+  SEED_OFFSET=$(( CONSUMED - $(archived_total) )); [ "$SEED_OFFSET" -lt 0 ] && SEED_OFFSET=0
+  SEED_FILE="$(mktemp -t queue-topup-seed.XXXXXX)"
+  trap 'rm -f "$SEED_FILE"' EXIT
+  OFFSET="$SEED_OFFSET" /usr/bin/python3 -c '
+import sys, os, json
+offset = int(os.environ["OFFSET"])
+n = 0
+for raw in open(sys.argv[1]):
+    s = raw.strip()
+    if not s or s.startswith("#"):
+        continue
+    if n >= offset:
+        break
+    n += 1
+    try:
+        t = json.loads(s).get("title", "")
+    except Exception:
+        t = ""
+    if t:
+        print(t.replace("\n", " ").replace("\r", " "))
+' "$BACKLOG" > "$SEED_FILE"
+  SEED_COUNT=$(grep -c . "$SEED_FILE")
+  if [ "$DRY" = true ]; then
+    log "seed-ledger (dry run): would record $SEED_COUNT title(s) from the first $SEED_OFFSET live backlog line(s) (cursor $CONSUMED)"
+    exit 0
+  fi
+  if [ "$SEED_COUNT" -eq 0 ]; then
+    log "seed-ledger: cursor $CONSUMED covers no titled live-file lines — nothing to seed"
+    exit 0
+  fi
+  if gw_backlog_ledger_add "$SEED_FILE" 30; then
+    log "seed-ledger: recorded $SEED_COUNT title(s) from the first $SEED_OFFSET live backlog line(s) (cursor $CONSUMED) in the durable ledger"
+    exit 0
+  fi
+  log "seed-ledger: ledger write failed — nothing seeded"
+  exit 1
+fi
+
 # ── pending count across all repos (gateway; fail-safe to 0 = assume empty) ──
 PENDING_RAW=$(curl -sf -m 8 -X POST http://localhost:3100/mcp \
   -H 'content-type: application/json' \
@@ -283,16 +346,36 @@ REMAINING=$(( TOTAL - CONSUMED ))
 # entirely rather than act on it. Only skip when we have archived history to
 # canary against; with none (ARCHIVED=0, the original task-08dbc72f bug this
 # self-heal targets), behavior is unchanged.
+#
+# LEDGER FLOOR (task-aa331af6, durable fix for the 608->957 churn): the
+# canary above only catches TOTAL staleness of the list. It does nothing for
+# the much more common case where the list is fine for most titles but ONE
+# early one has aged out of the limit:2000 window on THIS cycle's fetch —
+# that alone stops the confirmed-prefix walk right there, rewinding the
+# cursor across a whole span of genuinely-consumed lines. Worse, the cap
+# keeps moving as the fleet-wide task table grows, so ANY tasks_list-window
+# confirmation has this bug latent in it forever. Fix: consult the durable
+# consumed-titles ledger (backlog_ledger_get/add, task-aa331af6) alongside
+# tasks_list. A title counts as confirmed if EITHER source has it, and the
+# confirmed-prefix computed from the ledger ALONE (never touched by window
+# size) is a floor the corrected cursor may never go below. Every title
+# newly confirmed this cycle — via the leading-prefix walk OR found anywhere
+# else in the file — is written back to the ledger so it can never need
+# tasks_list to reconfirm it again.
 if [ "$REMAINING" -lt 1 ]; then
   HEAL_TASKS_JSON=$(curl -sf -m 15 -X POST http://localhost:3100/mcp \
     -H 'content-type: application/json' \
     -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
     -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"limit":2000}},"id":1}' 2>/dev/null)
   if [ -n "$HEAL_TASKS_JSON" ]; then
-    HEAL_RESULT=$(BACKLOG="$BACKLOG" ARCHIVE_DIR="$ROOT/config/archive" /usr/bin/python3 -c '
+    LEDGER_FILE="$(mktemp -t queue-topup-ledger.XXXXXX)"
+    gw_backlog_ledger_get 15 > "$LEDGER_FILE" 2>/dev/null
+    # shellcheck disable=SC2016  # python body is single-quoted deliberately — values arrive via the env prefix, not shell expansion
+    HEAL_RESULT=$(BACKLOG="$BACKLOG" ARCHIVE_DIR="$ROOT/config/archive" LEDGER_FILE="$LEDGER_FILE" /usr/bin/python3 -c '
 import sys, os, json, glob
 backlog_path = os.environ["BACKLOG"]
 archive_dir = os.environ.get("ARCHIVE_DIR", "")
+ledger_file = os.environ.get("LEDGER_FILE", "")
 tasks_raw = sys.stdin.read()
 try:
     payload = json.loads(tasks_raw)
@@ -302,6 +385,17 @@ try:
 except Exception:
     tasks = []
 known_titles = set(t.get("title", "") for t in tasks if t.get("title"))
+
+# Durable ledger (task-aa331af6) — best-effort, empty set when unreadable
+# (gateway not yet carrying this tool, or the fetch failed); the walk then
+# falls back to known_titles only, i.e. pre-fix behaviour.
+ledger_titles = set()
+if ledger_file and os.path.exists(ledger_file):
+    with open(ledger_file) as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if line:
+                ledger_titles.add(line)
 
 # Canary: titles already rotated into the archive were gateway-confirmed at
 # archive time. If the CURRENT list cant confirm any of them anymore, its
@@ -327,42 +421,93 @@ if archived_titles and not any(t in known_titles for t in archived_titles):
     print("SKIP")
     sys.exit(0)
 
+# Two walks over the same file:
+#  - `confirmed` (ledger ∪ tasks_list): the best current knowledge, used for
+#    the cursor correction itself. Must remain a strict, stoppable
+#    contiguous-prefix walk — a gap can be a genuinely unconsumed item.
+#  - `ledger_floor` (ledger ALONE): a hard floor the correction may never go
+#    below, since ledger membership can never age out the way a
+#    tasks_list-window confirmation can.
 confirmed = 0
+ledger_floor = 0
 stopped = False
+floor_stopped = False
+new_ledger_titles = set()
 for raw in open(backlog_path):
     s = raw.strip()
     if not s or s.startswith("#"):
-        continue
-    if stopped:
         continue
     try:
         obj = json.loads(s)
         title = obj.get("title", "")
     except Exception:
         # a genuinely malformed non-comment line cannot be title-matched —
-        # treat as not-yet-confirmed (never counts toward the safe prefix).
+        # treat as not-yet-confirmed (never counts toward either prefix).
         title = None
-    if title and title in known_titles:
-        confirmed += 1
-    else:
-        stopped = True
-print(confirmed)
+
+    if not floor_stopped:
+        if title and title in ledger_titles:
+            ledger_floor += 1
+        else:
+            floor_stopped = True
+
+    if not stopped:
+        if title and (title in known_titles or title in ledger_titles):
+            confirmed += 1
+        else:
+            stopped = True
+
+    # Ledger seeding: record EVERY line whose exact title tasks_list can
+    # currently confirm, not just the leading contiguous run — this cycle
+    # may be the only chance to capture a title before it ages out of a
+    # LATER cycle'"'"'s window.
+    if title and title in known_titles and title not in ledger_titles:
+        new_ledger_titles.add(title)
+
+print("CONFIRMED\x1f%d" % confirmed)
+print("LEDGER_FLOOR\x1f%d" % ledger_floor)
+for t in sorted(new_ledger_titles):
+    print("NEWTITLE\x1f%s" % t.replace("\x1f", " "))
 ' <<<"$HEAL_TASKS_JSON")
-    HEAL_RESULT="$(printf '%s' "$HEAL_RESULT" | tr -d '[:space:]')"
-    if [ "$HEAL_RESULT" = "SKIP" ]; then
+    HEAL_STATUS_LINE="$(printf '%s\n' "$HEAL_RESULT" | head -1 | tr -d '[:space:]')"
+    if [ "$HEAL_STATUS_LINE" = "SKIP" ]; then
       log "self-heal check: gateway task list can't confirm even the already-archived titles — treating it as stale/reconciled right now and leaving cursor as-is (see task-fabf3ec4)"
-    elif [ -n "$HEAL_RESULT" ]; then
-      HEAL_CONFIRMED="$(printf '%s' "$HEAL_RESULT" | tr -cd '0-9')"
-      if [ -n "$HEAL_CONFIRMED" ]; then
-        NEW_CONSUMED=$(( HEAL_CONFIRMED + ARCHIVED ))
+    else
+      NEW_LEDGER_TITLES_FILE="$(mktemp -t queue-topup-new-ledger.XXXXXX)"
+      HEAL_CONFIRMED=""
+      HEAL_LEDGER_FLOOR=""
+      # \x1f-delimited "KIND\x1fvalue" lines, same convention as the pop
+      # loop's SCANNED/ITEM/MALFORMED parsing below.
+      while IFS=$'\x1f' read -r kind val; do
+        case "$kind" in
+          CONFIRMED) HEAL_CONFIRMED="$val" ;;
+          LEDGER_FLOOR) HEAL_LEDGER_FLOOR="$val" ;;
+          NEWTITLE) printf '%s\n' "$val" >> "$NEW_LEDGER_TITLES_FILE" ;;
+        esac
+      done <<<"$HEAL_RESULT"
+      if [ -n "$HEAL_CONFIRMED" ] && [ -n "$HEAL_LEDGER_FLOOR" ]; then
+        # Never correct below the ledger floor (task-aa331af6) — it is the
+        # one number here that cannot regress as the task table grows.
+        SAFE_CONFIRMED="$HEAL_CONFIRMED"
+        [ "$HEAL_LEDGER_FLOOR" -gt "$SAFE_CONFIRMED" ] && SAFE_CONFIRMED="$HEAL_LEDGER_FLOOR"
+        NEW_CONSUMED=$(( SAFE_CONFIRMED + ARCHIVED ))
         if [ "$NEW_CONSUMED" -lt "$CONSUMED" ]; then
-          log "self-heal: cursor was $CONSUMED but only $HEAL_CONFIRMED backlog line(s) are gateway-confirmed consumed — correcting cursor to $NEW_CONSUMED (file drifted, see task-08dbc72f)"
+          log "self-heal: cursor was $CONSUMED but only $SAFE_CONFIRMED backlog line(s) are confirmed consumed (tasks_list=$HEAL_CONFIRMED, ledger floor=$HEAL_LEDGER_FLOOR) — correcting cursor to $NEW_CONSUMED (file drifted, see task-08dbc72f)"
           CONSUMED="$NEW_CONSUMED"
           gw_backlog_cursor_set "$CONSUMED" || log "self-heal: failed to persist corrected cursor ($CONSUMED) to the gateway — will retry next cycle"
           REMAINING=$(( TOTAL - CONSUMED ))
         fi
+        if [ -s "$NEW_LEDGER_TITLES_FILE" ]; then
+          if gw_backlog_ledger_add "$NEW_LEDGER_TITLES_FILE" 15; then
+            log "self-heal: recorded $(grep -c . "$NEW_LEDGER_TITLES_FILE") newly-confirmed title(s) to the durable ledger (task-aa331af6)"
+          else
+            log "self-heal: failed to persist newly-confirmed titles to the ledger — will re-derive from tasks_list next cycle"
+          fi
+        fi
       fi
+      rm -f "$NEW_LEDGER_TITLES_FILE"
     fi
+    rm -f "$LEDGER_FILE"
   else
     log "self-heal check: gateway unreachable — cannot verify true exhaustion, trusting cursor as-is"
   fi
@@ -417,7 +562,7 @@ except Exception: print(0)' 2>/dev/null)
     fi
     if [ "${EXISTS:-0}" = "0" ]; then
       date +%s > "$PLANNER_STAMP"
-      "$SCRIPT_DIR/schedule_task.sh" --repo ai_management --priority P1 --agent product-manager --model claude-fable-5 \
+      "$SCRIPT_DIR/schedule_task.sh" --repo ai_management --priority P1 --agent product-manager --model claude-fable-5 --model-preference \
         --title "$PLANNER_TITLE" \
         --desc "The runner-backlog well (config/runner_backlog.jsonl) is running low. Read plan/BACKLOG_POLICY.md FIRST — it is the source of truth for routing policy (core-repos-first, playground's P2 cap, config/schedule_ignore.txt) and for what else to read/do before drafting. Then read plan/GRAND_PRODUCT_ROADMAP.md, plan/PRODUCTION_MVP_SPRINT.md, plan/GAP_BACKLOG_SCHEDULE.md, each core repo's AI/state + AI/plan, and the current queue; APPEND 20-40 fresh, runner-sized, prioritized {repo,title,priority,agent,desc} JSONL lines to config/runner_backlog.jsonl following plan/BACKLOG_POLICY.md's routing policy. Do NOT duplicate already-queued or already-shipped work. Before appending, draft your batch to a JSONL file and run 'python3 scripts/backlog_dupe_check.py --candidates <your-draft.jsonl>' — it flags likely near-duplicate titles already in the backlog (token-overlap check) so you can drop them before appending; it does not catch everything, use judgement on what it flags. This keeps the runner never-empty (operator directive). Commit the backlog append. HARD BOUNDARY (non-negotiable, see AI/documentation/AI_RULES.md §7 for the durable record): the ONLY write actions this task may take are (1) appending JSONL lines to config/runner_backlog.jsonl and (2) committing that file. You MUST NOT call the tasks_create or tasks_update MCP tools, MUST NOT run schedule_task.sh or curl the gateway to create or modify tasks, and MUST NOT change the status of any existing task — pending, blocked, or otherwise — in this or any other repo. New backlog items reach the live queue later, ONLY via this same queue_topup.sh script's own pop path. If an existing pending task looks stale or superseded, say so in your commit message for a human to review — never touch its status yourself." >/dev/null 2>&1 \
         && log "backlog low ($REMAINING left) → enqueued PLANNER to regenerate it"
@@ -430,6 +575,63 @@ fi
 NEED=$(( FLOOR - PENDING )); [ "$NEED" -lt 1 ] && exit 0
 [ "$REMAINING" -lt 1 ] && { log "backlog exhausted (planner queued) — no items to pop this cycle"; exit 0; }
 [ "$NEED" -gt "$REMAINING" ] && NEED="$REMAINING"
+
+# ── exact-title dedupe set (task-e0047396, 2026-09-14 — found on the SEVENTH
+# dispatch of the same already-resolved item): cursor position ≥ CONSUMED is
+# NOT proof a line was never popped. The self-heal above can only
+# title-confirm lines still visible in tasks_list (hard-capped at limit:2000 —
+# older records age out of the window), so its "confirmed prefix" stops at the
+# first aged-out title and rewinds the cursor across a span of
+# genuinely-consumed lines; every later top-up then re-enqueues those lines as
+# brand-new task UUIDs. Observed in runner.out 2026-09-12..14: cursor rewound
+# 957→608 on seven consecutive exhaustion cycles, re-dispatching the
+# mongo-mirror-status.json decision 7×, gateway-contract 4×, webhook
+# idempotency 3× — one full LLM session burned per re-pop. The pop loop below
+# therefore checks each candidate's EXACT title against the gateway list (any
+# status, any repo — schedule_task.sh passes --title through to tasks_create
+# verbatim, the same positive proof the self-heal's own prefix walk relies
+# on) and SKIPS lines that already have a task record instead of
+# re-dispatching them. The cursor still advances by SCANNED, so a skipped
+# line is walked past permanently. Fail-open: list unfetchable → empty set →
+# behavior unchanged (this is a guard against re-pops, never a gate that can
+# starve the queue; a title aged out of the 2000-window re-pops once, and its
+# fresh record then blocks every subsequent re-pop).
+KNOWN_TITLES_FILE="$(mktemp -t queue-topup-known-titles.XXXXXX)"
+# Titles to record in the durable ledger (task-aa331af6) at the end of this
+# cycle: every line the dedupe gate skips because tasks_list positively shows
+# its task, AND (task-75e3bb46) every line this cycle actually enqueues. The
+# second half is the durable fix: before it, a line consumed by a normal pop
+# was never ledgered, so once its task aged out of the limit:2000 window the
+# self-heal walk could not confirm it and rewound the cursor across it
+# (957->608 churn, ~1 re-added line per 10-min cycle).
+POP_LEDGER_FILE="$(mktemp -t queue-topup-pop-ledger.XXXXXX)"
+# The ledger itself, so the dedupe gate also skips titles consumed long ago
+# whose tasks are no longer in the window — a rewind can then never re-dispatch
+# a consumed line, it can only walk past it.
+LEDGER_TITLES_FILE="$(mktemp -t queue-topup-ledger-titles.XXXXXX)"
+trap 'rm -f "$KNOWN_TITLES_FILE" "$POP_LEDGER_FILE" "$LEDGER_TITLES_FILE"' EXIT
+gw_backlog_ledger_get 15 > "$LEDGER_TITLES_FILE" 2>/dev/null || : > "$LEDGER_TITLES_FILE"
+DEDUPE_RAW="${HEAL_TASKS_JSON:-}"   # reuse the self-heal's fetch when it ran this cycle
+if [ -z "$DEDUPE_RAW" ]; then
+  DEDUPE_RAW=$(curl -sf -m 15 -X POST http://localhost:3100/mcp \
+    -H 'content-type: application/json' \
+    -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
+    -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"tasks_list","arguments":{"limit":2000}},"id":1}' 2>/dev/null)
+fi
+if [ -n "$DEDUPE_RAW" ]; then
+  printf '%s' "$DEDUPE_RAW" | /usr/bin/python3 -c '
+import sys, json
+try:
+    d = json.loads(json.load(sys.stdin)["result"]["content"][0]["text"])
+    tasks = d if isinstance(d, list) else d.get("tasks", [])
+except Exception:
+    tasks = []
+for t in tasks:
+    ti = t.get("title", "")
+    if ti:
+        sys.stdout.write(ti.replace("\n", " ").replace("\r", " ") + "\n")
+' > "$KNOWN_TITLES_FILE" 2>/dev/null
+fi
 
 # emit the next $NEED non-comment lines starting after $CONSUMED, as TSV the shell can read.
 # OFFSET is CONSUMED with the archived-away prefix subtracted back out, since
@@ -449,6 +651,7 @@ NEED=$(( FLOOR - PENDING )); [ "$NEED" -lt 1 ] && exit 0
 OFFSET=$(( CONSUMED - ARCHIVED )); [ "$OFFSET" -lt 0 ] && OFFSET=0
 POPPED=0
 SCANNED=0
+SKIPPED_DUP=0
 # \x1f (unit separator), NOT tab: tab is IFS whitespace, so bash collapses a
 # run of tabs into one delimiter and drops empty fields — an item with an empty
 # agent or desc would shift every later field left, landing the draft date in
@@ -462,6 +665,21 @@ while IFS=$'\x1f' read -r kind a b c d e f; do
     ITEM)
       repo="$a"; title="$b"; priority="$c"; agent="$d"; desc="$e"; drafted="${f:-}"
       [ -n "$title" ] || continue
+      # ── exact-title dedupe gate (task-e0047396): a task record with this
+      # exact title already exists in the gateway (any status) — this line is
+      # a re-pop of consumed work (cursor rewind / stale file), not new work.
+      # Skip the enqueue; SCANNED still advances the cursor past it.
+      if [ -s "$LEDGER_TITLES_FILE" ] && grep -Fxq -- "$title" "$LEDGER_TITLES_FILE" 2>/dev/null; then
+        SKIPPED_DUP=$(( SKIPPED_DUP + 1 ))
+        log "skip (title already in the consumed ledger): [$repo/$priority] $title"
+        continue
+      fi
+      if [ -s "$KNOWN_TITLES_FILE" ] && grep -Fxq -- "$title" "$KNOWN_TITLES_FILE" 2>/dev/null; then
+        SKIPPED_DUP=$(( SKIPPED_DUP + 1 ))
+        printf '%s\n' "$title" >> "$POP_LEDGER_FILE"
+        log "skip (exact-title task already in gateway): [$repo/$priority] $title"
+        continue
+      fi
       # ── prior-art check (the duplicate-dispatch gate) ───────────────────
       # A well line is dupe-checked by the PLANNER at DRAFT time and consumed
       # weeks later; nothing re-checked in between, so work shipped in the gap
@@ -495,8 +713,10 @@ except Exception:
       fi
       if [ "$DRY" = true ]; then log "would enqueue [$repo/$priority] $title"
       else
-        "$SCRIPT_DIR/schedule_task.sh" --repo "$repo" --title "$title" --priority "$priority" --agent "$agent" --model claude-fable-5 --desc "$desc" >/dev/null 2>&1 \
-          && log "enqueued [$repo/$priority] $title"
+        if "$SCRIPT_DIR/schedule_task.sh" --repo "$repo" --title "$title" --priority "$priority" --agent "$agent" --model claude-fable-5 --model-preference --desc "$desc" >/dev/null 2>&1; then
+          log "enqueued [$repo/$priority] $title"
+          printf '%s\n' "$title" >> "$POP_LEDGER_FILE"   # consumed — record it durably (task-75e3bb46)
+        fi
       fi
       POPPED=$(( POPPED + 1 ))
       ;;
@@ -542,8 +762,15 @@ while i < len(lines) and emitted < need:
 print("SCANNED\x1f%d" % scanned)
 ' "$BACKLOG")
 
+# Ledger BEFORE cursor: if the cursor write then fails, the next cycle re-scans
+# this window and the dedupe gate skips every title recorded here instead of
+# re-enqueueing it.
+if [ "$DRY" != true ] && [ -s "$POP_LEDGER_FILE" ]; then
+  gw_backlog_ledger_add "$POP_LEDGER_FILE" 15 || log "failed to persist $(grep -c . "$POP_LEDGER_FILE") consumed title(s) to the ledger — the next self-heal may rewind across them"
+fi
 if [ "$DRY" != true ] && [ "$SCANNED" -gt 0 ]; then
   gw_backlog_cursor_set $(( CONSUMED + SCANNED )) || log "failed to persist backlog cursor ($(( CONSUMED + SCANNED ))) to the gateway — next cycle will re-scan this window"
 fi
-log "topped up: $POPPED item(s) enqueued (backlog cursor now $(( CONSUMED + SCANNED ))/$TOTAL)"
+DUP_NOTE=""; [ "$SKIPPED_DUP" -gt 0 ] && DUP_NOTE=", $SKIPPED_DUP duplicate(s) skipped"
+log "topped up: $POPPED item(s) enqueued$DUP_NOTE (backlog cursor now $(( CONSUMED + SCANNED ))/$TOTAL)"
 exit 0

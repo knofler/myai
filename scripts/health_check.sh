@@ -7,11 +7,22 @@
 set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Old usernames that must not linger in a repo (e.g. after an account rename):
+# $HEALTH_STALE_USERNAMES (space-separated), else config/stale_usernames.txt
+# (local, one per line, # comments). Neither → the stale-username check is skipped.
+STALE_USERNAMES="${HEALTH_STALE_USERNAMES-}"
+if [ -z "$STALE_USERNAMES" ] && [ -f "$SCRIPT_DIR/../config/stale_usernames.txt" ]; then
+    STALE_USERNAMES="$(grep -vE '^[[:space:]]*(#|$)' "$SCRIPT_DIR/../config/stale_usernames.txt" | tr '\n' ' ')"
+fi
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # ADR-021 Phase 3: roster via the shared resolver (gateway DB roster preferred,
 # managed_repos.txt bootstrap-seed fallback). TRACKING_FILE kept only as the
 # seed-file pointer for the no-resolver error message.
 . "$SCRIPT_DIR/lib/repo_paths.sh" 2>/dev/null || true
+# AI_RULES §11a — vercel.json must live in the Vercel project's Root Directory.
+. "$SCRIPT_DIR/lib/vercel_root.sh" 2>/dev/null || true
+# AI_RULES §21 — self-hosted runners only (outside exempt orgs).
+. "$SCRIPT_DIR/lib/selfhosted_runner.sh" 2>/dev/null || true
 TRACKING_FILE="$REPO_DIR/config/managed_repos.txt"
 
 # Colors
@@ -90,12 +101,17 @@ check_org_health() {
     echo ""
     echo -e "${CYAN}━━━ Multi-Org Auth ━━━${NC}"
 
-    local org_dirs="museum tech personal"
+    # The org profiles are whatever ~/.claude-<x> dirs this Mac has (v1 G6:
+    # names are user data, never a list in code).
+    local org_dirs="" d
+    for d in "$HOME"/.claude-*; do [ -d "$d" ] && org_dirs="$org_dirs ${d##*/.claude-}"; done
+    org_dirs="${org_dirs# }"
     local dir_count=0
     local auth_count=0
     local has_any_dir=0
 
     # 1. Check each expected config dir exists + is authenticated
+    [ -n "$org_dirs" ] || warn "no ~/.claude-<org> profile dirs (org setup optional)"
     for org in $org_dirs; do
         local dir_path="$HOME/.claude-${org}"
         if [ -d "$dir_path" ]; then
@@ -152,6 +168,75 @@ check_org_health() {
 
     # 5. Summary line
     echo -e "  ${CYAN}Multi-Org: ${dir_count}/3 dirs, ${auth_count}/3 authenticated, org map: ${map_entries} entries${NC}"
+}
+
+check_vercel_root_placement() {
+    # AI_RULES §11a — vercel.json must live in the Vercel project's Root Directory.
+    # Vercel reads vercel.json ONLY from the Root Directory, so a monorepo whose
+    # Root Directory is apps/web but whose vercel.json sits at the repo root has
+    # its deploy-gate AND its crons SILENTLY IGNORED in production (incident foh
+    # 2026-10-01: /api/warm cron showed "not deployed", zero calls in 24h). This
+    # audits placement against the resolved Root Directory and (opt-in) confirms
+    # crons are actually deployed. Returns non-zero on a confirmed misplacement.
+    # $1 = repo root.
+    local d="$1"
+    # Only audit repos tied to Vercel: a .vercel link OR a vercel.json somewhere.
+    # No signal → nothing to audit (skip silently so non-web repos stay clean).
+    local linked=0; vercel_is_linked "$d" 2>/dev/null && linked=1
+    local root_vj=0; [ -f "$d/vercel.json" ] && root_vj=1
+    [ "$linked" = 0 ] && [ "$root_vj" = 0 ] && return 0
+
+    local rootsub=""
+    declare -F vercel_root_dir >/dev/null 2>&1 && rootsub="$(vercel_root_dir "$d" 2>/dev/null)"
+
+    local placement_fail=0
+    if [ -z "$rootsub" ]; then
+        # Root Directory is the repo root (or unresolved) → gate belongs at root.
+        if [ "$root_vj" = 1 ]; then
+            pass "vercel.json at repo root (Vercel Root Directory = repo root)"
+        else
+            warn "Vercel-linked but no vercel.json at repo root — deploy-gate/crons may be ungated"
+        fi
+    else
+        # Root Directory is a subdir → vercel.json MUST live there.
+        if [ -f "$d/$rootsub/vercel.json" ]; then
+            pass "vercel.json in Vercel Root Directory ($rootsub/)"
+            [ "$root_vj" = 1 ] && warn "stray vercel.json ALSO at repo root — Vercel ignores it; $rootsub/vercel.json is authoritative"
+        elif [ "$root_vj" = 1 ]; then
+            fail "vercel.json MISPLACED — at repo root but Vercel Root Directory is $rootsub/ → deploy-gate + crons SILENTLY IGNORED in prod (AI_RULES §11a). Fix: git mv vercel.json $rootsub/vercel.json  (or ./scripts/rollout_ci_thrift.sh --apply)"
+            placement_fail=1
+        else
+            warn "Vercel Root Directory is $rootsub/ but no vercel.json there — deploy-gate/crons ungated"
+        fi
+    fi
+
+    # Vercel's schema caps ignoreCommand at 256 chars; a longer one ERRORs every
+    # deployment before the build (connect-hub prod, 2026-09-10 → 2026-10-21,
+    # the 334-char v2 gate from templates/vercel.json). Checked wherever a
+    # vercel.json sits — a stray root copy may be the one someone moves later.
+    local vj iclen
+    for vj in "$d/vercel.json" ${rootsub:+"$d/$rootsub/vercel.json"}; do
+        [ -f "$vj" ] || continue
+        iclen="$(jq -r '.ignoreCommand // "" | length' "$vj" 2>/dev/null)" || continue
+        if [ "${iclen:-0}" -gt 256 ]; then
+            fail "${vj#"$d"/}: ignoreCommand is $iclen chars (Vercel max 256) → EVERY deployment fails before build. Fix: ./scripts/rollout_ci_thrift.sh --apply (replaces our old gate) or shorten it by hand"
+            placement_fail=1
+        fi
+    done
+
+    # Opt-in (network + auth): confirm crons actually deployed after a prod deploy.
+    # OFF by default so the fleet sweep stays fast and offline; set HEALTH_VERCEL_CRONS=1.
+    if [ "${HEALTH_VERCEL_CRONS:-0}" = 1 ] && [ "$linked" = 1 ] && command -v vercel >/dev/null 2>&1; then
+        local crons
+        crons="$(cd "$d" && _vercel_timeout 15 vercel crons list 2>/dev/null)" || crons=""
+        if printf '%s' "$crons" | grep -qiE 'not deployed'; then
+            fail "vercel crons list shows 'not deployed' after a prod deploy — a cron is defined but not live (often a misplaced/ignored vercel.json). Verify: vercel crons list"
+            placement_fail=1
+        elif [ -n "$crons" ]; then
+            pass "vercel crons list: all crons deployed"
+        fi
+    fi
+    return $placement_fail
 }
 
 check_master() {
@@ -275,13 +360,20 @@ check_master() {
     fi
 
     # Stale refs
-    local stale_refs
-    stale_refs=$(grep -rl "rummanahmed" "$repo_path/" --include="*.md" 2>/dev/null | xargs grep -l "[^\`]rummanahmed[^'\`]" 2>/dev/null | head -5)
-    if [ -n "$stale_refs" ]; then
+    local stale_refs="" _u
+    for _u in $STALE_USERNAMES; do
+        stale_refs+=$(grep -rl "$_u" "$repo_path/" --include="*.md" 2>/dev/null | xargs grep -l "[^\`]${_u}[^'\`]" 2>/dev/null | head -5)
+    done
+    if [ -z "$STALE_USERNAMES" ]; then
+        :
+    elif [ -n "$stale_refs" ]; then
         warn "Stale username found: $stale_refs"
     else
         pass "No stale username references"
     fi
+
+    # AI_RULES §11a — vercel.json in the Vercel project's Root Directory
+    check_vercel_root_placement "$repo_path" || ((repo_fail++))
 
     return $repo_fail
 }
@@ -447,11 +539,15 @@ check_repo() {
         ((repo_fail++))
     fi
 
-    # 9. Check for stale username references
-    local stale_refs
-    stale_refs=$(grep -rl "rummanahmed" "$repo_path/AI/" 2>/dev/null | head -5)
-    if [ -n "$stale_refs" ]; then
-        warn "Stale username 'rummanahmed' found in: $stale_refs"
+    # 9. Check for stale username references (config: STALE_USERNAMES above)
+    local stale_refs="" _u
+    for _u in $STALE_USERNAMES; do
+        stale_refs+=$(grep -rl "$_u" "$repo_path/AI/" 2>/dev/null | head -5)
+    done
+    if [ -z "$STALE_USERNAMES" ]; then
+        :
+    elif [ -n "$stale_refs" ]; then
+        warn "Stale username found in: $stale_refs"
     else
         pass "No stale username references"
     fi
@@ -506,6 +602,47 @@ check_repo() {
             fail "AI_RULES.md missing tech stack mandates"
             ((repo_fail++))
         fi
+    fi
+
+    # 14. AI_RULES §11a — vercel.json in the Vercel project's Root Directory
+    check_vercel_root_placement "$repo_path" || ((repo_fail++))
+
+    # 15. AI_RULES §21 — self-hosted runners only outside exempt orgs (config/hosted_runner_orgs.txt).
+    #     A hosted ubuntu/windows/macos runner on a repo outside the exempt org
+    #     burns billable Actions minutes; it must be [self-hosted, myai-local].
+    if declare -F sh_workflow_dir >/dev/null 2>&1; then
+        local _wfdir; _wfdir="$(sh_workflow_dir "$repo_path")"
+        if [ -n "$_wfdir" ]; then
+            if sh_is_exempt_org "$repo_path"; then
+                pass "CI runners: exempt org $(sh_repo_owner "$repo_path") — hosted runners allowed (§21)"
+            else
+                local _hostf _hits _any=0
+                for _hostf in "$_wfdir"/*.yml "$_wfdir"/*.yaml; do
+                    [ -f "$_hostf" ] || continue
+                    _hits="$(sh_hosted_runner_hits "$_hostf")"
+                    if [ -n "$_hits" ]; then
+                        _any=1
+                        fail "$(basename "$_hostf"): hosted runner on a non-exempt repo — must be [self-hosted, myai-local] (§21). Fix: ./scripts/rollout_selfhosted_runner.sh --apply"
+                    fi
+                done
+                [ "$_any" = 0 ] && pass "CI runners: all workflows on self-hosted (§21)"
+                [ "$_any" = 1 ] && ((repo_fail++))
+            fi
+        fi
+    fi
+
+    # 15b. This host's runners (slots of project myai, 2026-10-22) — one line per
+    #      runner, master repo only, and only on a host that has runner slots.
+    #      A down/offline runner warns; it never fails the repo.
+    if [ "$repo_path" = "$REPO_DIR" ] && [ -f "$SCRIPT_DIR/runner_selfhosted.sh" ] \
+       && [ -f "${MYAI_HOME:-$HOME/.myai}/runners/slots.$(hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')" ]; then
+        local _rl
+        while IFS= read -r _rl; do
+            case "$_rl" in
+                "OK   "*) pass "gh runner ${_rl#OK   }" ;;
+                "WARN "*) warn "gh runner ${_rl#WARN } — scripts/runner_selfhosted.sh status" ;;
+            esac
+        done <<< "$(bash "$SCRIPT_DIR/runner_selfhosted.sh" check 2>&1)"
     fi
 
     return $repo_fail

@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { PageHeader } from '@/components/page-header';
 
 const PRIORITIES = [
   { value: 'P1', label: 'P1 — soon' },
@@ -66,8 +67,12 @@ export default function NewAppPage() {
   if (result) {
     return (
       <div className="max-w-md mx-auto mt-10">
-        <h1 className="text-2xl font-bold text-brand-orange tracking-tight">App queued 🚀</h1>
-        <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">{result.message}</p>
+        <PageHeader
+          icon="apps"
+          title="App queued"
+          summary={`${result.repoName} is now in your directory and the build is queued. Your AI scaffolds it on the next off-hours run and hands it back for your review.`}
+          subtitle={result.message}
+        />
         <div className="gel-surface mt-5 p-4 rounded-xl border border-[rgb(var(--border-subtle))] space-y-2 text-sm">
           <div className="flex justify-between">
             <span className="text-[rgb(var(--text-muted))]">Repo</span>
@@ -78,7 +83,7 @@ export default function NewAppPage() {
             <span className="font-mono text-[rgb(var(--text-primary))] text-xs">{result.taskId}</span>
           </div>
         </div>
-        <p className="text-[11px] text-[rgb(var(--text-muted))] mt-3">
+        <p className="text-label text-[rgb(var(--text-muted))] mt-3">
           The agentFlow pipeline scaffolds and builds this app on the next off-hours runner window. Track it on{' '}
           <Link href="/work" className="text-teal-400 hover:text-teal-300">Work → Up Next</Link> and review with{' '}
           <code className="text-[rgb(var(--text-secondary))]">ship it</code>.
@@ -110,11 +115,12 @@ export default function NewAppPage() {
   // ── Form ────────────────────────────────────────────────────
   return (
     <div className="max-w-md mx-auto mt-10">
-      <h1 className="text-2xl font-bold text-brand-orange tracking-tight">New App</h1>
-      <p className="text-sm text-[rgb(var(--text-muted))] mt-1">
-        Describe the app. It is registered in your directory and the agentFlow pipeline scaffolds + builds it on the
-        next off-hours run.
-      </p>
+      <PageHeader
+        icon="apps"
+        title="New App"
+        summary="Describe the app you want. Your AI registers it in your directory, then scaffolds and builds the first version on the next off-hours run."
+        subtitle="Nothing ships until you review it."
+      />
 
       {error && (
         <div className="mt-4 px-3 py-2 rounded-lg bg-rose-950/50 border border-rose-800/50 text-xs text-rose-300">

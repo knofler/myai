@@ -38,7 +38,15 @@ callsites with ONE merge policy:
               target occurrences (beyond master's count for that identity)
               fall through to the "target-only" append path, so a repo-added
               duplicate matcher group still survives untouched.
+  * argv    — EXCEPTION to the list rule: a positional argument vector
+              (``mcpServers.<name>.args``) is REPLACED by master wholesale.
+              Position carries meaning there, so a "target-only" item is not
+              an addition to preserve but corruption to remove. See
+              is_atomic_list().
   * scalars — master wins.
+  * null    — a master value of null RETIRES the key: it is removed from the
+              target and never written. How a dropped framework server (the
+              legacy http `ai-framework` gateway entry) leaves the fleet.
 
   * IDEMPOTENT WRITE — the target file is rewritten ONLY when the merged result
     differs semantically from what's already there. A no-change sync leaves the
@@ -73,14 +81,56 @@ def identity(item):
         return ("val", str(item))
 
 
-def merge(master, target):
-    """Merged value with master precedence; repo-local additions survive."""
+def strip_nulls(value):
+    """A master value of null is a RETIRE marker, never a value to write."""
+    if isinstance(value, dict):
+        return {k: strip_nulls(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [strip_nulls(v) for v in value]
+    return value
+
+
+def is_atomic_list(path):
+    """Lists that are POSITIONAL, not set-like — master replaces them wholesale.
+
+    ARGV IS NOT A SET (2026-09-25). ``mcpServers.<name>.args`` is a command
+    line: position carries meaning and duplicates are not "extra items", they
+    are corruption. Union-merging it produced ``["-c", OLD, NEW]`` across 17
+    fleet repos — and since ``bash -c`` takes the first operand as the script
+    and the second as ``$0``, the second payload never ran. Repos that had
+    already been updated to a better resolver were silently reverted to a
+    stale one on the next rollout, which took 27 repos' myai MCP server dark
+    (foh reported "Failed to reconnect to myai"). For these paths the master
+    value is canonical in full; there is no meaningful repo-local addition to
+    a program's argument vector.
+    """
+    # "servers" is the VS Code MCP schema's top-level key (.vscode/mcp.json) —
+    # same positional-argv hazard as Claude Code's "mcpServers" above.
+    return len(path) >= 3 and path[0] in ("mcpServers", "servers") and path[-1] == "args"
+
+
+def merge(master, target, path=()):
+    """Merged value with master precedence; repo-local additions survive.
+
+    RETIRE RULE (2026-09-21): a master dict value of ``null`` means "this key
+    is retired — remove it from the target". Before this, a framework server
+    the template had dropped (the old http-type ``ai-framework`` gateway entry)
+    survived in every managed repo forever because the merge only ever ADDS or
+    UPDATES; 30+ repos kept dialing the gateway with a blank token and Claude
+    Code fell into a doomed OAuth dance on every session start. A null is never
+    written to the target — it is a directive, not a value.
+    """
     if isinstance(master, dict) and isinstance(target, dict):
         out = dict(target)
         for k, v in master.items():
-            out[k] = merge(v, target[k]) if k in target else v
+            if v is None:
+                out.pop(k, None)
+            else:
+                out[k] = merge(v, target[k], path + (k,)) if k in target else strip_nulls(v)
         return out
     if isinstance(master, list) and isinstance(target, list):
+        if is_atomic_list(path):
+            return strip_nulls(master)
         # Queue same-identity target items so repeated identities (e.g. two
         # hook groups that both use matcher "Bash") pair up positionally with
         # master's occurrences instead of every occurrence colliding on one
@@ -92,7 +142,7 @@ def merge(master, target):
         for it in master:
             key = identity(it)
             queue = by_id.get(key)
-            out.append(merge(it, queue.pop(0)) if queue else it)
+            out.append(merge(it, queue.pop(0), path) if queue else it)
         for queue in by_id.values():
             out.extend(queue)  # genuinely target-only occurrences survive
         return out
@@ -121,7 +171,7 @@ def main():
     if not os.path.exists(target_path):
         if not check_only:
             with open(target_path, "w") as f:
-                json.dump(master, f, indent=2)
+                json.dump(strip_nulls(master), f, indent=2)
                 f.write("\n")
         print("created")
         return 0

@@ -377,7 +377,7 @@ function LoginPageInner() {
   if (newKey) {
     return (
       <div className="max-w-md mx-auto mt-10">
-        <h1 className="text-2xl font-bold text-brand-orange tracking-tight">You&apos;re in 🎉</h1>
+        <h1 className="text-title font-bold tracking-tight text-[rgb(var(--text-primary))]">You&apos;re in 🎉</h1>
         <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">
           Your account is ready and you&apos;re signed in. This is your tenant API key for connecting a tool or the
           CLI — copy it now, it is shown <strong className="text-[rgb(var(--text-primary))]">only once</strong> and cannot be retrieved
@@ -392,7 +392,7 @@ function LoginPageInner() {
             {copied ? '✓ Copied' : 'Copy key'}
           </button>
         </div>
-        <p className="text-[11px] text-amber-400/80 mt-3">
+        <p className="text-label text-amber-400/80 mt-3">
           ⚠ Store it in your password manager. You sign in with your email + password — this key is only for
           programmatic / CLI access, and you can rotate it later.
         </p>
@@ -410,7 +410,7 @@ function LoginPageInner() {
   if (magicConsuming) {
     return (
       <div className="max-w-md mx-auto mt-10">
-        <h1 className="text-2xl font-bold text-brand-orange tracking-tight">Signing you in…</h1>
+        <h1 className="text-title font-bold tracking-tight text-[rgb(var(--text-primary))]">Signing you in…</h1>
         <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">Verifying your sign-in link, one moment.</p>
       </div>
     );
@@ -420,7 +420,7 @@ function LoginPageInner() {
   if (mfaPendingToken) {
     return (
       <div className="max-w-md mx-auto mt-10">
-        <h1 className="text-2xl font-bold text-brand-orange tracking-tight">Two-factor verification</h1>
+        <h1 className="text-title font-bold tracking-tight text-[rgb(var(--text-primary))]">Two-factor verification</h1>
         <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">
           Enter the 6-digit code from your authenticator app, or one of your recovery codes.
         </p>
@@ -472,7 +472,7 @@ function LoginPageInner() {
   if (reset) {
     return (
       <div className="max-w-md mx-auto mt-10">
-        <h1 className="text-2xl font-bold text-brand-orange tracking-tight">Set a new password</h1>
+        <h1 className="text-title font-bold tracking-tight text-[rgb(var(--text-primary))]">Set a new password</h1>
         <p className="text-sm text-[rgb(var(--text-secondary))] mt-1">
           {reset.email ? (
             <>Choose a new password for <strong className="text-[rgb(var(--text-primary))]">{reset.email}</strong>.</>
@@ -518,7 +518,7 @@ function LoginPageInner() {
       <Link href="/welcome" className="text-xs text-[rgb(var(--text-muted))] hover:text-teal-300 transition">
         ← Back to home
       </Link>
-      <h1 className="text-2xl font-bold text-brand-orange tracking-tight mt-2">myAI</h1>
+      <h1 className="text-title font-bold text-brand-orange tracking-tight mt-2">myAI</h1>
       <p className="text-sm text-[rgb(var(--text-muted))] mt-1">
         {invite
           ? `You've been invited to join ${invite.tenantName || 'a team'}.`
@@ -591,7 +591,7 @@ function LoginPageInner() {
               If <strong>{email.trim() || 'that address'}</strong> has an account, a reset link is on its way — check
               your inbox. The link expires in about an hour and works once.
             </div>
-            <p className="text-[11px] text-[rgb(var(--text-muted))]">
+            <p className="text-label text-[rgb(var(--text-muted))]">
               Self-hosting without SMTP configured? The reset link is printed in the gateway logs instead.
             </p>
             <button
@@ -649,7 +649,7 @@ function LoginPageInner() {
               If <strong>{email.trim() || 'that address'}</strong> has an account, a sign-in link is on its way —
               check your inbox. The link expires in about 15 minutes and works once.
             </div>
-            <p className="text-[11px] text-[rgb(var(--text-muted))]">
+            <p className="text-label text-[rgb(var(--text-muted))]">
               Self-hosting without SMTP configured? The sign-in link is printed in the gateway logs instead.
             </p>
             <button

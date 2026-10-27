@@ -1,5 +1,5 @@
 // Capacity strip for the Scheduled Runs tab — the runner's fuel gauges, from
-// state/pool-capacity.json (pool_capacity_snapshot.sh bridge): the claude-tech
+// state/pool-capacity.json (pool_capacity_snapshot.sh bridge): the primary Claude
 // weekly token pool, the metered API-credit RESERVE (task-874364a3, remaining
 // of the hard-capped personal-credit pot), and the non-Claude agentic-fallback
 // lane's own daily USD ledger (task-eac0704e — scripts/lib/agentic_fallback.sh;
@@ -47,7 +47,7 @@ function AgenticQualityRow({ providers }: { providers: PoolCapacityQuality[] }) 
 export function PoolCapacityPanel({ capacity }: { capacity: PoolCapacity }) {
   if (!capacity.available) return null;
   // Plan L5 says EACH pool's remaining weekly budget — the snapshot emits
-  // several token pools (claude-tech + the paced Fable bucket), so render one
+  // several token pools (the primary Claude pool + the paced Fable bucket), so render one
   // gauge per budgeted token pool, not just the first match.
   const tokenPools = capacity.pools.filter((p) => p.kind !== 'usd-reserve' && (p.weeklyBudgetTokens ?? 0) > 0);
   const reserve = capacity.pools.find((p) => p.kind === 'usd-reserve');
@@ -63,7 +63,16 @@ export function PoolCapacityPanel({ capacity }: { capacity: PoolCapacity }) {
           label={`${tokenPool.pool} — week ${capacity.week ?? ''}`}
           value={`${fmtTok(tokenPool.weeklyRemainingTokens ?? 0)} tok left`}
           sub={`${tokenPool.pctUsedWeekly ?? 0}% of weekly budget used`}
-          accent={(tokenPool.pctUsedWeekly ?? 0) >= 80 ? 'yellow' : 'green'}
+          icon="savings"
+          // A pool with no remaining-token figure is unknown, not healthy —
+          // emerald "0 tok left" read as "fine" for an exhausted pool.
+          tone={
+            tokenPool.weeklyRemainingTokens == null
+              ? 'muted'
+              : (tokenPool.pctUsedWeekly ?? 0) >= 80
+                ? 'warn'
+                : 'ok'
+          }
         />
       ))}
       {reserve && (
@@ -73,7 +82,8 @@ export function PoolCapacityPanel({ capacity }: { capacity: PoolCapacity }) {
           sub={reserve.enabled
             ? `${fmtUsd(reserve.spentUsd ?? 0)} drawn of ${fmtUsd(reserve.hardCapUsd ?? 0)} hard cap`
             : 'MYAI_API_CREDIT_USD unset — last-resort metered pool'}
-          accent={reserve.enabled ? ((reserve.pctUsedUsd ?? 0) >= 80 ? 'yellow' : 'blue') : 'gray'}
+          icon="billing"
+          tone={reserve.enabled ? ((reserve.pctUsedUsd ?? 0) >= 80 ? 'warn' : 'accent') : 'muted'}
         />
       )}
       {agentic && (
@@ -83,7 +93,8 @@ export function PoolCapacityPanel({ capacity }: { capacity: PoolCapacity }) {
           sub={agentic.enabled
             ? `${fmtUsd(agentic.spentUsd ?? 0)} drawn of ${fmtUsd(agentic.capUsd ?? 0)} daily cap`
             : 'AGENTIC_FALLBACK=off — non-Claude fallback lane'}
-          accent={agentic.enabled ? ((agentic.pctUsedUsd ?? 0) >= 80 ? 'yellow' : 'blue') : 'gray'}
+          icon="swarm"
+          tone={agentic.enabled ? ((agentic.pctUsedUsd ?? 0) >= 80 ? 'warn' : 'accent') : 'muted'}
         />
       )}
       {agentic?.enabled && <AgenticQualityRow providers={qualityByProvider} />}

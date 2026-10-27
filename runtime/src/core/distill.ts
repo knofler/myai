@@ -25,7 +25,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { brainRemoteUrl, brainSyncPull, brainSyncWarning, isBrainRepo, myaiHome, resolveBrainDir, slugify } from './brain.js';
+import { brainRemoteUrl, brainSyncPull, brainSyncWarning, isBrainRepo, myaiHome, resolveBrainDir, sha8, slugify, writeAtom } from './brain.js';
 import type { BrainLogEntry } from './brain.js';
 import { recordDeltaDegrade } from './brain-health.js';
 import { SYSTEM_CONTEXT } from './tenant-context.js';
@@ -149,6 +149,74 @@ function tightenText(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   if (flat.length <= max) return flat;
   return flat.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
+}
+
+/** Hard-truncate to `max` chars with an ellipsis, PRESERVING newlines (unlike tightenText). */
+function clampPreservingLines(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return text.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
+}
+
+// ── mechanical (session-auto) checkpoint distillation (BRAIN-1) ────────────────
+//
+// hooks/stop/05-brain-autoatom.sh synthesizes a zero-LLM "Auto-captured session
+// (mechanical fallback)" atom at session close when no real atom was committed:
+// a raw dump of branch, commits made, files touched, and every command run.
+// Useful as a safety net, but replayed verbatim into a `brainDelta` it is a raw
+// command list with near-zero continuity signal. Here we distil it to <=3 lines
+// (what ran / commits / files touched) and skip it entirely when the session
+// made no commits AND touched no files. The caller ranks these BRONZE — below
+// any real session atom — via the kind check in the delta tiering.
+
+/** True when `body` is a stop-hook mechanical fallback capture (see the hook's BODY heredoc). */
+function isMechanicalCapture(body: string): boolean {
+  return /^#\s+Auto-captured session \(mechanical fallback/m.test(body);
+}
+
+/**
+ * Non-placeholder lines under a `## <header>` section of a mechanical-capture
+ * body — blank lines, the trailing italic footer, and the hook's `sentinel`
+ * placeholder ("(none)" / "(none recorded)") all dropped.
+ */
+function mechanicalSection(body: string, header: string, sentinel: string): string[] {
+  const out: string[] = [];
+  let inSection = false;
+  for (const line of body.split('\n')) {
+    if (line.startsWith('## ')) {
+      inSection = line.slice(3).trim().toLowerCase().startsWith(header.toLowerCase());
+      continue;
+    }
+    if (!inSection) continue;
+    const t = line.trim();
+    if (!t || t.startsWith('_') || t === sentinel) continue;
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Distil a mechanical-fallback capture to <=3 lines (what ran / commits / files
+ * touched). Returns null — signalling "drop this atom" — when the session made
+ * no commits and touched no files: a bare command echo with zero continuity value.
+ */
+function summarizeMechanicalCapture(body: string): string | null {
+  const commits = mechanicalSection(body, 'Commits', '(none)');
+  const files = mechanicalSection(body, 'Files touched', '(none recorded)');
+  if (commits.length === 0 && files.length === 0) return null;
+
+  const branch = body.match(/^Branch:\s*(.+)$/m)?.[1]?.trim();
+  const tools = body.match(/^Tool calls observed:\s*(.+)$/m)?.[1]?.trim();
+  const lines: string[] = [];
+  lines.push(
+    tightenText(
+      `Mechanical continuity checkpoint${branch && branch !== 'unknown' ? ` on ${branch}` : ''}` +
+        `${tools ? ` — ${tools} tool calls` : ''} (no atom saved this session).`,
+      200,
+    ),
+  );
+  if (commits.length) lines.push(tightenText(`${commits.length} commit(s): ${commits.slice(0, 3).join('; ')}`, 200));
+  if (files.length) lines.push(tightenText(`${files.length} file(s) touched: ${files.slice(0, 5).join(', ')}`, 200));
+  return lines.slice(0, 3).join('\n');
 }
 
 /**
@@ -448,6 +516,128 @@ function withMain<T>(dir: string, fn: () => T): T {
   }
 }
 
+// ── BRAIN-3 — recurring-fact promotion to cross-repo memory atoms ─────────────
+//
+// The gap (task-29c0f7ca, handoff 2026-09-04): 2244 sessions had distilled into
+// only 6 durable memory atoms, so a fact restated in session after session
+// (e.g. "dropbox .git corruption recovered by re-cloning") never crystallised
+// into the cross-repo `memory/` store where a LATER, unrelated session would
+// see it. Brain health sat flat because the store kept accreting sessions with
+// no rising signal.
+//
+// The distiller already knows how to be extractive + deterministic; here it does
+// one more extractive pass: a normalized fact LINE that recurs across
+// PROMOTE_MIN_SESSIONS or more DISTINCT session atoms is a durable fact, not a
+// one-off, and is promoted to a cross-repo memory atom. Idempotent by
+// construction — the promoted atom's slug is derived from the fact's content
+// hash and `writeAtom` dedups by (slug, content-hash), so re-running the
+// distiller over the same atoms creates nothing. When a later session restates
+// the fact (the seen-count rises, so the atom body changes), the fresh atom
+// carries a `supersedes` pointer to the prior one: an ADR-020 supersession chain
+// that retires the stale count from the hot path while BRONZE keeps every link.
+// Opt-in via BRAIN_DISTILL_PROMOTE=1/true — same posture as BRAIN_DISTILL_DEDUP:
+// a distiller behaviour that MUTATES the store (writes memory atoms, which then
+// legitimately surface in `brain_delta`'s cross-repo `memory/` scope) stays off
+// by default so the pre-BRAIN-3 distiller is byte-for-byte unchanged for an
+// operator who hasn't enabled it. The gateway enables it in its env to raise the
+// durable memory-atom count without hand-authoring.
+
+/** Minimum DISTINCT session atoms a normalized fact must appear in to be promoted. */
+const PROMOTE_MIN_SESSIONS = Number(process.env.BRAIN_PROMOTE_MIN_SESSIONS) || 3;
+/** A candidate fact line must be at least this many chars (normalized) — filters trivia. */
+const PROMOTE_FACT_MIN_CHARS = 40;
+/** Representative fact text is capped to this many chars in the promoted memory atom. */
+const PROMOTE_FACT_MAX_CHARS = 240;
+
+/** BRAIN-3 promotion gate — opt-in, same posture as BRAIN_DISTILL_DEDUP. */
+function distillPromoteEnabled(env: NodeJS.ProcessEnv): boolean {
+  const v = (env.BRAIN_DISTILL_PROMOTE || '').trim().toLowerCase();
+  return v === '1' || v === 'true';
+}
+
+/** Normalize a fact line for cross-atom equality: lowercase, alphanumerics only, collapsed. */
+function normalizeFact(line: string): string {
+  return line.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/**
+ * Durable-fact candidate lines from a session-atom body: each non-trivial line
+ * with list/quote/header markers stripped. A Set so a fact repeated within ONE
+ * atom counts once — recurrence must be ACROSS sessions, not within one.
+ */
+function factLinesOf(body: string): Map<string, string> {
+  const out = new Map<string, string>(); // normalized → representative (stripped original)
+  for (const raw of body.split('\n')) {
+    const stripped = raw.replace(/^[\s>#*\-]+/, '').trim();
+    if (stripped.length < PROMOTE_FACT_MIN_CHARS) continue;
+    const norm = normalizeFact(stripped);
+    if (norm.length < PROMOTE_FACT_MIN_CHARS) continue;
+    if (!out.has(norm)) out.set(norm, tightenText(stripped, PROMOTE_FACT_MAX_CHARS));
+  }
+  return out;
+}
+
+/** Existing cross-repo memory atoms sharing a promotion slug, with their stripped bodies. */
+function existingMemoryForSlug(dir: string, slug: string): Array<{ file: string; body: string }> {
+  const abs = join(dir, 'memory');
+  if (!existsSync(abs)) return [];
+  const re = new RegExp(`-${slug}-[0-9a-f]{8}\\.md$`);
+  return readdirSync(abs)
+    .filter((f) => re.test(f))
+    .map((f) => ({ file: f, body: stripFrontmatter(readFileSync(join(abs, f), 'utf8')) }));
+}
+
+/**
+ * Promote every recurring fact in `sessions` to a cross-repo memory atom.
+ * Best-effort and idempotent — writes only when a genuinely new/changed durable
+ * fact is found; returns the count of atoms written (0 on a clean re-run).
+ * Runs INSIDE `distillNamespace`'s withMain critical section (main checked out,
+ * clean tree between commits), so the memory atoms land on brain main directly.
+ */
+function promoteRecurringFacts(dir: string, sessions: Atom[], env: NodeJS.ProcessEnv): number {
+  // Only real, hand-written session atoms count toward recurrence — the stop
+  // hook's mechanical checkpoints (session-auto) are noise, not durable facts.
+  const real = sessions.filter((a) => a.kind === 'session');
+  if (real.length < PROMOTE_MIN_SESSIONS) return 0;
+
+  // Count DISTINCT atoms per normalized fact; keep the newest atom's representative
+  // text and topic (sessions are newest-first, so the first sighting wins).
+  const count = new Map<string, number>();
+  const repr = new Map<string, { text: string; topic: string }>();
+  for (const a of real) {
+    for (const [norm, text] of factLinesOf(a.body)) {
+      count.set(norm, (count.get(norm) ?? 0) + 1);
+      if (!repr.has(norm)) repr.set(norm, { text, topic: a.topic });
+    }
+  }
+
+  let written = 0;
+  // Deterministic order: sort by normalized fact so a re-run always visits facts
+  // in the same order (no bearing on output, but keeps commits reproducible).
+  for (const norm of [...count.keys()].sort()) {
+    const seen = count.get(norm)!;
+    if (seen < PROMOTE_MIN_SESSIONS) continue;
+    const { text, topic } = repr.get(norm)!;
+    const slug = `recurring-${sha8(norm)}`;
+    const content =
+      `${text}\n\n_Recurring fact distilled from ${seen} sessions (topic: ${topic}). ` +
+      `Auto-promoted by the brain distiller (BRAIN-3)._`;
+    const existing = existingMemoryForSlug(dir, slug);
+    // Idempotent: an identical promoted atom already exists → nothing to do.
+    if (existing.some((e) => e.body.trim() === content.trim())) continue;
+    // A different-bodied prior atom for the same fact (the seen-count grew, or the
+    // representative text shifted) → supersession chain (ADR-020, by slug ref).
+    const supersedes = existing.length ? slug : undefined;
+    try {
+      const res = writeAtom({ kind: 'memory', slug, content, topic, supersedes }, env);
+      if (res.created) written++;
+    } catch {
+      // Promotion is best-effort — a single write failure must never break the distill.
+    }
+  }
+  return written;
+}
+
 /**
  * Regenerate one namespace's compiled artifacts from its atoms and commit the
  * result to main. Extractive + deterministic — identical atoms always produce
@@ -477,6 +667,17 @@ export function distillNamespace(
     writeFileSync(join(nsDir, 'brief.md'), renderBrief(ns, handoffs, sessions, opts.dedupedLive));
     writeFileSync(join(nsDir, 'working.md'), renderWorking(ns, handoffs, sessions, opts.dedupedLive));
     writeFileSync(join(nsDir, 'rollup.md'), renderRollup(ns, handoffs, sessions));
+    // BRAIN-3: promote recurring facts to cross-repo memory atoms (separate
+    // commits under memory/, so they don't affect the repos/<ns> changed check
+    // below). Idempotent — a clean re-run writes nothing. Best-effort inside its
+    // own guard so a promotion hiccup never blocks the artifact commit.
+    if (distillPromoteEnabled(env)) {
+      try {
+        promoteRecurringFacts(dir, sessions, env);
+      } catch {
+        /* promotion is best-effort — never let it break the distill */
+      }
+    }
     if (git(dir, 'status', '--porcelain', '--', `repos/${ns}`) === '') {
       return { namespace: ns, changed: false, files };
     }
@@ -1044,6 +1245,16 @@ export interface BrainDeltaResult {
    * Mutually exclusive with `cappedToWorking`.
    */
   cappedHard?: boolean;
+  /**
+   * BRAIN-3 prior-art surfacing: cross-repo memory atoms whose topic matches a
+   * topic among the NEW atoms in this delta — the durable facts an earlier
+   * session already distilled about what you're now touching. One short line per
+   * matched memory atom (topic + slug + summary), capped. Present only when the
+   * delta carried new atoms AND at least one matched a memory atom's topic — the
+   * fix for the 2026-09-04 miss where prior art (dropbox-git-corruption-recovered)
+   * existed in the store but was never surfaced to the session that hit it again.
+   */
+  priorArt?: string[];
   /** Approx token cost of the returned payload (~4 chars/token). */
   tokenEstimate: number;
   /**
@@ -1067,6 +1278,52 @@ export interface BrainDeltaResult {
  * slug) to apply GOLD/SILVER/BRONZE tier-then-topic-match atom ordering
  * instead of plain chronological order — see `BrainDeltaResult.atoms`.
  */
+/** Max prior-art lines a delta surfaces — a nudge, not a second payload. */
+const PRIOR_ART_MAX_LINES = 5;
+
+/**
+ * BRAIN-3 prior-art surfacing: cross-repo memory atoms (read at `sha`) whose
+ * topic is in `topics` — the durable facts an earlier session already distilled
+ * about the topics this delta is touching. Live only (ADR-020 supersession is
+ * applied so a retired fact never resurfaces), newest first, capped. Read via
+ * git plumbing at the exact delta SHA so it needs no branch checkout. Best-effort
+ * — any git/parse failure yields no prior art rather than breaking the delta.
+ */
+function computePriorArt(dir: string, sha: string, topics: Set<string>): string[] {
+  if (topics.size === 0) return [];
+  try {
+    const listing = git(dir, 'ls-tree', '-r', '--name-only', sha, '--', 'memory');
+    const paths = listing.split('\n').filter((p) => /^memory\/.*\.md$/.test(p));
+    if (paths.length === 0) return [];
+    // Parse each memory atom into the minimal Atom shape pruneSuperseded needs.
+    const atoms: Atom[] = paths.map((path) => {
+      const file = path.split('/').pop()!;
+      const raw = git(dir, 'show', `${sha}:${path}`);
+      const slugLine = raw.match(/^slug: (.+)$/m);
+      const topicLine = raw.match(/^topic: (.+)$/m);
+      const supLine = raw.match(/^supersedes: (.+)$/m);
+      return {
+        file,
+        ts: file.slice(0, 16),
+        kind: 'memory',
+        slug: slugLine ? slugLine[1].trim() : file.replace(/\.md$/, ''),
+        body: stripFrontmatter(raw),
+        topic: topicLine ? topicLine[1].trim() : 'general',
+        supersedes: supLine ? supLine[1].trim() : undefined,
+        sha8: file.match(/-([0-9a-f]{8})\.md$/)?.[1] ?? '',
+      };
+    });
+    const { live } = pruneSuperseded(atoms);
+    return live
+      .filter((a) => topics.has(a.topic))
+      .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0))
+      .slice(0, PRIOR_ART_MAX_LINES)
+      .map((a) => `[${a.topic}] ${a.slug} — ${tightenText(a.body, 120)}`);
+  } catch {
+    return [];
+  }
+}
+
 function brainDeltaCore(
   opts: { since?: string; repo?: string; budget?: number; topic?: string },
   env: NodeJS.ProcessEnv,
@@ -1143,39 +1400,43 @@ function brainDeltaCore(
 
   // ADR-020 tier-then-topic-match ordering (B-8 follow-on, task-82e5416b): the
   // prior plain chronological order let an atom on an unrelated topic crowd a
-  // same-topic atom out of the budget purely by sorting earlier/later. When
-  // the caller passes `topic`, rank candidates into three tiers — GOLD (live,
-  // matches the requested topic — the most relevant atoms, mirroring brief.md's
-  // topic-indexed TOC), SILVER (live, any other topic), BRONZE (superseded via
-  // ADR-020 `supersedes`, retired to history-only like rollup.md) — with
-  // recency (the existing sort order) as the tiebreak within each tier. No
-  // `topic` → unchanged chronological order.
+  // same-topic atom out of the budget purely by sorting earlier/later. Rank
+  // candidates into three tiers — GOLD (live, matches the requested topic — the
+  // most relevant atoms, mirroring brief.md's topic-indexed TOC), SILVER (live,
+  // any other topic), BRONZE (superseded via ADR-020 `supersedes`, OR a
+  // session-auto mechanical checkpoint (BRAIN-1) — both history-only, below any
+  // real session atom) — with recency (the existing sort order) as the tiebreak
+  // within each tier. With no `topic`, every real atom shares the top tier and
+  // stays in plain chronological order (unchanged), and BRONZE still sinks last.
   const requestedTopic = opts.topic?.trim() ? slugify(opts.topic) : undefined;
-  let orderedPaths = atomPaths;
-  if (requestedTopic) {
-    const candidates = atomPaths.map((path) => {
-      const raw = rawByPath.get(path)!;
-      const topicLine = raw.match(/^topic: (.+)$/m);
-      const supLine = raw.match(/^supersedes: (.+)$/m);
-      return {
-        path,
-        topic: topicLine ? topicLine[1].trim() : 'general',
-        sha8: path.split('/').pop()?.match(/-([0-9a-f]{8})\.md$/)?.[1] ?? '',
-        supersedes: supLine ? supLine[1].trim() : undefined,
-      };
-    });
-    const supersededSha8 = new Set(
-      candidates.map((c) => c.supersedes).filter((s): s is string => !!s && SHA8_RE.test(s)),
-    );
-    const tierOf = (c: (typeof candidates)[number]): number => {
-      if (c.sha8 && supersededSha8.has(c.sha8)) return 2; // BRONZE — superseded, history only
-      return c.topic === requestedTopic ? 0 : 1; // GOLD (topic match) / SILVER (other)
+  const candidates = atomPaths.map((path) => {
+    const raw = rawByPath.get(path)!;
+    const kindLine = raw.match(/^kind: (.+)$/m);
+    const topicLine = raw.match(/^topic: (.+)$/m);
+    const supLine = raw.match(/^supersedes: (.+)$/m);
+    return {
+      path,
+      kind: kindLine ? kindLine[1].trim() : path.includes('/handoffs/') ? 'handoff' : 'session',
+      topic: topicLine ? topicLine[1].trim() : 'general',
+      sha8: path.split('/').pop()?.match(/-([0-9a-f]{8})\.md$/)?.[1] ?? '',
+      supersedes: supLine ? supLine[1].trim() : undefined,
     };
-    orderedPaths = candidates
-      .map((c, i) => ({ c, i })) // stable sort: preserve chronological order within a tier
-      .sort((a, b) => tierOf(a.c) - tierOf(b.c) || a.i - b.i)
-      .map(({ c }) => c.path);
-  }
+  });
+  const kindByPath = new Map(candidates.map((c) => [c.path, c.kind]));
+  const supersededSha8 = new Set(
+    candidates.map((c) => c.supersedes).filter((s): s is string => !!s && SHA8_RE.test(s)),
+  );
+  const tierOf = (c: (typeof candidates)[number]): number => {
+    // BRONZE — superseded, or a mechanical session-auto checkpoint (BRAIN-1):
+    // always below any real session/handoff atom, whatever its topic.
+    if (c.kind === 'session-auto' || (c.sha8 && supersededSha8.has(c.sha8))) return 2;
+    if (requestedTopic) return c.topic === requestedTopic ? 0 : 1; // GOLD (topic match) / SILVER (other)
+    return 0; // no topic → all real atoms one tier, plain chronological
+  };
+  const orderedPaths = candidates
+    .map((c, i) => ({ c, i })) // stable sort: preserve chronological order within a tier
+    .sort((a, b) => tierOf(a.c) - tierOf(b.c) || a.i - b.i)
+    .map(({ c }) => c.path);
 
   // Per-atom cap. A flat DELTA_ATOM_CHARS chopped every wrap atom: `wrap up`
   // step 1e's session atom is a ~300-token (~1200-char) narrative whose ACTION
@@ -1194,11 +1455,35 @@ function brainDeltaCore(
       break;
     }
     const raw = rawByPath.get(path)!;
-    const content = tightenText(stripFrontmatter(raw), Math.min(atomCap, budget - spent));
+    const stripped = stripFrontmatter(raw);
+    const cap = Math.min(atomCap, budget - spent);
+    let content: string;
+    if (kindByPath.get(path) === 'session-auto' || isMechanicalCapture(stripped)) {
+      // BRAIN-1: distil the stop hook's raw command dump to <=3 lines; skip the
+      // atom entirely when the session made no commits and touched no files.
+      const summary = summarizeMechanicalCapture(stripped);
+      if (summary === null) continue;
+      content = clampPreservingLines(summary, cap);
+    } else {
+      content = tightenText(stripped, cap);
+    }
     if (content.endsWith('…')) truncated = true;
     atoms.push({ path, content });
     spent += content.length;
   }
+
+  // BRAIN-3 prior-art: the topics of the atoms actually returned in this delta —
+  // for each, surface any durable memory atom already distilled on that topic, so
+  // a returning session sees the prior art instead of rediscovering it. Scoped to
+  // returned atoms (what the agent sees), excluding BRONZE mechanical checkpoints.
+  const topicByPath = new Map(candidates.map((c) => [c.path, { topic: c.topic, kind: c.kind }]));
+  const deltaTopics = new Set(
+    atoms
+      .map((a) => topicByPath.get(a.path))
+      .filter((c): c is { topic: string; kind: string } => !!c && c.kind !== 'session-auto')
+      .map((c) => c.topic),
+  );
+  const priorArt = computePriorArt(dir, sha, deltaTopics);
 
   const r: BrainDeltaResult = {
     sha,
@@ -1207,6 +1492,7 @@ function brainDeltaCore(
     atoms,
     compiledChanged,
     truncated: (truncated || commitsTruncated) || undefined,
+    ...(priorArt.length ? { priorArt } : {}),
     tokenEstimate: 0,
   };
   r.tokenEstimate = estimate(r);

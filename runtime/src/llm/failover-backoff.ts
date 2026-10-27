@@ -41,7 +41,6 @@ const FAILOVER_BACKOFF_DEFAULTS: Record<string, FailoverBackoffConfig> = {
   api: { baseDelayMs: 200, maxDelayMs: 3_000, backoffFactor: 2 },
   deepseek: { baseDelayMs: 150, maxDelayMs: 2_000, backoffFactor: 2 },
   moonshot: { baseDelayMs: 150, maxDelayMs: 2_000, backoffFactor: 2 },
-  gemini: { baseDelayMs: 150, maxDelayMs: 2_000, backoffFactor: 2 },
   // Local — near-instant retry, small ceiling.
   ollama: { baseDelayMs: 50, maxDelayMs: 500, backoffFactor: 2 },
   bridge: { baseDelayMs: 200, maxDelayMs: 2_000, backoffFactor: 2 },

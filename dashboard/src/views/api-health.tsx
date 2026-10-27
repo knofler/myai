@@ -205,31 +205,36 @@ export default async function ApiHealthPage() {
           label="Uptime"
           value={fmtUptime(gateway.uptime)}
           sub={`Node ${gateway.nodeVersion}`}
-          accent="green"
+          icon="clock"
+          tone="accent"
         />
         <StatCard
           label="MongoDB"
           value={gateway.mongoConnected ? 'Connected' : 'Disconnected'}
           sub={gateway.mongoConnected ? 'Healthy' : 'Check connection'}
-          accent={gateway.mongoConnected ? 'green' : 'red'}
+          icon={gateway.mongoConnected ? 'check' : 'cross'}
+          tone={gateway.mongoConnected ? 'ok' : 'err'}
         />
         <StatCard
           label="MCP Tools"
           value={String(gateway.totalMcpTools)}
           sub="Registered tools"
-          accent="blue"
+          icon="apps"
+          tone={gateway.totalMcpTools > 0 ? 'ok' : 'muted'}
         />
         <StatCard
           label="Heap Used"
           value={`${gateway.memory.heapUsedMB.toFixed(0)} MB`}
           sub="V8 heap memory"
-          accent="gray"
+          icon="memory"
+          tone="muted"
         />
         <StatCard
           label="RSS"
           value={`${gateway.memory.rssMB.toFixed(0)} MB`}
           sub="Resident set size"
-          accent="gray"
+          icon="system"
+          tone="muted"
         />
       </div>
 

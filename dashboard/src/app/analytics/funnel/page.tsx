@@ -23,6 +23,7 @@ import {
 } from '@/lib/activation-cohorts';
 import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
+import { plural } from '@/lib/summary';
 import AutoRefresh from '@/components/auto-refresh';
 import Link from 'next/link';
 import { dbUnreachableHint } from '@/lib/db-hint';
@@ -41,6 +42,30 @@ const GRANULARITIES: ReadonlyArray<{ key: CohortGranularity; label: string }> = 
 ];
 
 interface EventDoc { tenantId: string; step: string; occurredAt?: Date; createdAt?: Date }
+
+/* ── The one-line answer (§5.1) ─────────────────────── */
+
+function funnelSummary(
+  report: { signups: number; shipped: number; conversionRate: number; worstStage: { label: string; droppedOff: number; dropOffPct: number } | null },
+  hasData: boolean,
+  windowDays?: number,
+): string {
+  const scope = windowDays ? ` in the last ${windowDays} days` : '';
+  if (!hasData || report.signups === 0) {
+    return `Nobody has signed up${scope} yet. This fills in as tenants sign up, connect a project and ship their first task.`;
+  }
+  const head = report.shipped === 0
+    ? `${plural(report.signups, 'tenant')} signed up${scope} and none has shipped a first task yet.`
+    // conversionRate is rounded, so a real-but-tiny rate lands on 0 — and
+    // "1 shipped … 0 percent" in one sentence reads as a contradiction.
+    : report.conversionRate === 0
+      ? `${plural(report.signups, 'tenant')} signed up${scope} and ${report.shipped} shipped a first task, an activation rate under 1 percent.`
+      : `${plural(report.signups, 'tenant')} signed up${scope} and ${report.shipped} shipped a first task, an activation rate of ${report.conversionRate} percent.`;
+  const leak = report.worstStage && report.worstStage.droppedOff > 0
+    ? ` The biggest leak is before ${report.worstStage.label}, where ${plural(report.worstStage.droppedOff, 'tenant')} fell out.`
+    : ' Nobody has fallen out of the journey.';
+  return `${head}${leak}`;
+}
 
 function FilterPill({ href, label, active }: { href: string; label: string; active: boolean }) {
   return (
@@ -74,7 +99,12 @@ export default async function ActivationFunnelPage({
   if (dbError) {
     return (
       <div className="max-w-7xl mx-auto">
-        <PageHeader title="Activation funnel" subtitle="Signup → first ship, with per-stage drop-off and signup cohorts." />
+        <PageHeader
+          icon="analytics"
+          title="Activation funnel"
+          summary="The funnel cannot be read right now because the database is unreachable."
+          subtitle="Signup to first ship, with per-stage drop-off and signup cohorts."
+        />
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
           {dbUnreachableHint('the funnel')}
         </div>
@@ -107,8 +137,10 @@ export default async function ActivationFunnelPage({
       <AutoRefresh seconds={60} />
       <div className="flex items-start justify-between gap-4">
         <PageHeader
+          icon="analytics"
           title="Activation funnel"
-          subtitle="Where signups fall out of signup → project connected → first task executed → first task shipped — per-stage drop-off + signup cohorts (operator view)."
+          summary={funnelSummary(report, hasData, windowDays)}
+          subtitle={`Signup → project connected → first task executed → first task shipped · ${windowDays ? `last ${windowDays} days` : 'all time'} · operator view`}
         />
         <Link href="/analytics" className="text-xs text-teal-400 hover:text-teal-300 border border-teal-500/30 rounded-lg px-3 py-1.5 shrink-0 mt-1">
           ← Analytics
@@ -128,19 +160,21 @@ export default async function ActivationFunnelPage({
 
       {/* Headline stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard label="Signed up" value={report.signups} sub={windowDays ? `last ${windowDays}d` : 'all time'} accent="blue" />
-        <StatCard label="Shipped first task" value={report.shipped} sub={`${report.conversionRate}% of signups`} accent="green" />
+        <StatCard label="Signed up" value={report.signups} sub={windowDays ? `last ${windowDays}d` : 'all time'} icon="sessions" tone="muted" />
+        <StatCard label="Shipped first task" value={report.shipped} sub={`${report.conversionRate}% of signups`} icon="check" tone={report.shipped > 0 ? 'ok' : 'muted'} />
         <StatCard
           label="Signup → ship conversion"
           value={hasData ? `${report.conversionRate}%` : '—'}
           sub="the activation-to-value rate"
-          accent={report.conversionRate >= 50 ? 'green' : 'yellow'}
+          icon="analytics"
+          tone={!hasData ? 'muted' : report.conversionRate >= 50 ? 'ok' : 'warn'}
         />
         <StatCard
           label="Biggest leak"
           value={report.worstStage ? `−${report.worstStage.droppedOff}` : '—'}
           sub={report.worstStage ? `before "${report.worstStage.label}" · ${report.worstStage.dropOffPct}% lost` : 'no drop-off recorded'}
-          accent={report.worstStage ? 'yellow' : 'gray'}
+          icon="alert"
+          tone={report.worstStage && report.worstStage.droppedOff > 0 ? 'warn' : 'muted'}
         />
       </div>
 
@@ -163,7 +197,7 @@ export default async function ActivationFunnelPage({
               {report.stages.map((s, i) => (
                 <div key={s.step}>
                   {i > 0 && (
-                    <div className="flex items-center gap-2 pl-4 py-1 text-[11px] font-mono">
+                    <div className="flex items-center gap-2 pl-4 py-1 text-label font-mono">
                       <span className="text-zinc-600">↓</span>
                       {s.droppedOff > 0 ? (
                         <span className="text-red-400/80">−{s.droppedOff} dropped off ({s.dropOffPct}%)</span>
@@ -211,7 +245,7 @@ export default async function ActivationFunnelPage({
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="text-[10px] uppercase tracking-wider text-zinc-600 border-b border-[rgb(var(--border-subtle))]">
+                    <tr className="text-label uppercase tracking-wider text-zinc-600 border-b border-[rgb(var(--border-subtle))]">
                       <th className="text-left py-2 pr-3">Cohort</th>
                       <th className="text-right py-2 px-3">Signed up</th>
                       {OPERATOR_FUNNEL_STEPS.slice(1).map((s) => (

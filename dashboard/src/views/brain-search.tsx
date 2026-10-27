@@ -71,6 +71,7 @@ export default function BrainSearch() {
         <input
           type="text"
           placeholder="Search across every repo-brain (atoms + sessions)..."
+          aria-label="Search across every repo-brain (atoms + sessions)"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="flex-1 px-4 py-2 bg-[rgb(var(--bg-page))] border border-zinc-700 rounded-lg text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30"
@@ -78,9 +79,10 @@ export default function BrainSearch() {
         <input
           type="text"
           placeholder="repo (optional)"
+          aria-label="Filter by repo (optional)"
           value={repo}
           onChange={(e) => setRepo(e.target.value)}
-          className="w-40 px-3 py-2 bg-[rgb(var(--bg-page))] border border-zinc-700 rounded-lg text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50"
+          className="w-40 px-3 py-2 bg-[rgb(var(--bg-page))] border border-zinc-700 rounded-lg text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50 focus-visible:ring-2 focus-visible:ring-emerald-500/50"
         />
         <button
           type="submit"
@@ -92,7 +94,7 @@ export default function BrainSearch() {
       </form>
 
       {error && (
-        <div className="mb-4 px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400">
+        <div role="alert" className="mb-4 px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400">
           {error}
         </div>
       )}
@@ -114,15 +116,15 @@ export default function BrainSearch() {
                     <div className="flex items-center gap-2 mb-1.5">
                       <HitKindBadge kind={h.kind} />
                       {h.atomKind && (
-                        <span className="text-[10px] font-mono text-zinc-600">{h.atomKind}</span>
+                        <span className="text-label font-mono text-zinc-600">{h.atomKind}</span>
                       )}
                       {h.source && (
-                        <span className="text-[10px] font-mono text-zinc-600">{h.source}</span>
+                        <span className="text-label font-mono text-zinc-600">{h.source}</span>
                       )}
                       {h.repo && (
-                        <span className="text-[10px] font-mono text-zinc-600">{h.repo}</span>
+                        <span className="text-label font-mono text-zinc-600">{h.repo}</span>
                       )}
-                      <span className="text-[10px] font-mono text-zinc-700 ml-auto">
+                      <span className="text-label font-mono text-zinc-700 ml-auto">
                         score {h.score.toFixed(2)}
                       </span>
                     </div>

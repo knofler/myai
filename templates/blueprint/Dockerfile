@@ -1,5 +1,22 @@
 # syntax=docker/dockerfile:1
 # Multi-stage build — deps install INSIDE the image (host never runs npm install).
+#
+# Verify `npm run build` via `./AI/scripts/local-ci.sh` (which runs
+# `docker build --target build` — this Dockerfile, unconstrained, exactly
+# what CI/Vercel/Render do) or a plain `docker build --target build .`, NOT
+# by running `npm run build` interactively inside the running `dev`
+# docker-compose container (`docker compose exec app npm run build` / `./dev
+# shell` + `npm run build`). Confirmed during the 2026-09-10 Next 16 upgrade:
+# the same repo + lockfile + Node version builds clean every time via
+# `docker build --target build` (bind-mount-free — Node 22 AND Node 24 both
+# verified good), but crashes intermittently via the bind-mounted dev
+# container with `TypeError: Cannot read properties of null (reading
+# 'useContext')` while prerendering "/" / "/_global-error" — a Turbopack +
+# Docker Desktop bind-mount/anonymous-volume interaction, not a Next.js,
+# React, or Node version bug (ruled out one variable at a time: Sentry,
+# metadata, proxy.ts, React 19.2 vs 19.3, Node 22 vs 24 — all held constant
+# while only the build mechanism changed). `./dev build` rebuilds images; it
+# does not run `npm run build` inside the running container.
 FROM node:24-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./

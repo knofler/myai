@@ -29,10 +29,11 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { getClient } from './anthropic.js';
 import { createChildLogger } from '../shared/logger.js';
+import { DEFAULT_CLAUDE_MODEL } from './claude-models.js';
 
 const log = createChildLogger({ module: 'llm-anthropic-batch' });
 
-const DEFAULT_MODEL = 'claude-sonnet-4-20250514';
+const DEFAULT_MODEL = DEFAULT_CLAUDE_MODEL;
 const POLL_INITIAL_MS = 5_000;
 const POLL_MAX_MS = 60_000;
 const POLL_BACKOFF = 1.5;

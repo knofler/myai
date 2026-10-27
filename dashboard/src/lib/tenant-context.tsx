@@ -13,6 +13,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import type { TenantRegion } from '@/lib/residency';
@@ -72,6 +73,14 @@ interface TenantContextValue {
   current: TenantSession | null;
   tenants: TenantSession[];
   loading: boolean;
+  /** The single-operator session (lib/operator-auth.ts), which is INDEPENDENT of
+   *  tenant sessions: it is minted by /operator-login into an httpOnly
+   *  `myai_operator` cookie and has no tenant, plan or API key. The sidebar's
+   *  "Sign in" chip points at /operator-login, so without this the UI could not
+   *  tell that an operator had signed in at all — see the 2026-09-12 report. */
+  operator: { user: string } | null;
+  /** Ends the operator session (clears the cookie). */
+  operatorLogout: () => Promise<void>;
   /** PRIMARY: email + password → JWT session cookie. Throws MfaRequiredError
    *  (carrying a pendingToken) when the account has TOTP enabled instead of
    *  resolving — the caller must then call completeTotpLogin. */
@@ -118,17 +127,113 @@ function readStored(): { list: TenantSession[]; current: string | null } {
   }
 }
 
+/** What /api/auth/me tells us about the cookie session (subset we consume). */
+export interface MeSession {
+  tenantId?: string;
+  tenantName?: string;
+  tenantPlan?: string;
+}
+
+/**
+ * Reconcile the locally stored sessions with what the server says the httpOnly
+ * cookie is worth. Pure so it can be tested without a DOM.
+ *
+ * `me` = null means /api/auth/me answered 401 (no valid cookie).
+ * Returns the next session list plus which tenant should be current.
+ */
+export function reconcileTenantSessions(
+  stored: TenantSession[],
+  me: MeSession | null,
+): { list: TenantSession[]; current: string | null } {
+  if (me?.tenantId) {
+    const existing = stored.find((t) => t.tenantId === me.tenantId);
+    const session: TenantSession = {
+      tenantId: me.tenantId,
+      name: me.tenantName || existing?.name || me.tenantId,
+      plan: me.tenantPlan || existing?.plan || 'free',
+      // /me never returns an API key; dropping one already held for this tenant
+      // would break key-authenticated calls.
+      ...(existing?.apiKey ? { apiKey: existing.apiKey } : {}),
+    };
+    return {
+      list: [...stored.filter((t) => t.tenantId !== me.tenantId), session],
+      current: me.tenantId,
+    };
+  }
+  // No valid cookie: drop stale JWT-only sessions, keep API-key ones (they
+  // carry no JWT by design, so a 401 says nothing about them).
+  const list = stored.filter((t) => t.apiKey);
+  return { list, current: list[0]?.tenantId ?? null };
+}
+
 export function TenantProvider({ children }: { children: React.ReactNode }) {
   const [tenants, setTenants] = useState<TenantSession[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [operator, setOperator] = useState<{ user: string } | null>(null);
 
+  // Hydrate from localStorage, then RECONCILE WITH THE SERVER.
+  //
+  // WHY the server round-trip (operator report 2026-09-12: "when logged in
+  // still shows sign in option"): the httpOnly `myai_token` cookie is the real
+  // credential, but this context used to derive its entire notion of "am I
+  // signed in?" from localStorage alone. Any path that sets the cookie without
+  // also writing localStorage — a different browser profile, cleared site data,
+  // private mode, a magic-link/invite landing, or a storage write that threw —
+  // left `current` null while the session was perfectly valid, so the switcher
+  // rendered its signed-out "Sign in" link to an already-authenticated user.
+  //
+  // The mirror case is handled too: a stale localStorage entry for a session
+  // whose cookie has since expired used to render a tenant while every API call
+  // 401'd. API-KEY sessions (show-once signup / "connect a tool") are exempt —
+  // they carry no JWT by design, so a 401 from /api/auth/me says nothing about
+  // them and they are left alone.
   useEffect(() => {
+    let cancelled = false;
     const { list, current } = readStored();
     setTenants(list);
     setCurrentId(current && list.some((t) => t.tenantId === current) ? current : list[0]?.tenantId ?? null);
-    setLoading(false);
+
+    (async () => {
+      let me: {
+        tenantId?: string;
+        tenantName?: string;
+        tenantPlan?: string;
+      } | null = null;
+      try {
+        // Both sessions are asked for together: they are independent, and a
+        // machine can hold either, both or neither.
+        const [meRes, opRes] = await Promise.all([
+          fetch('/api/auth/me', { cache: 'no-store' }),
+          fetch('/api/auth/operator', { cache: 'no-store' }).catch(() => null),
+        ]);
+        if (meRes.ok) me = await meRes.json();
+        if (opRes?.ok) {
+          const op = await opRes.json();
+          if (!cancelled && op?.user) setOperator({ user: op.user });
+        }
+      } catch {
+        /* offline / gateway down — keep whatever localStorage gave us */
+        if (!cancelled) setLoading(false);
+        return;
+      }
+      if (cancelled) return;
+
+      const { list: next, current: cur } = reconcileTenantSessions(list, me);
+      setTenants(next);
+      setCurrentId(cur);
+      persistRef.current(next, cur);
+      setLoading(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  // Written to by the effect above, which must not depend on `persist`
+  // (declared below) to stay mount-only.
+  const persistRef = useRef<(list: TenantSession[], cur: string | null) => void>(() => {});
 
   const persist = useCallback((list: TenantSession[], cur: string | null) => {
     try {
@@ -139,6 +244,8 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       /* storage unavailable (private mode) — context still works in-memory */
     }
   }, []);
+
+  persistRef.current = persist;
 
   const upsert = useCallback(
     (session: TenantSession) => {
@@ -300,11 +407,21 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
     [current],
   );
 
+  const operatorLogout = useCallback(async () => {
+    try {
+      await fetch('/api/auth/operator', { method: 'DELETE' });
+    } finally {
+      setOperator(null);
+    }
+  }, []);
+
   const value = useMemo<TenantContextValue>(
     () => ({
       current,
       tenants,
       loading,
+      operator,
+      operatorLogout,
       loginWithPassword,
       completeTotpLogin,
       requestMagicLink,
@@ -316,6 +433,8 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       authHeaders,
     }),
     [
+      operator,
+      operatorLogout,
       current,
       tenants,
       loading,

@@ -200,7 +200,7 @@ export function NotificationPreferences() {
               <button
                 type="button"
                 onClick={() => save({ slackWebhookUrl: '' })}
-                className="text-[11px] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition-colors shrink-0"
+                className="text-label text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition-colors shrink-0"
               >
                 clear
               </button>
@@ -226,7 +226,7 @@ export function NotificationPreferences() {
                 {pushBusy ? 'Working…' : pushOnDevice ? 'Disable on this device' : 'Enable on this device'}
               </button>
             </div>
-            {pushMsg && <p className="text-[11px] text-[rgb(var(--text-muted))]">{pushMsg}</p>}
+            {pushMsg && <p className="text-label text-[rgb(var(--text-muted))]">{pushMsg}</p>}
           </div>
         </div>
 
@@ -254,7 +254,7 @@ export function NotificationPreferences() {
               <button
                 type="button"
                 onClick={() => save({ quietStart: '', quietEnd: '' })}
-                className="text-[11px] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition-colors"
+                className="text-label text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition-colors"
               >
                 clear
               </button>
@@ -271,7 +271,7 @@ export function NotificationPreferences() {
               <div key={key} className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-xs text-[rgb(var(--text-primary))]">{label}</p>
-                  <p className="text-[11px] text-zinc-600">{hint}</p>
+                  <p className="text-label text-zinc-600">{hint}</p>
                 </div>
                 <Toggle
                   on={prefs.events[key] ?? true}

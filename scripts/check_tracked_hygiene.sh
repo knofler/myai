@@ -55,9 +55,20 @@ DENY=(
   '^(AI/)?state/\.[^/]+$'
   # per-machine account-pool capacity snapshot (pool_capacity_snapshot.sh)
   '^(AI/)?state/pool-capacity\.json$'
-  # runner ledgers: host-side health snapshot + backlog cursor / planner stamp
-  '^(AI/)?state/runner-health\.json$'
+  # runner ledgers: host-side health snapshot + backlog cursor / planner stamp.
+  # runner-health / runner-repo-staleness are per-host by NAME since
+  # task-1eba9e51 (state/<name>.<host>.json) — deny the legacy shared name AND
+  # every per-host variant.
+  '^(AI/)?state/runner-health(\.[^/]+)?\.json$'
+  '^(AI/)?state/runner-repo-staleness(\.[^/]+)?\.json$'
   '^(AI/)?config/\.runner_[^/]+$'
+  # GENERIC per-host rule (task-1eba9e51): universal boot means every
+  # machine-local state writer names its file state/<name>.<host>.json — any
+  # two-dot .json directly under state/ is per-machine BY CONVENTION and must
+  # never be tracked. A genuine shared two-dot json is an ALLOW addition.
+  '^(AI/)?state/[^/]+\.[^/.]+\.json$'
+  # per-host boot reports (state/boot/BOOT_REPORT.<host>.md) — never tracked
+  '^(AI/)?state/boot(/|$)'
   # host-side mongo-mirror schedule snapshot (scripts/mongo_mirror_status_snapshot.sh)
   '^(AI/)?state/mongo-mirror-status\.json$'
   # machine-local supply-chain scan report (scripts/dependency_scan.sh)

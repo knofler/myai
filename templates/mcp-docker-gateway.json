@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "docker": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "r=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; for p in \"${MYAI_FRAMEWORK_DIR:-/nonexistent}/scripts/lib/mcp_docker_gateway.sh\" \"${MYAI_HOME:-/nonexistent}/scripts/lib/mcp_docker_gateway.sh\"; do [ -f \"$p\" ] && exec bash \"$p\"; done; m=\"$(myai root 2>/dev/null || echo /nonexistent)\"; for p in \"$m/scripts/lib/mcp_docker_gateway.sh\" \"$r/AI/scripts/lib/mcp_docker_gateway.sh\" \"$HOME/.local/lib/node_modules/ai-management/scripts/lib/mcp_docker_gateway.sh\" /opt/homebrew/lib/node_modules/ai-management/scripts/lib/mcp_docker_gateway.sh /usr/local/lib/node_modules/ai-management/scripts/lib/mcp_docker_gateway.sh; do [ -f \"$p\" ] && exec bash \"$p\"; done; echo \"docker: framework launcher mcp_docker_gateway.sh not found (MYAI_FRAMEWORK_DIR, MYAI_HOME, \\`myai root\\`, repo AI/, global ai-management) - falling back to the legacy npx docker-mcp server\" >&2; exec npx -y docker-mcp"
+      ]
+    },
+    "context7": null
+  }
+}

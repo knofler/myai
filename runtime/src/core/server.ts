@@ -3,6 +3,9 @@ import type { Request, Response } from 'express';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
 import { getConfig } from '../shared/config.js';
+import { requireLocalOrAdmin, adminTokenMatches, unsignedWebhookAllowed } from './operator-gate.js';
+import { requireSignupEnabled } from './signup-gate.js';
+import { scheduleTargetAllowed, scheduleToolName } from '../scheduler/schedule-auth.js';
 import { createChildLogger } from '../shared/logger.js';
 import { setupGracefulShutdown, isShutdownInProgress } from './shutdown.js';
 import { isConnected, AgentModel, SkillModel, HookModel, RuleModel, DEFAULT_TENANT_ID } from '../shared/db.js';
@@ -12,7 +15,7 @@ import { runPipeline, loadStages } from '../agents/pipeline.js';
 import { listRules, getRule, getRuleCount } from '../rules/loader.js';
 import { createSession, closeSession, getSession, listSessions, getSessionCount, getActiveSessionCount, exportSession, importSession, recallSessionContext } from './session-manager.js';
 import type { SessionExport } from './session-manager.js';
-import { routeMessage } from './message-router.js';
+import { routeMessage, stripChannelMetadata } from './message-router.js';
 import { listHooks, getHookCount, enableHook } from '../hooks/event-bus.js';
 import { applyHookToggle, parseBashHookName, readDisabledScripts } from '../hooks/settings-patch.js';
 import { hybridSearch } from '../memory/search.js';
@@ -42,6 +45,7 @@ import { listPlanPage } from '../repos/plan-store.js';
 import { writeHandoff, readHandoff, listLatestHandoffs } from '../repos/handoff-store.js';
 import { computeNextRun, isValidCronExpr } from '../scheduler/scheduler.js';
 import { executeTool } from '../mcp/tools.js';
+import { SWARM_LIVE_STREAM_INTERVAL_MS } from '../swarm/live-aggregate.js';
 import { ctxFromReq } from './auth.js';
 import { hostedBrainTransportRouter } from './hosted-brain-transport.js';
 import type { ScheduleKind, ScheduleStatus, TaskPriority, TaskStatus, UserRole } from '../shared/db.js';
@@ -189,7 +193,7 @@ export function createHttpServer() {
     ip: req.ip || req.socket.remoteAddress || undefined,
   });
 
-  app.post('/api/auth/signup', authRateLimit('signup', SIGNUP_POLICY), async (req: Request, res: Response) => {
+  app.post('/api/auth/signup', requireSignupEnabled, authRateLimit('signup', SIGNUP_POLICY), async (req: Request, res: Response) => {
     try {
       const result = await signup(req.body, deviceFromReq(req));
       res.cookie('myai_token', result.token, {
@@ -2144,7 +2148,7 @@ export function createHttpServer() {
   // actor + before/after state, and the same record is mirrored onto the
   // hook (Mongo doc + in-memory registration) as `lastToggle` for the
   // dashboard tooltip.
-  app.patch('/api/hooks', async (req: Request, res: Response) => {
+  app.patch('/api/hooks', requireLocalOrAdmin, async (req: Request, res: Response) => {
     const { name, enabled } = (req.body ?? {}) as { name?: unknown; enabled?: unknown };
     if (typeof name !== 'string' || typeof enabled !== 'boolean') {
       return res.status(400).json({ error: 'Body must be { name: string, enabled: boolean }' });
@@ -2446,7 +2450,7 @@ export function createHttpServer() {
   // consumers (scripts/lib/repo_paths.sh, `myai repos --paths`). DB roster
   // preferred, managed_repos.txt only the bootstrap seed. Paths are RAW
   // (host-side, `~` unexpanded on seed rows) — the client expands `~`.
-  app.get('/api/repos/paths', async (req: Request, res: Response) => {
+  app.get('/api/repos/paths', requireLocalOrAdmin, async (req: Request, res: Response) => {
     try {
       const repos = await resolveRepoPaths(ctxFromReq(req).tenantId);
       res.json({ count: repos.length, repos });
@@ -2455,7 +2459,7 @@ export function createHttpServer() {
     }
   });
 
-  app.get('/api/repos', (_req: Request, res: Response) => {
+  app.get('/api/repos', requireLocalOrAdmin, (_req: Request, res: Response) => {
     const config = getConfig();
     const reposFile = resolve(config.aiRoot, 'config', 'managed_repos.txt');
 
@@ -2674,7 +2678,7 @@ export function createHttpServer() {
     }
   });
 
-  app.post('/api/vectors/index', async (req: Request, res: Response) => {
+  app.post('/api/vectors/index', requireLocalOrAdmin, async (req: Request, res: Response) => {
     try {
       const { scope } = req.body;
       const results = scope === 'all' ? await indexAllRepos() : await indexMasterRepo();
@@ -2806,7 +2810,7 @@ export function createHttpServer() {
         return res.status(404).json({ error: 'Session not found' });
       }
 
-      const result = await routeMessage(session.id, session.agentName, content, metadata || {});
+      const result = await routeMessage(session.id, session.agentName, content, stripChannelMetadata(metadata));
       res.json({
         sessionId: result.sessionId,
         agentName: result.agentName,
@@ -2840,8 +2844,7 @@ export function createHttpServer() {
       res.status(503).json({ error: 'admin_disabled', code: 'ADMIN_DISABLED' });
       return;
     }
-    const provided = req.header('x-admin-token');
-    if (!provided || provided !== expected) {
+    if (!adminTokenMatches(req.header('x-admin-token'), expected)) {
       res.status(401).json({ error: 'unauthorized', code: 'UNAUTHORIZED' });
       return;
     }
@@ -3098,6 +3101,10 @@ export function createHttpServer() {
       }
       if (kind !== 'agent' && kind !== 'skill' && kind !== 'tool') {
         return res.status(400).json({ error: 'kind must be one of: agent, skill, tool' });
+      }
+      // G5 N-1: a schedule may only target a tool its creator can call.
+      if (!scheduleTargetAllowed(ctxFromReq(req), kind, String(target))) {
+        return res.status(403).json({ error: `Tool ${scheduleToolName(kind, String(target))} is not available to this tenant, so it cannot be scheduled.`, code: 'FORBIDDEN' });
       }
       if (!isValidCronExpr(cronExpr)) {
         return res.status(400).json({ error: `Invalid cron expression: "${cronExpr}". Use 5-field format (min hour day month dow), e.g. "0 9 * * *".` });
@@ -3466,6 +3473,61 @@ export function createHttpServer() {
     }
   });
 
+  // ── Swarm live (dashboard Control Room) — same payload as the swarm_live MCP tool ──
+
+  app.get('/api/swarm/live', async (req: Request, res: Response) => {
+    try {
+      const host = typeof req.query.host === 'string' ? req.query.host : undefined;
+      res.json(await executeTool('swarm_live', host ? { host } : {}, ctxFromReq(req)));
+    } catch (err) {
+      log.error({ err }, 'swarm_live failed');
+      res.status(500).json({ error: (err as Error).message, code: 'INTERNAL_ERROR' });
+    }
+  });
+
+  app.get('/api/swarm/live/stream', (req: Request, res: Response) => {
+    const host = typeof req.query.host === 'string' ? req.query.host : undefined;
+    const ctx = ctxFromReq(req);
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write(': connected\n\n');
+    (res as unknown as { flush?: () => void }).flush?.();
+
+    let closed = false;
+    let inFlight = false;
+    let blocked = false; // write() returned false — wait for 'drain' before the next frame
+    const push = async (): Promise<void> => {
+      if (closed || inFlight || blocked) return;
+      inFlight = true;
+      try {
+        const snap = await executeTool('swarm_live', host ? { host } : {}, ctx);
+        if (closed) return;
+        res.write('event: swarm_live\n');
+        if (!res.write(`data: ${JSON.stringify(snap)}\n\n`)) {
+          blocked = true;
+          res.once('drain', () => { blocked = false; });
+        }
+      } catch (err) {
+        log.warn({ err }, 'swarm_live stream frame failed');
+      } finally {
+        inFlight = false;
+      }
+    };
+    void push();
+    const timer = setInterval(() => { void push(); }, SWARM_LIVE_STREAM_INTERVAL_MS);
+    timer.unref?.();
+    const cleanup = (): void => {
+      closed = true;
+      clearInterval(timer);
+    };
+    req.on('close', cleanup);
+    res.on('error', cleanup);
+  });
+
   // Admin-gated: a dispatch cycle invokes specialist agents and spends real
   // LLM budget, so unlike the schedule/task CRUD above it requires the
   // X-Admin-Token header (same gate as the budget endpoints).
@@ -3576,8 +3638,12 @@ export function createHttpServer() {
         res.status(401).json({ error: 'Invalid signature', code: 'INVALID_SIGNATURE' });
         return;
       }
-    } else {
-      log.warn({ tenantId }, 'No GitHub webhook secret configured for tenant — skipping signature verification');
+    } else if (!unsignedWebhookAllowed(req)) {
+      // v1 gate G5 (H-3): no secret configured → only the operator's own local
+      // tooling may post unsigned; any other caller could inject tasks.
+      log.warn({ tenantId }, 'GitHub webhook refused: no signing secret configured and the caller is not local');
+      res.status(401).json({ error: 'Webhook signing secret not configured', code: 'WEBHOOK_SECRET_REQUIRED' });
+      return;
     }
 
     if (delivery && await isDuplicateDelivery(tenantId, 'github', delivery)) {
@@ -3628,8 +3694,12 @@ export function createHttpServer() {
         res.status(401).json({ error: 'Invalid signature', code: 'INVALID_SIGNATURE' });
         return;
       }
-    } else {
-      log.warn('CONNECT_WEBHOOK_SECRET not set — skipping signature verification');
+    } else if (!unsignedWebhookAllowed(req)) {
+      // v1 gate G5 (H-3): without CONNECT_WEBHOOK_SECRET only local tooling may
+      // post — this route creates tasks in the operator's queue.
+      log.warn('Connect Hub webhook refused: CONNECT_WEBHOOK_SECRET not set and the caller is not local');
+      res.status(401).json({ error: 'Webhook signing secret not configured', code: 'WEBHOOK_SECRET_REQUIRED' });
+      return;
     }
 
     try {

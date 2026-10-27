@@ -77,9 +77,15 @@ ROLL_TTL=$(jq -r '.token_budget.rolling_window.cache_ttl_seconds // 90' "$CONFIG
 
 NOW=$(date +%s)
 
+# Claude Code writes the SAME message.usage on EVERY content-block line of one
+# assistant message (2502 usage lines for 1023 messages in one transcript), so a
+# per-line sum over-counts ~2x. Keep the LAST line per message.id (fallback
+# requestId; a line with neither counts once). 2026-10-05, multi-Mac phase 2.
+DEDUP_SUM_JQ='[to_entries[] | {k: (.value.message.id // .value.requestId // ("line-" + (.key|tostring))), v: (.value.message.usage.output_tokens // 0)}] | group_by(.k) | map(.[-1].v) | add // 0'
+
 # ── Session output-token sum (full transcript, ~30ms) ────────────────────────
 SESS_OUT=$(grep '"type":"assistant"' "$TRANSCRIPT" 2>/dev/null \
-  | jq -s '[.[].message.usage.output_tokens // 0] | add // 0' 2>/dev/null)
+  | jq -s "$DEDUP_SUM_JQ" 2>/dev/null)
 [ -z "$SESS_OUT" ] && SESS_OUT=0
 
 sess_pct=0
@@ -169,7 +175,7 @@ if [ "$ROLL_ENABLED" = "true" ]; then
     # Recompute: sum output_tokens across all transcripts touched in the window.
     roll_out=$(find "$HOME/.claude/projects" -name '*.jsonl' -mmin -"$ROLL_MINUTES" 2>/dev/null \
       -exec grep -h '"type":"assistant"' {} + 2>/dev/null \
-      | jq -s '[.[].message.usage.output_tokens // 0] | add // 0' 2>/dev/null)
+      | jq -s "$DEDUP_SUM_JQ" 2>/dev/null)
     [ -z "$roll_out" ] && roll_out=0
     cat > "$RCACHE" <<EOF
 computed_epoch=$NOW

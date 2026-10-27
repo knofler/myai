@@ -44,6 +44,14 @@ function slugifyRepoName(name: string): string {
 }
 
 export async function POST(req: Request) {
+  // Same-origin only. This is a state-changing write and getActiveTenant()
+  // falls back to the default tenant without a JWT, so a cross-site
+  // text/plain form could otherwise queue a task on a local install. Modern
+  // browsers stamp Sec-Fetch-Site on every request; a missing header (curl,
+  // tests) is allowed through — the check targets browsers, not clients.
+  if (req.headers.get('sec-fetch-site') === 'cross-site') {
+    return NextResponse.json({ error: 'cross-site requests are not accepted' }, { status: 403 });
+  }
   let body: Record<string, unknown>;
   try {
     body = await req.json();

@@ -28,7 +28,7 @@ export function IndependentWelcome() {
     <div className="gel-surface rounded-2xl border border-[rgb(var(--border-subtle))] p-5">
       <div className="flex items-center gap-2">
         <span className="text-sm font-semibold text-[rgb(var(--text-primary))]">Running locally</span>
-        <span className="px-2 py-0.5 rounded-md bg-brand-orange/15 border border-brand-orange/40 text-[11px] font-medium text-brand-orange">
+        <span className="px-2 py-0.5 rounded-md bg-brand-orange/15 border border-brand-orange/40 text-label font-medium text-brand-orange">
           Independent Edition
         </span>
       </div>
@@ -38,7 +38,7 @@ export function IndependentWelcome() {
 
       {/* 5-minute quickstart */}
       <div className="mt-4">
-        <div className="text-[11px] uppercase tracking-widest text-zinc-600">Download → running in 5 minutes</div>
+        <div className="text-label uppercase tracking-widest text-zinc-600">Download → running in 5 minutes</div>
         <pre className="mt-2 px-3 py-2.5 rounded-lg bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] text-xs text-teal-300 overflow-x-auto font-mono leading-relaxed">
           {QUICKSTART.join('\n')}
         </pre>

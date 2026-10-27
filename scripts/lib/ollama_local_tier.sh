@@ -13,6 +13,8 @@
 #   - a free-RAM preflight so local inference is skipped outright (falling
 #     straight through to Sonnet) when the box is already tight
 # Not executed directly — sourced by cli_task_runner.sh.
+# shellcheck source=runner_pr_gate.sh
+[ -f "$(dirname "${BASH_SOURCE[0]}")/runner_pr_gate.sh" ] && . "$(dirname "${BASH_SOURCE[0]}")/runner_pr_gate.sh"
 
 OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://localhost:11434}
 OLLAMA_LOCAL_KEEP_ALIVE=${OLLAMA_LOCAL_KEEP_ALIVE:-2m}
@@ -238,6 +240,11 @@ _ollama_local_run_inner() {
     if ! git -C "$workdir" -c user.email="runner@myai.local" -c user.name="myai-runner" \
         commit --quiet -m "chore: local-tier automated fix (Ollama $model)"; then
         echo "[ollama-local] commit failed — falling back"
+        return 1
+    fi
+
+    if declare -f runner_should_defer_push >/dev/null 2>&1 && runner_should_defer_push "$workdir"; then
+        echo "[ollama-local] test->main PR has active CI checks — deferring push to test"
         return 1
     fi
 

@@ -15,6 +15,7 @@ import { migrate as migrateRbacUserRole } from './migrations/002-rbac-user-role.
 import { migrate as migrateTenantRegion } from './migrations/003-tenant-region.js';
 import { migrate as migrateTenantDbBinding } from './migrations/004-tenant-db-binding.js';
 import { migrate as migrateDualWriteRetryItem } from './migrations/005-dual-write-retry-item.js';
+import { migrate as migrateTaskReviewEnteredAt } from './migrations/006-task-review-entered-at.js';
 
 const log = createChildLogger({ module: 'migration-runner' });
 
@@ -31,6 +32,7 @@ const MIGRATIONS: MigrationDef[] = [
   { id: '003-tenant-region', run: migrateTenantRegion },
   { id: '004-tenant-db-binding', run: migrateTenantDbBinding },
   { id: '005-dual-write-retry-item', run: migrateDualWriteRetryItem },
+  { id: '006-task-review-entered-at', run: migrateTaskReviewEnteredAt },
 ];
 
 export interface MigrationStatus {

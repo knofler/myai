@@ -1,15 +1,34 @@
 name: myai
 
+x-gh-runner-slot: &gh-runner-slot
+  build:
+    context: ./ci/runner
+    args:
+      RUNNER_VERSION: "2.336.0"
+      RUNNER_ARCH: "arm64"
+      NODE_VERSION: "22.23.2"
+  image: myai-gh-runner:2.336.0
+  restart: unless-stopped
+  # Same reasons as gh-runner above: no docker.sock, not on myai-net, a 60s
+  # grace so run.sh can release its GitHub session.
+  stop_grace_period: 60s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
   gateway:
     build: ./runtime
     container_name: myai-gateway
     ports:
-      # HOST_BIND=127.0.0.1 locks the gateway to this machine (SECURITY.md).
-      # Default stays all-interfaces so LAN/phone dashboard workflows keep working.
-      - "${HOST_BIND:-0.0.0.0}:3100:3100"
-      - "${HOST_BIND:-0.0.0.0}:3200:3200"
-      - "${HOST_BIND:-0.0.0.0}:3201:3201"
+      # Loopback only by default (v1 gate G5, SECURITY.md). Containers still
+      # reach these via host.docker.internal / the compose network. LAN and
+      # phone dashboard access is an explicit opt-in: HOST_BIND=0.0.0.0 in .env.
+      - "${HOST_BIND:-127.0.0.1}:3100:3100"
+      - "${HOST_BIND:-127.0.0.1}:3200:3200"
+      - "${HOST_BIND:-127.0.0.1}:3201:3201"
     env_file:
       - .env
       - path: /tmp/.myai-host-env
@@ -42,11 +61,19 @@ services:
       # known credential (SECURITY, task-7f8b20a3). An empty value here is
       # refused by the gateway's config loader when TENANT_ENFORCE=true.
       - GATEWAY_LOCAL_TOKEN=${GATEWAY_LOCAL_TOKEN:-}
+      # v1 G6: director lanes FALLBACK for when no swarm-coordinator lease is live
+      # (fresh boot, no swarm). The live lease is always the primary source
+      # (runtime/src/swarm/roles.ts). Comma/space separated; unset = `default`.
+      - MYAI_DIRECTOR_LANES=${MYAI_DIRECTOR_LANES:-}
       # JWT signing secret for dashboard password sessions (M2). A stable value
       # keeps sessions valid across restarts/instances; override in .env for
       # hosted. Unset → the gateway falls back to an ephemeral per-process secret
       # (logs a warning; sessions drop on restart).
-      - JWT_SECRET=${JWT_SECRET:-myai-dev-jwt-secret-change-me}
+      # No published default (v1 gate G5): `myai up` writes a generated one into
+      # .env; the gateway refuses the old published value at boot.
+      - JWT_SECRET=${JWT_SECRET:-}
+      # Self-serve signup — off for a local stack; hosted deployments set true.
+      - SIGNUP_ENABLED=${SIGNUP_ENABLED:-false}
       # Anti-lockout bootstrap admin (M2). When BOTH are set, the gateway seeds /
       # re-syncs an `owner` user on the default tenant on every boot — the .env is
       # the source of truth, so this password ALWAYS works (never locked out of a
@@ -99,7 +126,12 @@ services:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3200/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
-      start_period: 15s
+      # 90s, not 15s: the dashboard waits on service_healthy, and right after a
+      # build of both images the gateway can take longer than 15s + 3 retries.
+      # compose then aborts the dashboard and leaves it in Created (boot,
+      # 2026-10-27). Failures inside start_period don't count, so a healthy
+      # gateway is still reported healthy on its first passing check.
+      start_period: 90s
     restart: unless-stopped
     networks:
       - myai-net
@@ -108,8 +140,8 @@ services:
     build: ./dashboard
     container_name: myai-dashboard
     ports:
-      # See gateway ports note — HOST_BIND=127.0.0.1 to lock to this machine.
-      - "${HOST_BIND:-0.0.0.0}:3210:3210"
+      # See the gateway ports note — HOST_BIND=0.0.0.0 publishes it on the LAN.
+      - "${HOST_BIND:-127.0.0.1}:3210:3210"
     environment:
       # Single-operator login (lib/operator-auth.ts). Sourced from AI/.env so the
       # local dashboard can admit YOU; with these unset the gate fails closed and
@@ -132,6 +164,24 @@ services:
       # requests without a session are redirected to /login; localhost is ALWAYS
       # exempt. Set true only for an internet-exposed deploy.
       - REQUIRE_LOGIN=${REQUIRE_LOGIN:-false}
+      # Local-only auto-login for the operator gate (task-a6930b2b, repeat
+      # operator ask 2026-10-02: "localhost should be auto logged in always").
+      # See dashboard/loopback-gate.js + src/middleware.ts. Two conditions
+      # both have to hold, checked in different places on purpose:
+      #   1. DASHBOARD_LOCAL_AUTOLOGIN=1 — this flag. Safe to default on here
+      #      because this compose file IS "the local stack"; Vercel/hosted
+      #      never reads it (no Dockerfile there), and src/middleware.ts
+      #      independently refuses to honour it when process.env.VERCEL is set,
+      #      so even a copy-pasted env file can't turn this on in prod.
+      #   2. HOST_BIND=127.0.0.1 (below) — the default since v1 gate G5. Docker
+      #      Desktop NATs loopback AND LAN traffic to the SAME address, so the
+      #      only real way to keep LAN/phone peers out is to not publish the
+      #      port on the LAN interface at all. An operator who opts into
+      #      HOST_BIND=0.0.0.0 (phone/LAN dashboard) turns auto-login off with
+      #      it, and gets the login page instead.
+      - DASHBOARD_LOCAL_AUTOLOGIN=${DASHBOARD_LOCAL_AUTOLOGIN:-1}
+      - HOST_BIND=${HOST_BIND:-127.0.0.1}
+      - NEXT_INTERNAL_PORT=3211
       # The bind-mounted repo is owned by the host user while the dashboard
       # runs as a different container UID — without this, the agent/skill
       # source editor's `git commit` (src/lib/md-editor.ts) dies on "dubious
@@ -217,17 +267,24 @@ services:
         RUNNER_ARCH: "arm64"
         NODE_VERSION: "22.23.2"
     image: myai-gh-runner:2.336.0
-    container_name: myai-gh-runner
+    # MULTI-REPO: personal accounts have no org-level runners, so each repo
+    # registers its OWN runner (AI_RULES §21). runner_selfhosted.sh overrides
+    # these per repo — GH_RUNNER_CONTAINER=<repo>-gh-runner,
+    # GH_RUNNER_VOLUME=<repo>-gh-runner-config, GH_RUNNER_REPO_URL=<repo url> —
+    # and runs the service under a per-repo compose project so two repos' runners
+    # coexist. REPO_URL has no default: set GH_RUNNER_REPO_URL (runner_selfhosted.sh
+    # does) — an already-registered runner reuses its persisted config.
+    container_name: ${GH_RUNNER_CONTAINER:-myai-gh-runner}
     restart: unless-stopped
     environment:
-      REPO_URL: "https://github.com/knofler/ai_management"
+      REPO_URL: "${GH_RUNNER_REPO_URL:-}"
       RUNNER_TOKEN: "${RUNNER_TOKEN:-}"
       RUNNER_NAME: "${RUNNER_NAME:-myai-local}"
-      RUNNER_LABELS: "self-hosted,linux,ARM64,myai-local"
+      RUNNER_LABELS: "${GH_RUNNER_LABELS:-self-hosted,linux,ARM64,myai-local}"
     volumes:
       - gh-runner-config:/home/runner/actions-runner
     mem_limit: ${GH_RUNNER_MEM_LIMIT:-4g}
-    cpus: 4.0
+    cpus: ${GH_RUNNER_CPUS:-4.0}
     # run.sh needs longer than Docker's 10s default to release its session with
     # GitHub. Too short and the next start loops on "A session for this runner
     # already exists" until GitHub expires the stale one.
@@ -237,6 +294,126 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # ── Runner SLOTS (2026-10-22): every self-hosted runner on this host, for ANY
+  # repo, is one of these services in THIS file and THIS project (myai) — never
+  # a second compose file or project. A runner defined elsewhere under -p myai
+  # is an orphan here and `down --remove-orphans` destroys it (see above).
+  #
+  # The slots are generic (no repo names ship in this file). scripts/
+  # runner_selfhosted.sh maps slot → repo/instance in the per-host state file
+  # ~/.myai/runners/slots.<host> and drives ONE slot per call with its
+  # GH_RUNNER_<n>_* values: container myai-gh-runner-<repo>[-N], volume
+  # <repo>-gh-runner-config[-N], runner name myai-<host>[-N], mem/cpus = this
+  # host's budget (config/gh_runner_mem.txt) split across its runners.
+  #
+  # Each slot has its OWN profile, which nothing activates: `--profile ci up`,
+  # the app `up` and boot never start an unconfigured slot. Targeting a slot by
+  # name (`docker compose -p myai up -d gh-runner-<n>`) is the only way in.
+  gh-runner-1:
+    <<: *gh-runner-slot
+    profiles: ["gh-runner-1"]
+    container_name: ${GH_RUNNER_1_CONTAINER:-myai-gh-runner-slot-1}
+    environment:
+      REPO_URL: "${GH_RUNNER_1_REPO_URL:-}"
+      RUNNER_TOKEN: "${GH_RUNNER_1_TOKEN:-}"
+      RUNNER_NAME: "${GH_RUNNER_1_NAME:-}"
+      RUNNER_LABELS: "${GH_RUNNER_1_LABELS:-self-hosted,linux,ARM64,myai-local}"
+    volumes:
+      - gh-runner-1-config:/home/runner/actions-runner
+    mem_limit: ${GH_RUNNER_1_MEM:-4g}
+    cpus: ${GH_RUNNER_1_CPUS:-4.0}
+  gh-runner-2:
+    <<: *gh-runner-slot
+    profiles: ["gh-runner-2"]
+    container_name: ${GH_RUNNER_2_CONTAINER:-myai-gh-runner-slot-2}
+    environment:
+      REPO_URL: "${GH_RUNNER_2_REPO_URL:-}"
+      RUNNER_TOKEN: "${GH_RUNNER_2_TOKEN:-}"
+      RUNNER_NAME: "${GH_RUNNER_2_NAME:-}"
+      RUNNER_LABELS: "${GH_RUNNER_2_LABELS:-self-hosted,linux,ARM64,myai-local}"
+    volumes:
+      - gh-runner-2-config:/home/runner/actions-runner
+    mem_limit: ${GH_RUNNER_2_MEM:-4g}
+    cpus: ${GH_RUNNER_2_CPUS:-4.0}
+  gh-runner-3:
+    <<: *gh-runner-slot
+    profiles: ["gh-runner-3"]
+    container_name: ${GH_RUNNER_3_CONTAINER:-myai-gh-runner-slot-3}
+    environment:
+      REPO_URL: "${GH_RUNNER_3_REPO_URL:-}"
+      RUNNER_TOKEN: "${GH_RUNNER_3_TOKEN:-}"
+      RUNNER_NAME: "${GH_RUNNER_3_NAME:-}"
+      RUNNER_LABELS: "${GH_RUNNER_3_LABELS:-self-hosted,linux,ARM64,myai-local}"
+    volumes:
+      - gh-runner-3-config:/home/runner/actions-runner
+    mem_limit: ${GH_RUNNER_3_MEM:-4g}
+    cpus: ${GH_RUNNER_3_CPUS:-4.0}
+  gh-runner-4:
+    <<: *gh-runner-slot
+    profiles: ["gh-runner-4"]
+    container_name: ${GH_RUNNER_4_CONTAINER:-myai-gh-runner-slot-4}
+    environment:
+      REPO_URL: "${GH_RUNNER_4_REPO_URL:-}"
+      RUNNER_TOKEN: "${GH_RUNNER_4_TOKEN:-}"
+      RUNNER_NAME: "${GH_RUNNER_4_NAME:-}"
+      RUNNER_LABELS: "${GH_RUNNER_4_LABELS:-self-hosted,linux,ARM64,myai-local}"
+    volumes:
+      - gh-runner-4-config:/home/runner/actions-runner
+    mem_limit: ${GH_RUNNER_4_MEM:-4g}
+    cpus: ${GH_RUNNER_4_CPUS:-4.0}
+  gh-runner-5:
+    <<: *gh-runner-slot
+    profiles: ["gh-runner-5"]
+    container_name: ${GH_RUNNER_5_CONTAINER:-myai-gh-runner-slot-5}
+    environment:
+      REPO_URL: "${GH_RUNNER_5_REPO_URL:-}"
+      RUNNER_TOKEN: "${GH_RUNNER_5_TOKEN:-}"
+      RUNNER_NAME: "${GH_RUNNER_5_NAME:-}"
+      RUNNER_LABELS: "${GH_RUNNER_5_LABELS:-self-hosted,linux,ARM64,myai-local}"
+    volumes:
+      - gh-runner-5-config:/home/runner/actions-runner
+    mem_limit: ${GH_RUNNER_5_MEM:-4g}
+    cpus: ${GH_RUNNER_5_CPUS:-4.0}
+  gh-runner-6:
+    <<: *gh-runner-slot
+    profiles: ["gh-runner-6"]
+    container_name: ${GH_RUNNER_6_CONTAINER:-myai-gh-runner-slot-6}
+    environment:
+      REPO_URL: "${GH_RUNNER_6_REPO_URL:-}"
+      RUNNER_TOKEN: "${GH_RUNNER_6_TOKEN:-}"
+      RUNNER_NAME: "${GH_RUNNER_6_NAME:-}"
+      RUNNER_LABELS: "${GH_RUNNER_6_LABELS:-self-hosted,linux,ARM64,myai-local}"
+    volumes:
+      - gh-runner-6-config:/home/runner/actions-runner
+    mem_limit: ${GH_RUNNER_6_MEM:-4g}
+    cpus: ${GH_RUNNER_6_CPUS:-4.0}
+  gh-runner-7:
+    <<: *gh-runner-slot
+    profiles: ["gh-runner-7"]
+    container_name: ${GH_RUNNER_7_CONTAINER:-myai-gh-runner-slot-7}
+    environment:
+      REPO_URL: "${GH_RUNNER_7_REPO_URL:-}"
+      RUNNER_TOKEN: "${GH_RUNNER_7_TOKEN:-}"
+      RUNNER_NAME: "${GH_RUNNER_7_NAME:-}"
+      RUNNER_LABELS: "${GH_RUNNER_7_LABELS:-self-hosted,linux,ARM64,myai-local}"
+    volumes:
+      - gh-runner-7-config:/home/runner/actions-runner
+    mem_limit: ${GH_RUNNER_7_MEM:-4g}
+    cpus: ${GH_RUNNER_7_CPUS:-4.0}
+  gh-runner-8:
+    <<: *gh-runner-slot
+    profiles: ["gh-runner-8"]
+    container_name: ${GH_RUNNER_8_CONTAINER:-myai-gh-runner-slot-8}
+    environment:
+      REPO_URL: "${GH_RUNNER_8_REPO_URL:-}"
+      RUNNER_TOKEN: "${GH_RUNNER_8_TOKEN:-}"
+      RUNNER_NAME: "${GH_RUNNER_8_NAME:-}"
+      RUNNER_LABELS: "${GH_RUNNER_8_LABELS:-self-hosted,linux,ARM64,myai-local}"
+    volumes:
+      - gh-runner-8-config:/home/runner/actions-runner
+    mem_limit: ${GH_RUNNER_8_MEM:-4g}
+    cpus: ${GH_RUNNER_8_CPUS:-4.0}
 
 volumes:
   myai-mongo-data:
@@ -255,7 +432,28 @@ volumes:
   # "created for project ai" warning per `up`) and still recreates it after a
   # reset. The warning is the cheaper half of that trade. Do not rename.
   gh-runner-config:
-    name: ai_gh-runner-config
+    # Default preserves the pre-multi-repo name (holds ai_management's GitHub
+    # registration). runner_selfhosted.sh sets GH_RUNNER_VOLUME=<repo>-gh-runner-config
+    # for any other repo so each runner's registration lives in its own volume.
+    name: ${GH_RUNNER_VOLUME:-ai_gh-runner-config}
+  # Runner slot volumes — name-pinned per slot by runner_selfhosted.sh (an
+  # existing runner keeps its registration volume when it moves into a slot).
+  gh-runner-1-config:
+    name: ${GH_RUNNER_1_VOLUME:-myai-gh-runner-slot-1-config}
+  gh-runner-2-config:
+    name: ${GH_RUNNER_2_VOLUME:-myai-gh-runner-slot-2-config}
+  gh-runner-3-config:
+    name: ${GH_RUNNER_3_VOLUME:-myai-gh-runner-slot-3-config}
+  gh-runner-4-config:
+    name: ${GH_RUNNER_4_VOLUME:-myai-gh-runner-slot-4-config}
+  gh-runner-5-config:
+    name: ${GH_RUNNER_5_VOLUME:-myai-gh-runner-slot-5-config}
+  gh-runner-6-config:
+    name: ${GH_RUNNER_6_VOLUME:-myai-gh-runner-slot-6-config}
+  gh-runner-7-config:
+    name: ${GH_RUNNER_7_VOLUME:-myai-gh-runner-slot-7-config}
+  gh-runner-8-config:
+    name: ${GH_RUNNER_8_VOLUME:-myai-gh-runner-slot-8-config}
 
 networks:
   myai-net:

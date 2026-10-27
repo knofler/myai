@@ -18,7 +18,7 @@ export function ResidencyBadge({ region }: { region: unknown }) {
       title={residencyTitle(r)}
       aria-label={residencyTitle(r)}
       data-testid="residency-badge"
-      className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider ${COLORS[r]}`}
+      className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-label font-mono uppercase tracking-wider ${COLORS[r]}`}
     >
       <svg viewBox="0 0 16 16" className="h-2.5 w-2.5" fill="currentColor" aria-hidden="true">
         <path d="M8 1a5 5 0 0 0-5 5c0 3.5 5 9 5 9s5-5.5 5-9a5 5 0 0 0-5-5Zm0 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4Z" />

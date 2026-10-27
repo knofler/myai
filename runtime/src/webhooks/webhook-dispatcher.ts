@@ -38,6 +38,7 @@ import {
   markFailedAttempt,
 } from './webhook-store.js';
 import type { IWebhookDelivery } from '../shared/db.js';
+import { assertPublicDestination } from '../shared/url-guard.js';
 
 const log = createChildLogger({ module: 'webhook-dispatcher' });
 
@@ -106,8 +107,10 @@ export async function deliverOnce(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
   try {
+    await assertPublicDestination(url);
     const res = await fetch(url, {
       method: 'POST',
+      redirect: 'manual',
       headers: {
         'content-type': 'application/json',
         'user-agent': 'myai-webhooks/1',

@@ -14,26 +14,20 @@
 // env var. `buildApplyPayload` below is the pure piece of that flow — it
 // turns a suggestion row into the API payload without touching the network.
 
+// Server-only: this module imports ./db. Client components import the pure
+// helpers from ./budget-suggestions-shared instead (re-exported below).
+
 import { BudgetUsage } from './db';
 import { tenantFilter } from './tenant-cookie';
+import { round2, type CapRecommendation, type CapSuggestion } from './budget-suggestions-shared';
+
+export * from './budget-suggestions-shared';
 
 export const DEFAULT_LOOKBACK_DAYS = 30;
 export const MIN_OBSERVED_DAYS = 7;
 export const SAFETY_MARGIN_MULTIPLIER = 1.25;
 const INCREASE_RATIO = 1.15;
 const DECREASE_RATIO = 0.7;
-
-export type CapRecommendation = 'increase' | 'decrease' | 'keep' | 'insufficient_data';
-
-export interface CapSuggestion {
-  currentCapUsd: number;
-  observedDays: number;
-  avgDailyUsd: number;
-  p95DailyUsd: number;
-  suggestedCapUsd: number;
-  recommendation: CapRecommendation;
-  rationale: string;
-}
 
 export interface ChannelCapSuggestion extends CapSuggestion {
   channelId: string;
@@ -52,10 +46,6 @@ export interface CurrentCaps {
   monthlyHardCapUsd: number;
   monthlyDailyCapUsd: number;
   perChannelMonthlyCapUsd: number;
-}
-
-export function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }
 
 /** Nearest-rank percentile over an unsorted array. Returns 0 for an empty array. */
@@ -220,43 +210,4 @@ export async function getBudgetCapSuggestions(
     dailyCap,
     perChannel,
   };
-}
-
-/** View-model the panel renders from — the pure formatting layer the component test covers. */
-export interface SuggestionSummary {
-  deltaUsd: number;
-  deltaPct: number;
-  badgeLabel: string;
-}
-
-export function summarizeSuggestion(s: CapSuggestion): SuggestionSummary {
-  const deltaUsd = round2(s.suggestedCapUsd - s.currentCapUsd);
-  const deltaPct = s.currentCapUsd > 0 ? round2((deltaUsd / s.currentCapUsd) * 100) : 0;
-  const badgeLabel = s.recommendation === 'insufficient_data' ? 'insufficient data' : s.recommendation;
-  return { deltaUsd, deltaPct, badgeLabel };
-}
-
-/** The three cap fields a BudgetCapOverride document (src/lib/db.ts) can hold. */
-export type CapOverrideField = 'monthlyHardCapUsd' | 'dailyCapUsd' | 'perChannelCapUsd';
-
-export type ApplySource = 'adaptive-suggested' | 'manual';
-
-export interface ApplySuggestionPayload {
-  field: CapOverrideField;
-  valueUsd: number;
-  source: ApplySource;
-}
-
-/**
- * Only 'increase'/'decrease' represent an actual change worth a write —
- * 'keep' and 'insufficient_data' both pin suggestedCapUsd to currentCapUsd
- * (see buildCapSuggestion above), so applying either would be a no-op PATCH.
- */
-export function canApplySuggestion(recommendation: CapRecommendation): boolean {
-  return recommendation === 'increase' || recommendation === 'decrease';
-}
-
-/** Builds the /api/budget-caps PATCH body for a given suggestion row. */
-export function buildApplyPayload(field: CapOverrideField, s: CapSuggestion): ApplySuggestionPayload {
-  return { field, valueUsd: s.suggestedCapUsd, source: 'adaptive-suggested' };
 }

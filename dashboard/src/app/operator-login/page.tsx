@@ -63,7 +63,7 @@ function OperatorLoginForm() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-neutral-950 px-4">
       <div className="w-full max-w-sm">
-        <h1 className="text-xl font-semibold text-neutral-100">myAI — operator sign in</h1>
+        <h1 className="text-title font-semibold text-[rgb(var(--text-primary))]">myAI — operator sign in</h1>
         <p className="mt-1 text-sm text-neutral-400">
           This control plane has a single operator. Public pages stay open without signing in.
         </p>

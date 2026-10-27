@@ -42,7 +42,7 @@ function Toast({
       <div className="min-w-0 flex-1">
         <p className="text-xs font-semibold text-[rgb(var(--text-primary))] leading-snug">{title}</p>
         {body && (
-          <p className="text-[11px] text-[rgb(var(--text-secondary))] mt-0.5 leading-snug line-clamp-3">{body}</p>
+          <p className="text-label text-[rgb(var(--text-secondary))] mt-0.5 leading-snug line-clamp-3">{body}</p>
         )}
       </div>
       <button

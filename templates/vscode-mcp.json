@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "myai": {
+      "type": "stdio",
+      "command": "bash",
+      "args": [
+        "-c",
+        "r=\"${workspaceFolder}\"; m=\"$(myai root 2>/dev/null || echo /nonexistent)\"; for p in \"$r/AI/scripts/lib/mcp_myai_stdio.sh\" \"$r/scripts/lib/mcp_myai_stdio.sh\" \"${MYAI_FRAMEWORK_DIR:-/nonexistent}/scripts/lib/mcp_myai_stdio.sh\" \"${MYAI_HOME:-/nonexistent}/scripts/lib/mcp_myai_stdio.sh\" \"$m/scripts/lib/mcp_myai_stdio.sh\" \"$HOME/.local/lib/node_modules/ai-management/scripts/lib/mcp_myai_stdio.sh\" /opt/homebrew/lib/node_modules/ai-management/scripts/lib/mcp_myai_stdio.sh /usr/local/lib/node_modules/ai-management/scripts/lib/mcp_myai_stdio.sh; do [ -f \"$p\" ] && exec bash \"$p\"; done; echo \"myai: mcp_myai_stdio.sh not found (repo AI/scripts/lib, MYAI_HOME, \\`myai root\\`, or a global ai-management install) - run: npm i -g ai-management\" >&2; exit 1"
+      ]
+    }
+  }
+}

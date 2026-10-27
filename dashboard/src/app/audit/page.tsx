@@ -7,12 +7,20 @@ import AuditViewer from './audit-viewer';
 
 export const dynamic = 'force-dynamic';
 
+/** The one-line answer (DESIGN_LANGUAGE §5.1). The trail itself is fetched by
+ *  the client viewer, so this shell states no counts. */
+function auditSummary(): string {
+  return 'Every privileged action and every access denial on your tenant, newest first. See who changed a role, who was invited, what billing or connectors moved, and what the permission rules turned away.';
+}
+
 export default function AuditPage() {
   return (
     <div className="max-w-6xl mx-auto">
       <PageHeader
+        icon="audit"
         title="Audit & Permissions"
-        subtitle="Every privileged action and access denial on your tenant — role changes, invites, connector/schedule/billing changes — plus the role permission matrix and RBAC shadow-mode denials. Export the trail for SOC2 evidence."
+        summary={auditSummary()}
+        subtitle="Owner and admin only · exportable as SOC2 evidence."
       />
       <div className="mt-6">
         <AuditViewer />

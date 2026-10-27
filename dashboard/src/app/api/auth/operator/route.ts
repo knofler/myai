@@ -1,4 +1,5 @@
 /**
+ * GET /api/auth/operator    — who is signed in as operator (or 401)
  * POST /api/auth/operator   — single-operator login (see lib/operator-auth.ts)
  * DELETE /api/auth/operator — sign out
  *
@@ -16,7 +17,14 @@ import {
   issueOperatorToken,
   operatorLoginConfigured,
   verifyOperatorPassword,
+  verifyOperatorToken,
 } from '@/lib/operator-auth';
+import {
+  clearLoginFailures,
+  loginClientKey,
+  loginRetryAfterSeconds,
+  recordLoginFailure,
+} from '@/lib/login-throttle';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,6 +39,24 @@ export const dynamic = 'force-dynamic';
 const COOKIE_SECURE =
   process.env.NODE_ENV === 'production' && process.env.MYAI_E2E_INSECURE_COOKIES !== '1';
 
+// GET — the client cannot see the operator cookie (httpOnly by design), so it
+// has no way to answer "am I signed in?" without asking the server.
+//
+// WHY THIS EXISTS (operator report 2026-09-12, "Sign in still visible after
+// login"): this dashboard has TWO independent sessions — the OPERATOR cookie
+// minted here, and the TENANT JWT (`myai_token`) minted by /api/auth/login.
+// The sidebar's "Sign in" chip links to /operator-login, but the tenant
+// switcher only ever looked for a TENANT session, so signing in as operator
+// left the chip reading "Sign in" forever. Nothing was broken about the login
+// itself — the UI simply had no way to observe it.
+export async function GET(req: Request) {
+  const cookie = req.headers.get('cookie') ?? '';
+  const match = cookie.match(new RegExp(`(?:^|;\\s*)${OPERATOR_COOKIE}=([^;]*)`));
+  const user = await verifyOperatorToken(match?.[1] ? decodeURIComponent(match[1]) : undefined);
+  if (!user) return NextResponse.json({ error: 'not authenticated' }, { status: 401 });
+  return NextResponse.json({ user });
+}
+
 export async function POST(req: Request) {
   if (!operatorLoginConfigured()) {
     // No credential on this deployment. Say so plainly — it is a deployment
@@ -38,6 +64,16 @@ export async function POST(req: Request) {
     return NextResponse.json(
       { error: 'operator login is not configured on this deployment' },
       { status: 503 },
+    );
+  }
+
+  // Audit M-7 (v1 G5): throttle guessing per client, before any password work.
+  const client = loginClientKey(req);
+  const retryAfter = loginRetryAfterSeconds(client);
+  if (retryAfter > 0) {
+    return NextResponse.json(
+      { error: 'too many failed attempts, try again later' },
+      { status: 429, headers: { 'Retry-After': String(retryAfter) } },
     );
   }
 
@@ -55,9 +91,11 @@ export async function POST(req: Request) {
   }
 
   if (!(await verifyOperatorPassword(user, password))) {
+    recordLoginFailure(client);
     // One message for both wrong-user and wrong-password — never reveal which.
     return NextResponse.json({ error: 'invalid credentials' }, { status: 401 });
   }
+  clearLoginFailures(client);
 
   const token = await issueOperatorToken(user);
   if (!token) {

@@ -86,16 +86,28 @@ if stashes:
 print(line1 + warn)
 if subj:
     print("   %slast: %s%s" % (D, subj, R))
-# task-1195b1a7: local main behind origin/main (pull-on-boot could not
-# fast-forward — usually a diverged clone) is now a LOUD red line, not a
-# silent no-op. RED (bold) so it cannot be mistaken for the routine yellow
-# open-branch/stash markers above.
-behind = sync.get("behind") or 0
-if behind > 0:
+# task-1195b1a7: a local main that pull-on-boot could not fast-forward is a
+# LOUD red line, not a silent no-op. RED (bold) so it cannot be mistaken for
+# the routine yellow open-branch/stash markers above.
+#
+# 2026-09-09: render the sync.warning the gateway itself computed, verbatim,
+# rather than re-deriving the condition here. NOTE: this whole python block is
+# a single-quoted shell string — no apostrophes and no backticks, ever (both
+# break it; backticks also trip shellcheck SC2016).
+# This hook used to test behind > 0 itself, a third copy of a rule that already
+# lived in brainSyncWarning and brain.sh, so it printed a clean, healthy-looking
+# BRAIN line over a store that was 3 commits ahead of origin and replicated
+# nowhere. One rule, one owner.
+warning = sync.get("warning")
+if warning:
     RED = "\033[1;31m" if not os.environ.get("NO_COLOR") else ""
-    ahead = sync.get("ahead") or 0
-    tag = "DIVERGED" if sync.get("diverged") else "BEHIND"
-    print("   %s⚠️  BRAIN %s: local main is %d commit(s) behind origin/main (ahead %d) - this boot may be missing recent sessions from other machines. Run \"myai brain merge\" to reconcile.%s" % (RED, tag, behind, ahead, R))
+    if sync.get("diverged"):
+        tag = "DIVERGED"
+    elif sync.get("verified") is False:
+        tag = "UNVERIFIED"
+    else:
+        tag = "STALE"
+    print("   %s⚠️  BRAIN %s: %s%s" % (RED, tag, warning, R))
 ' 2>/dev/null)
 
 [ -z "$body" ] && exit 0   # gateway down / brain uninitialized — stay silent

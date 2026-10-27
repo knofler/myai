@@ -71,7 +71,7 @@ export default async function SonaPage() {
         <div className="bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-5">
           <p className="text-xs text-[rgb(var(--text-muted))] uppercase">High Confidence</p>
           <p className="text-3xl font-bold text-emerald-400 mt-1">{highConfidence}</p>
-          <p className="text-[10px] text-zinc-600 mt-0.5">&ge; 80%</p>
+          <p className="text-label text-zinc-600 mt-0.5">&ge; 80%</p>
         </div>
       </div>
 
@@ -125,7 +125,7 @@ export default async function SonaPage() {
               <div key={p.patternId} className="flex items-center justify-between">
                 <div className="min-w-0">
                   <p className="text-sm text-[rgb(var(--text-primary))] truncate">{p.title}</p>
-                  <p className="text-[10px] text-[rgb(var(--text-muted))]">{Math.round((p.confidence || 0) * 100)}% confidence</p>
+                  <p className="text-label text-[rgb(var(--text-muted))]">{Math.round((p.confidence || 0) * 100)}% confidence</p>
                 </div>
                 <span className="text-sm font-bold text-emerald-400 shrink-0 ml-3">{p.usageCount}x</span>
               </div>
@@ -141,7 +141,7 @@ export default async function SonaPage() {
               <div key={p.patternId} className="flex items-center justify-between">
                 <div className="min-w-0">
                   <p className="text-sm text-[rgb(var(--text-primary))] truncate">{p.title}</p>
-                  <p className="text-[10px] text-[rgb(var(--text-muted))]">{Math.round((p.confidence || 0) * 100)}% confidence</p>
+                  <p className="text-label text-[rgb(var(--text-muted))]">{Math.round((p.confidence || 0) * 100)}% confidence</p>
                 </div>
                 <span className="text-sm font-bold text-[rgb(var(--text-muted))] shrink-0 ml-3">{p.usageCount}x</span>
               </div>
@@ -168,7 +168,7 @@ export default async function SonaPage() {
                 <span className={`text-xs font-mono w-10 text-right ${pct >= 80 ? 'text-emerald-400' : pct >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
                   {pct}%
                 </span>
-                <span className="text-[10px] text-zinc-600 w-8 text-right">{p.usageCount}x</span>
+                <span className="text-label text-zinc-600 w-8 text-right">{p.usageCount}x</span>
               </div>
             );
           })}

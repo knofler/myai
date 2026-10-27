@@ -20,6 +20,7 @@ import {
   scopedDeleteOne,
 } from '../shared/scoped-query.js';
 import { normalizeEventSubscription, DEFAULT_MAX_ATTEMPTS } from './outbound-events.js';
+import { isBlockedHostLiteral, privateOutboundAllowed } from '../shared/url-guard.js';
 
 const log = createChildLogger({ module: 'webhook-store' });
 
@@ -114,6 +115,9 @@ export function validateWebhookUrl(raw: string): string {
     u = new URL(raw);
   } catch {
     throw new Error('url must be a valid absolute URL');
+  }
+  if (isBlockedHostLiteral(u.hostname) && !privateOutboundAllowed()) {
+    throw new Error('url must not be a private or loopback address (MYAI_ALLOW_PRIVATE_OUTBOUND=1 to allow)');
   }
   const isLoopback = /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(u.hostname);
   if (u.protocol === 'https:' || (u.protocol === 'http:' && isLoopback)) return u.href;

@@ -4,13 +4,18 @@
 // code↔memory provenance recorded on HEAD. Sources everything from the gateway
 // `brain_explore` tool in one pass — never checks out, merges, or writes.
 
+import Link from 'next/link';
 import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { DataTable } from '@/components/ui/data-table';
 import { GATEWAY_URL } from '@/lib/gateway';
+import { connectDB, RepoCard } from '@/lib/db';
+import { getActiveTenant, tenantFilter } from '@/lib/tenant';
+import { getRegistryCounts } from '@/lib/registry-cache';
+import { timeAgo } from '@/lib/format';
 import {
-  fetchBrainExplore, fetchBrainHealth, fetchBanditStats, fetchRouterTrainReadiness, formatBrainStamp,
-  type BrainAtomMeta, type BrainHealth, type BrainSection, type BanditStats, type RouterTrainReadiness,
+  fetchBrainExplore, fetchBrainHealth, fetchBanditStats, fetchRouterTrainReadiness, formatBrainStamp, parseBrainStamp,
+  type BrainAtomMeta, type BrainHealth, type BrainSection, type BanditStats, type RouterTrainReadiness, type BrainExplore,
 } from '@/lib/brain';
 import {
   fetchHostedBrainInfo,
@@ -26,6 +31,7 @@ import {
 } from '@/lib/hosted-brain';
 import { HostedBrainUpgrade } from '@/components/hosted-brain-upgrade';
 import { HostedBrainProvision } from '@/components/hosted-brain-provision';
+import AskBrain from '@/components/brain/ask-brain';
 import BrainSearch from '@/views/brain-search';
 
 export const dynamic = 'force-dynamic';
@@ -81,6 +87,17 @@ function HealthTrend({ history }: { history: BrainHealth['history'] }) {
   );
 }
 
+/** Shared formatter for the W5.3 capture-coverage signal — "n/a" below the
+ *  minimum sample size mirrors the composite's own gating (runtime
+ *  MIN_CAPTURE_COVERAGE_SAMPLE) so the dashboard never shows a number the
+ *  score itself declined to score. */
+function captureRateLabel(health: BrainHealth): string {
+  const { captureCoverage, captureCoverageSampleSize } = health.signals;
+  if (captureCoverage === null || captureCoverage === undefined) return 'n/a';
+  const sample = captureCoverageSampleSize ?? 0;
+  return `${Math.round(captureCoverage * 100)}% (${sample} session${sample !== 1 ? 's' : ''})`;
+}
+
 function HealthCard({ health }: { health: BrainHealth }) {
   const style = GRADE_STYLE[health.grade];
   const { signals, subscores } = health;
@@ -92,7 +109,7 @@ function HealthCard({ health }: { health: BrainHealth }) {
           <span className="text-[rgb(var(--text-muted))] text-sm">/100</span>
           <Badge className={KIND_BADGE.memory}>{health.grade}</Badge>
         </div>
-        <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs flex-1">
+        <dl className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 text-xs flex-1">
           <div>
             <dt className="text-[rgb(var(--text-muted))]">Freshness</dt>
             <dd className="text-[rgb(var(--text-primary))] font-mono">{signals.freshnessDays === null ? 'n/a' : `${signals.freshnessDays.toFixed(1)}d`} ({subscores.freshness})</dd>
@@ -109,10 +126,57 @@ function HealthCard({ health }: { health: BrainHealth }) {
             <dt className="text-[rgb(var(--text-muted))]">Recall hit-rate</dt>
             <dd className="text-[rgb(var(--text-primary))] font-mono">{signals.recallHitRate === null ? 'n/a' : `${Math.round(signals.recallHitRate * 100)}%`}{subscores.recall !== null && ` (${subscores.recall})`}</dd>
           </div>
+          <div>
+            <dt className="text-[rgb(var(--text-muted))]">Capture rate</dt>
+            <dd className="text-[rgb(var(--text-primary))] font-mono">
+              {captureRateLabel(health)}
+              {subscores.captureCoverage !== null && subscores.captureCoverage !== undefined && ` (${subscores.captureCoverage})`}
+            </dd>
+          </div>
         </dl>
         <div>
           <p className="text-xs text-[rgb(var(--text-muted))] mb-1">Trend</p>
           <HealthTrend history={health.history} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/** Compact, friendly health summary for the primary Brain page (phase 5b) —
+ *  same score the Advanced tab's detailed HealthCard computes, plus the one
+ *  capture-rate sentence, in plain language. Lives one screen away from the
+ *  ask box rather than behind the Advanced tab, per the tech handoff's "one
+ *  ask/search page" brief. Detail (freshness/coverage/contradictions/recall
+ *  breakdown, trend chart) stays a tap away under Advanced — this card is the
+ *  headline, not the explorer. */
+function MemoryHealthSummary({ health }: { health: BrainHealth | null }) {
+  if (!health) {
+    return (
+      <Card title="Memory health">
+        <EmptyState>Health hasn&apos;t been measured yet.</EmptyState>
+      </Card>
+    );
+  }
+  const style = GRADE_STYLE[health.grade];
+  const { captureCoverage, captureCoverageSampleSize, captureCoverageWindowDays } = health.signals;
+  const captureCopy = captureCoverage === null || captureCoverage === undefined
+    ? "Not enough recent sessions yet to tell how reliably it's capturing."
+    : `Captured ${Math.round(captureCoverage * 100)}% of sessions over the last ${captureCoverageWindowDays ?? 7} days (${captureCoverageSampleSize ?? 0} observed).`;
+
+  return (
+    <Card title="Memory health" meta={`updated ${timeAgo(new Date(health.computedAt))}`} accent={style.accent}>
+      <div className="p-4 flex flex-col sm:flex-row sm:items-center gap-5">
+        <div className="flex items-baseline gap-2 shrink-0">
+          <span className={`text-4xl font-bold ${style.text}`}>{health.score}</span>
+          <span className="text-[rgb(var(--text-muted))] text-sm">/100</span>
+          <Badge className={KIND_BADGE.memory}>{health.grade}</Badge>
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm text-[rgb(var(--text-secondary))]">{captureCopy}</p>
+          <Link href="/brain?tab=advanced" className="mt-1 inline-block text-xs text-teal-400 hover:underline">
+            See freshness, coverage, contradictions & recall detail
+          </Link>
         </div>
       </div>
     </Card>
@@ -439,16 +503,16 @@ function HostedBrainCard({ info, hasBrainActivity }: { info: HostedBrainInfo; ha
         <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
           {info.remoteUrl && (
             <div className="sm:col-span-2 min-w-0">
-              <dt className="text-[rgb(var(--text-muted))] uppercase tracking-wider text-[10px]">Remote</dt>
+              <dt className="text-[rgb(var(--text-muted))] uppercase tracking-wider text-label">Remote</dt>
               <dd className="font-mono text-[rgb(var(--text-primary))] truncate">{info.remoteUrl}</dd>
             </div>
           )}
           <div>
-            <dt className="text-[rgb(var(--text-muted))] uppercase tracking-wider text-[10px]">Provisioned</dt>
+            <dt className="text-[rgb(var(--text-muted))] uppercase tracking-wider text-label">Provisioned</dt>
             <dd className="text-[rgb(var(--text-primary))]">{info.createdAt ? new Date(info.createdAt).toLocaleDateString() : '—'}</dd>
           </div>
           <div>
-            <dt className="text-[rgb(var(--text-muted))] uppercase tracking-wider text-[10px]">Token rotated</dt>
+            <dt className="text-[rgb(var(--text-muted))] uppercase tracking-wider text-label">Token rotated</dt>
             <dd className="text-[rgb(var(--text-primary))]">{info.rotatedAt ? new Date(info.rotatedAt).toLocaleDateString() : '—'}</dd>
           </div>
         </dl>
@@ -459,59 +523,246 @@ function HostedBrainCard({ info, hasBrainActivity }: { info: HostedBrainInfo; ha
   );
 }
 
-// Each tab renders exactly one heavy section (the always-shown header needs
-// only counts). Fetch just that section so, e.g., opening Overview never pays
-// for the atom file reads, stash previews, or the provenance blame walk.
+// The primary view (`overview`) is the product's visual signature — a hero
+// memory count, a plain-language ask box, a stat row, and a recently-learned
+// feed. It must read as "what myAI knows", never as a database explorer:
+// no vector embeddings / corpus / atoms / handoffs / recall traces anywhere
+// in this section. Everything store-internal (namespaces, health scoring,
+// retrieval tuning, raw atom/stash/provenance browsing) lives one tap away
+// under the `advanced` tab and its sub-views.
+const ADVANCED_SUBTABS = ['advanced', 'atoms', 'search', 'stashes', 'provenance'] as const;
+type AdvancedSubtab = (typeof ADVANCED_SUBTABS)[number];
+function isAdvancedSubtab(tab: string): tab is AdvancedSubtab {
+  return (ADVANCED_SUBTABS as readonly string[]).includes(tab);
+}
+
+// Each advanced sub-view renders exactly one heavy section (nothing else needs
+// more than the always-available counts). The primary view needs the atom
+// list (for the feed) and the provenance links (for each entry's recall
+// count) — both already computed for the Atoms/Provenance sub-views, so this
+// doesn't add a new read path, just reuses it on the page most people land on.
 const TAB_SECTIONS: Record<string, BrainSection[]> = {
-  overview: [],
+  overview: ['atoms', 'provenance'],
+  advanced: [],
   atoms: ['atoms'],
   search: [],
   stashes: ['stashes'],
   provenance: ['provenance'],
 };
 
+const KNOWN_TYPE: Record<BrainAtomMeta['kind'], { label: string; badge: string }> = {
+  session: { label: 'Update', badge: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
+  handoff: { label: 'Decision', badge: 'bg-purple-500/15 text-purple-400 border-purple-500/30' },
+  memory: { label: 'Fact', badge: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+};
+
+/** How many times a later commit's provenance link points back at this atom —
+ *  the honest, already-computed stand-in for "how often you've drawn on this". */
+function buildRecallCounts(provenance: BrainExplore['provenance']): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const entry of provenance) {
+    for (const ref of entry.atoms) {
+      const key = ref.split('/').pop() ?? ref;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+async function fetchKnownStats(): Promise<{ repos: number; skills: number; agents: number }> {
+  let repos = 0;
+  try {
+    await connectDB();
+    const tenantId = await getActiveTenant();
+    repos = await RepoCard.countDocuments(tenantFilter(tenantId));
+  } catch {
+    repos = 0;
+  }
+  const registry = await getRegistryCounts();
+  return { repos, skills: registry.skills, agents: registry.agents };
+}
+
+function MemoryCore({ count }: { count: number }) {
+  return (
+    <div className="relative flex flex-col items-center justify-center py-6">
+      <div
+        aria-hidden="true"
+        className="absolute h-36 w-36 animate-pulse rounded-full bg-gradient-to-br from-fuchsia-500/30 via-blue-500/25 to-teal-400/20 blur-2xl"
+      />
+      <div
+        aria-hidden="true"
+        className="absolute h-20 w-20 rounded-full bg-gradient-to-br from-fuchsia-400/40 to-blue-400/30 blur-xl [animation:pulse_3s_ease-in-out_infinite]"
+      />
+      <div className="relative text-center">
+        <p className="text-4xl font-bold tabular-nums text-[rgb(var(--text-primary))] sm:text-5xl">{count.toLocaleString()}</p>
+        <p className="mt-1 text-sm text-[rgb(var(--text-muted))]">memories</p>
+      </div>
+    </div>
+  );
+}
+
+function KnownStatsRow({ repos, skills, agents, decisions }: { repos: number; skills: number; agents: number; decisions: number }) {
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <StatCard label="Repos" value={repos} icon="fleet" tone={repos > 0 ? 'ok' : 'muted'} />
+      <StatCard label="Skills" value={skills} icon="apps" tone={skills > 0 ? 'ok' : 'muted'} />
+      <StatCard label="Agents" value={agents} icon="swarm" tone={agents > 0 ? 'ok' : 'muted'} />
+      <StatCard label="Decisions" value={decisions} icon="audit" tone={decisions > 0 ? 'ok' : 'muted'} />
+    </div>
+  );
+}
+
+function RecentlyLearnedFeed({ atoms, recallCounts }: { atoms: BrainAtomMeta[]; recallCounts: Map<string, number> }) {
+  const recent = [...atoms]
+    .sort((a, b) => (b.written ?? '').localeCompare(a.written ?? ''))
+    .slice(0, 8);
+
+  return (
+    <Card title="Recently learned">
+      {recent.length === 0 ? (
+        <EmptyState>Nothing learned yet — it fills in as your AI works and you talk to it.</EmptyState>
+      ) : (
+        <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
+          {recent.map((a) => {
+            const type = KNOWN_TYPE[a.kind] ?? KNOWN_TYPE.memory;
+            const recalls = recallCounts.get(a.file) ?? 0;
+            const when = parseBrainStamp(a.written);
+            return (
+              <li key={a.path} className="flex items-start gap-3 px-4 py-3">
+                <Badge className={`${type.badge} shrink-0`}>{type.label}</Badge>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm text-[rgb(var(--text-primary))]">{a.slug.replace(/[-_]/g, ' ')}</p>
+                  <p className="mt-0.5 text-xs text-[rgb(var(--text-muted))]">
+                    {a.repo || 'General'} · {when ? timeAgo(when) : '—'} · used {recalls}×
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+function KnownView({
+  brain,
+  stats,
+  health,
+}: {
+  brain: BrainExplore;
+  stats: { repos: number; skills: number; agents: number };
+  health: BrainHealth | null;
+}) {
+  const totalMemories = brain.totals.sessions + brain.totals.handoffs + brain.totals.memory;
+  const recallCounts = buildRecallCounts(brain.provenance);
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-8">
+      <AskBrain />
+      <MemoryHealthSummary health={health} />
+      <MemoryCore count={totalMemories} />
+      <KnownStatsRow repos={stats.repos} skills={stats.skills} agents={stats.agents} decisions={brain.totals.handoffs} />
+      <RecentlyLearnedFeed atoms={brain.atoms} recallCounts={recallCounts} />
+      <p className="text-center text-xs text-[rgb(var(--text-muted))]">
+        Want to inspect the store directly? <Link href="/brain?tab=advanced" className="text-teal-400 hover:underline">Open Advanced</Link>.
+      </p>
+    </div>
+  );
+}
+
+// ── Advanced (store-internal) ───────────────────────────────────────────────
+// Everything below is the pre-existing explorer UI, unreachable except by
+// deliberately opening Advanced (or a direct deep link from global search /
+// the command palette, which still point at these same tab ids).
+
+const ADVANCED_SUBNAV: { id: AdvancedSubtab; label: string }[] = [
+  { id: 'advanced', label: 'Store overview' },
+  { id: 'atoms', label: 'Atoms' },
+  { id: 'search', label: 'Corpus search' },
+  { id: 'stashes', label: 'Stashes' },
+  { id: 'provenance', label: 'Provenance' },
+];
+
+function AdvancedSubNav({ active }: { active: AdvancedSubtab }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 text-xs">
+      {ADVANCED_SUBNAV.map((s) => (
+        <Link
+          key={s.id}
+          href={`/brain?tab=${s.id}`}
+          className={`rounded-full px-3 py-1.5 transition-colors ${
+            s.id === active
+              ? 'bg-teal-500/15 text-teal-300'
+              : 'bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))]'
+          }`}
+        >
+          {s.label}
+        </Link>
+      ))}
+    </div>
+  );
+}
+
 export default async function BrainView({ tab }: { tab: string }) {
-  const [brain, hosted, health, bandit, routerReadiness] = await Promise.all([
-    fetchBrainExplore(TAB_SECTIONS[tab] ?? []),
+  const resolvedTab = isAdvancedSubtab(tab) ? tab : 'overview';
+  const advancedTab = resolvedTab === 'overview' ? null : resolvedTab;
+
+  // Health is fetched for both the primary page (MemoryHealthSummary) and
+  // Advanced (HealthCard) — phase 5b consolidates health score + capture rate
+  // onto the one ask/search page instead of hiding them behind a tab.
+  const [brain, hosted, health, bandit, routerReadiness, knownStats] = await Promise.all([
+    fetchBrainExplore(TAB_SECTIONS[resolvedTab] ?? []),
     fetchHostedBrainInfo(),
-    tab === 'overview' ? fetchBrainHealth() : Promise.resolve(null),
-    tab === 'overview' ? fetchBanditStats() : Promise.resolve(null),
-    tab === 'overview' ? fetchRouterTrainReadiness() : Promise.resolve(null),
+    advancedTab === 'advanced' || advancedTab === null ? fetchBrainHealth() : Promise.resolve(null),
+    advancedTab === 'advanced' ? fetchBanditStats() : Promise.resolve(null),
+    advancedTab === 'advanced' ? fetchRouterTrainReadiness() : Promise.resolve(null),
+    advancedTab === null ? fetchKnownStats() : Promise.resolve(null),
   ]);
   if (!brain) return <GatewayDown />;
   if (!brain.initialized) return <NotInitialized />;
 
+  if (advancedTab === null) {
+    return <KnownView brain={brain} stats={knownStats!} health={health} />;
+  }
+
   return (
     <div className="space-y-8">
-      {/* Header stats — always shown, every tab. */}
+      <AdvancedSubNav active={advancedTab} />
+
+      {/* Header stats — every advanced sub-view. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Namespaces"
           value={brain.totals.namespaces}
           sub={brain.namespaces.map((n) => n.name).slice(0, 3).join(', ') || 'none'}
-          accent={brain.totals.namespaces > 0 ? 'blue' : 'gray'}
+          icon="registry"
+          tone={brain.totals.namespaces > 0 ? 'ok' : 'muted'}
         />
         <StatCard
           label="Session atoms"
           value={brain.totals.sessions}
           sub={`${brain.totals.handoffs} handoff atom${brain.totals.handoffs !== 1 ? 's' : ''}`}
-          accent={brain.totals.sessions > 0 ? 'green' : 'gray'}
+          icon="sessions"
+          tone={brain.totals.sessions > 0 ? 'ok' : 'muted'}
         />
         <StatCard
           label="Memory facts"
           value={brain.totals.memory}
           sub="cross-repo atoms"
-          accent={brain.totals.memory > 0 ? 'purple' : 'gray'}
+          icon="memory"
+          tone={brain.totals.memory > 0 ? 'ok' : 'muted'}
         />
         <StatCard
           label="Open stashes"
           value={brain.stashes.length}
           sub={`branch: ${brain.branch ?? 'main'}`}
-          accent={brain.stashes.length > 0 ? 'yellow' : 'gray'}
+          icon="queue"
+          tone={brain.stashes.length > 0 ? 'warn' : 'muted'}
         />
       </div>
 
-      {tab === 'overview' && (
+      {advancedTab === 'advanced' && (
         <>
           {health && <HealthCard health={health} />}
           {bandit && <RetrievalStrategyCard stats={bandit} />}
@@ -525,10 +776,10 @@ export default async function BrainView({ tab }: { tab: string }) {
           <OverviewTab brain={brain} />
         </>
       )}
-      {tab === 'atoms' && <AtomsTab atoms={brain.atoms} truncated={brain.atomsTruncated} />}
-      {tab === 'search' && <BrainSearch />}
-      {tab === 'stashes' && <StashesTab stashes={brain.stashes} />}
-      {tab === 'provenance' && <ProvenanceTab provenance={brain.provenance} />}
+      {advancedTab === 'atoms' && <AtomsTab atoms={brain.atoms} truncated={brain.atomsTruncated} />}
+      {advancedTab === 'search' && <BrainSearch />}
+      {advancedTab === 'stashes' && <StashesTab stashes={brain.stashes} />}
+      {advancedTab === 'provenance' && <ProvenanceTab provenance={brain.provenance} />}
     </div>
   );
 }
@@ -570,7 +821,7 @@ function OverviewTab({ brain }: { brain: NonNullable<Awaited<ReturnType<typeof f
             <div className="p-4 space-y-3">
               {brain.branches.ideas.length > 0 && (
                 <div>
-                  <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider mb-1.5">Idea (long-lived)</p>
+                  <p className="text-label text-[rgb(var(--text-muted))] uppercase tracking-wider mb-1.5">Idea (long-lived)</p>
                   <div className="flex flex-wrap gap-1.5">
                     {brain.branches.ideas.map((b) => (
                       <Badge key={b} className="bg-cyan-500/15 text-cyan-400 border-cyan-500/30 font-mono">{b}</Badge>
@@ -580,7 +831,7 @@ function OverviewTab({ brain }: { brain: NonNullable<Awaited<ReturnType<typeof f
               )}
               {brain.branches.sessions.length > 0 && (
                 <div>
-                  <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider mb-1.5">Session (in-flight)</p>
+                  <p className="text-label text-[rgb(var(--text-muted))] uppercase tracking-wider mb-1.5">Session (in-flight)</p>
                   <div className="flex flex-wrap gap-1.5">
                     {brain.branches.sessions.map((b) => (
                       <Badge key={b} className="bg-blue-500/15 text-blue-400 border-blue-500/30 font-mono">{b}</Badge>
@@ -601,7 +852,7 @@ function OverviewTab({ brain }: { brain: NonNullable<Awaited<ReturnType<typeof f
                 <li key={c.sha} className="px-4 py-2.5 flex items-start gap-3 text-sm hover:bg-[rgb(var(--bg-hover))]/30 transition-colors">
                   <span className="font-mono text-xs text-[rgb(var(--text-muted))] shrink-0">{c.short}</span>
                   <span className="text-[rgb(var(--text-primary))] min-w-0 truncate">{c.subject}</span>
-                  <span className="ml-auto text-[11px] text-zinc-600 shrink-0">
+                  <span className="ml-auto text-label text-zinc-600 shrink-0">
                     {c.date ? new Date(c.date).toLocaleDateString() : ''}
                   </span>
                 </li>
@@ -640,18 +891,18 @@ function AtomsTab({ atoms, truncated }: { atoms: BrainAtomMeta[]; truncated: boo
           <span key="r" className="font-mono text-xs text-[rgb(var(--text-secondary))]">{a.repo || <span className="text-zinc-600">(cross-repo)</span>}</span>,
           <span key="s" className="text-[rgb(var(--text-primary))]">
             {a.slug}
-            <span className="block font-mono text-[10px] text-zinc-600">{a.sha8}</span>
+            <span className="block font-mono text-label text-zinc-600">{a.sha8}</span>
           </span>,
           a.code ? (
-            <span key="p" className="font-mono text-[11px] text-orange-400/90">
+            <span key="p" className="font-mono text-label text-orange-400/90">
               {a.code.branch ?? ''}{a.code.sha ? `@${a.code.sha.slice(0, 7)}` : ''}
               {a.code.commits.length ? ` · ${a.code.commits.length} commit${a.code.commits.length !== 1 ? 's' : ''}` : ''}
             </span>
           ) : (
             <span key="p" className="text-zinc-600">—</span>
           ),
-          <span key="h" className="font-mono text-[11px] text-[rgb(var(--text-muted))]">{a.host || '—'}</span>,
-          <span key="w" className="text-[11px] text-[rgb(var(--text-muted))] whitespace-nowrap">{formatBrainStamp(a.written)}</span>,
+          <span key="h" className="font-mono text-label text-[rgb(var(--text-muted))]">{a.host || '—'}</span>,
+          <span key="w" className="text-label text-[rgb(var(--text-muted))] whitespace-nowrap">{formatBrainStamp(a.written)}</span>,
         ],
       }))}
     />
@@ -669,9 +920,9 @@ function StashesTab({ stashes }: { stashes: import('@/lib/brain').BrainStashDeta
             <li key={s.path} className="px-4 py-3">
               <div className="flex flex-wrap items-center gap-2 mb-1">
                 <span className="font-medium text-[rgb(var(--text-primary))]">{s.slug}</span>
-                {s.repo && <Badge className="bg-blue-500/15 text-blue-400 border-blue-500/30 font-mono text-[10px]">{s.repo}</Badge>}
-                {s.from && <span className="text-[11px] text-[rgb(var(--text-muted))] font-mono">from {s.from}</span>}
-                <span className="ml-auto text-[11px] text-zinc-600">{formatBrainStamp(s.written)}</span>
+                {s.repo && <Badge className="bg-blue-500/15 text-blue-400 border-blue-500/30 font-mono text-label">{s.repo}</Badge>}
+                {s.from && <span className="text-label text-[rgb(var(--text-muted))] font-mono">from {s.from}</span>}
+                <span className="ml-auto text-label text-zinc-600">{formatBrainStamp(s.written)}</span>
               </div>
               {s.preview && (
                 <p className="text-xs text-[rgb(var(--text-secondary))] whitespace-pre-wrap line-clamp-3 font-mono bg-[rgb(var(--bg-page))]/40 rounded p-2 border border-[rgb(var(--border-subtle))]/60">
@@ -705,11 +956,11 @@ function ProvenanceTab({ provenance }: { provenance: import('@/lib/brain').Brain
               <div className="flex items-start gap-3">
                 <span className="font-mono text-xs text-[rgb(var(--text-muted))] shrink-0">{e.short}</span>
                 <span className="text-sm text-[rgb(var(--text-primary))] min-w-0">{e.subject}</span>
-                <span className="ml-auto text-[11px] text-zinc-600 shrink-0">
+                <span className="ml-auto text-label text-zinc-600 shrink-0">
                   {e.date ? new Date(e.date).toLocaleDateString() : ''}
                 </span>
               </div>
-              <div className="flex flex-wrap items-center gap-2 pl-8 text-[11px] font-mono">
+              <div className="flex flex-wrap items-center gap-2 pl-8 text-label font-mono">
                 {e.code.repo && <span className="text-[rgb(var(--text-secondary))]">{e.code.repo}</span>}
                 {e.code.branch && <span className="text-orange-400/90">{e.code.branch}</span>}
                 {e.code.sha && <span className="text-emerald-400/90">@{e.code.sha.slice(0, 7)}</span>}
@@ -718,7 +969,7 @@ function ProvenanceTab({ provenance }: { provenance: import('@/lib/brain').Brain
                 ))}
               </div>
               {e.atoms.length > 0 && (
-                <div className="pl-8 text-[11px] text-zinc-600 font-mono truncate">
+                <div className="pl-8 text-label text-zinc-600 font-mono truncate">
                   {e.atoms.map((a) => a.split('/').pop()).join(' · ')}
                 </div>
               )}

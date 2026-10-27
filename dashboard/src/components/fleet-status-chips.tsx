@@ -32,7 +32,7 @@ export function ActionStatus({ status }: { status?: string }) {
   if (s === 'done') {
     return (
       <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
-        <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 flex items-center justify-center text-[8px] text-zinc-950 font-bold leading-none">✓</span>
+        <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 flex items-center justify-center text-label text-zinc-950 font-bold leading-none">✓</span>
         done
       </span>
     );
@@ -40,7 +40,7 @@ export function ActionStatus({ status }: { status?: string }) {
   if (s === 'failed') {
     return (
       <span className="inline-flex items-center gap-1.5 text-xs text-red-400">
-        <span className="w-2.5 h-2.5 rounded-full bg-red-400 flex items-center justify-center text-[8px] text-zinc-950 font-bold leading-none">✕</span>
+        <span className="w-2.5 h-2.5 rounded-full bg-red-400 flex items-center justify-center text-label text-zinc-950 font-bold leading-none">✕</span>
         failed
       </span>
     );

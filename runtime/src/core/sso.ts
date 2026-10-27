@@ -100,9 +100,24 @@ function loadSsoConfigMap(): Record<string, SsoTenantConfig> {
  * tenant has no config block. This is the per-tenant gate — a null return means
  * "no SSO login path for this tenant" and callers 404.
  */
+/**
+ * SAML login is disabled until the verifier binds the signature to the
+ * assertion (v1 gate G5, H-5: DigestValue is not checked, claims are read from
+ * anywhere in the document). A SAML config is treated as no SSO; use OIDC.
+ */
+export const SAML_DISABLED_REASON = 'SAML SSO is disabled in this release; configure OIDC instead';
+const samlWarned = new Set<string>();
+
 export function getTenantSsoConfig(tenantId: string): SsoTenantConfig | null {
   if (!ssoGloballyEnabled()) return null;
   const cfg = loadSsoConfigMap()[tenantId];
+  if (cfg?.provider === 'saml') {
+    if (!samlWarned.has(tenantId)) {
+      samlWarned.add(tenantId);
+      log.warn({ tenantId }, SAML_DISABLED_REASON);
+    }
+    return null;
+  }
   return cfg ?? null;
 }
 
@@ -115,6 +130,7 @@ export function tenantIdForEmail(email: string): string | null {
   if (!domain) return null;
   const map = loadSsoConfigMap();
   for (const [tenantId, cfg] of Object.entries(map)) {
+    if (cfg.provider === 'saml') continue;
     if (cfg.emailDomains?.some((d) => d.toLowerCase().trim() === domain)) return tenantId;
   }
   return null;

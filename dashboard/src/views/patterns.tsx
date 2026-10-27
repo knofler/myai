@@ -22,7 +22,7 @@ export default async function PatternsPage() {
                   <p className={`text-lg font-bold ${pct >= 80 ? 'text-emerald-400' : pct >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
                     {pct}%
                   </p>
-                  <p className="text-[10px] text-zinc-600 uppercase">confidence</p>
+                  <p className="text-label text-zinc-600 uppercase">confidence</p>
                 </div>
               </div>
 
@@ -35,7 +35,7 @@ export default async function PatternsPage() {
 
               <div className="flex flex-wrap gap-1.5 mb-3">
                 {p.tags.map(t => (
-                  <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-[rgb(var(--text-secondary))]">{t}</span>
+                  <span key={t} className="text-label font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-[rgb(var(--text-secondary))]">{t}</span>
                 ))}
               </div>
 

@@ -303,17 +303,6 @@ export default async function ShowcasePage() {
             <Capability key={c.title} {...c} />
           ))}
         </div>
-
-        <div className="mt-4">
-          <a
-            href="https://github.com/knofler/agentFlow"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-block px-3 py-1.5 rounded-lg gel-brand border border-teal-500/40 text-teal-200 hover:border-teal-400 transition-colors text-xs"
-          >
-            View the agentFlow repo ↗
-          </a>
-        </div>
       </section>
 
       {/* ── (c3) connect showcase — support→triage→fix→PR→deploy loop ─ */}
@@ -337,17 +326,6 @@ export default async function ShowcasePage() {
           {connectCapabilities.map((c) => (
             <Capability key={c.title} {...c} />
           ))}
-        </div>
-
-        <div className="mt-4">
-          <a
-            href="https://github.com/knofler/connect"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-block px-3 py-1.5 rounded-lg gel-brand border border-teal-500/40 text-teal-200 hover:border-teal-400 transition-colors text-xs"
-          >
-            View the connect repo ↗
-          </a>
         </div>
       </section>
 

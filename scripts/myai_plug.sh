@@ -95,6 +95,22 @@ EOF
 # ── the live proof (delegates to connect-agent's round-trip) ──────────────────
 run_proof() {
   echo "== myai plug — live continuity proof =="
+  # Same choice the stdio bridge makes at spawn (v1 G2 B2): gateway /health
+  # answers → the gateway; otherwise agents get the local brain server, so
+  # prove THAT one instead of failing on a gateway nobody is running.
+  local health="${GATEWAY_MCP%/mcp}/health" up=0
+  if command -v curl >/dev/null 2>&1; then
+    [ "$(curl -s -m 1 -o /dev/null -w '%{http_code}' "$health" 2>/dev/null)" = 200 ] && up=1
+  else
+    node -e 'fetch(process.argv[1],{signal:AbortSignal.timeout(1000)}).then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))' "$health" 2>/dev/null && up=1
+  fi
+  if [ "$up" = 0 ]; then
+    echo "Mode: offline — no gateway at $GATEWAY_MCP; agents get the local brain server"
+    echo "(brain + recall only — \`myai up\` and restart the agent for the full tool set)"
+    echo
+    exec node "$SCRIPT_DIR/lib/mcp_local_stdio.mjs" --proof
+  fi
+  echo "Mode: gateway — full tool set"
   echo "Handshake + context_boot round-trip against $GATEWAY_MCP"
   echo "(this is what every plugged-in agent receives the moment it connects)"
   echo
@@ -103,23 +119,34 @@ run_proof() {
 
 # ── cooperating agents that ship as example MCP config, not connect-agent ─────
 print_example_agent() { # $1 = agent (gemini|opencode)
-  local label file
+  # The entry is printed inline with this machine's URL and token. The repo's
+  # examples/ folder is not part of the npm package, so pointing at a file
+  # there left npm users with nothing to copy.
+  local label where entry tok
   label="$(agent_field "$1" 3)"
+  # shellcheck source=lib/gateway.sh disable=SC1091
+  [ -n "${GATEWAY_LOCAL_TOKEN:-}" ] || . "$SCRIPT_DIR/lib/gateway.sh" 2>/dev/null || true
+  tok="${GATEWAY_LOCAL_TOKEN:-<your GATEWAY_LOCAL_TOKEN from ~/.myai/standalone/.env>}"
   case "$1" in
-    gemini)   file="examples/agents/gemini-cli/settings.json" ;;
-    opencode) file="examples/agents/opencode/opencode.json" ;;
+    gemini)
+      # shellcheck disable=SC2088  # a path shown to the user, not expanded
+      where="~/.gemini/settings.json (all projects) or <project>/.gemini/settings.json"
+      entry="$(printf '{\n  "mcpServers": {\n    "myai": {\n      "httpUrl": "%s",\n      "headers": { "x-gateway-local-token": "%s" },\n      "timeout": 30000,\n      "trust": false\n    }\n  }\n}' "$GATEWAY_MCP" "$tok")" ;;
+    opencode)
+      where="<project>/opencode.json or ~/.config/opencode/opencode.json"
+      # shellcheck disable=SC2016  # "$schema" is a literal JSON key
+      entry="$(printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "mcp": {\n    "myai": {\n      "type": "remote",\n      "url": "%s",\n      "enabled": true,\n      "headers": { "x-gateway-local-token": "%s" }\n    }\n  }\n}' "$GATEWAY_MCP" "$tok")" ;;
   esac
   cat <<EOF
 ── $label — cooperating MCP client (config-file based)
 
-$label reads its MCP servers from a config file. Point it at the local gateway
-by copying the ready-made entry from:
+$label reads its MCP servers from $where.
+Add this "myai" entry next to any servers already there (don't replace the file):
 
-    $file
+$entry
 
-Set the myai server URL to $GATEWAY_MCP and add the
-x-gateway-local-token header (your GATEWAY_LOCAL_TOKEN from .env). On its next
-start it auto-boots with your operator brief on the MCP handshake.
+On its next start it auto-boots with your context on the MCP handshake.
+After 'myai rotate-keys local', run this again and update the token.
 
 Verifying the gateway side of that hookup now:
 EOF

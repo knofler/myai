@@ -17,6 +17,7 @@ import { historicalStartingMrr, type MrrSnapshotPoint } from '@/lib/mrr-snapshot
 import type { TenantPlan, SubscriptionStatus } from '@/lib/billing';
 import { Card, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
+import { plural } from '@/lib/summary';
 import AutoRefresh from '@/components/auto-refresh';
 import Link from 'next/link';
 import { dbUnreachableHint } from '@/lib/db-hint';
@@ -42,6 +43,28 @@ function cohortMonthLabel(d: Date): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+/* ── The one-line answer (§5.1) ─────────────────────── */
+
+function nrrSummary(
+  cohorts: Array<{ startingMrr: number; endingMrr: number; churnedLogos: number }>,
+): string {
+  if (cohorts.length === 0) {
+    return 'No paying cohorts yet. This fills in as tenants subscribe through Stripe checkout.';
+  }
+  const starting = cohorts.reduce((sum, c) => sum + c.startingMrr, 0);
+  const ending = cohorts.reduce((sum, c) => sum + c.endingMrr, 0);
+  const churnedLogos = cohorts.reduce((sum, c) => sum + c.churnedLogos, 0);
+  const head = `You have ${plural(cohorts.length, 'signup-month cohort')}.`;
+  if (starting <= 0) {
+    return `${head} None of them started with any billed revenue, so there is no retention to measure yet.`;
+  }
+  const direction = ending > starting ? 'are now worth' : ending < starting ? 'are now down to' : 'are still worth';
+  const churn = churnedLogos > 0
+    ? ` ${plural(churnedLogos, 'account')} churned along the way.`
+    : ' Nothing has churned yet.';
+  return `${head} Together they started at ${fmtUsd(starting)} a month and ${direction} ${fmtUsd(ending)}, a blended ${pct(ending / starting)} net revenue retention.${churn}`;
+}
+
 export default async function NrrCohortPage() {
   let dbError = false;
   try {
@@ -53,7 +76,12 @@ export default async function NrrCohortPage() {
   if (dbError) {
     return (
       <div className="max-w-7xl mx-auto">
-        <PageHeader title="NRR cohorts" subtitle="Expansion vs contraction vs churn, per signup-month cohort." />
+        <PageHeader
+          icon="revenue"
+          title="NRR cohorts"
+          summary="Cohort retention cannot be read right now because the database is unreachable."
+          subtitle="Expansion vs contraction vs churn, per signup-month cohort."
+        />
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
           {dbUnreachableHint('NRR cohorts')}
         </div>
@@ -129,8 +157,10 @@ export default async function NrrCohortPage() {
     <div className="max-w-7xl mx-auto">
       <AutoRefresh seconds={60} />
       <PageHeader
+        icon="revenue"
         title="NRR cohorts"
-        subtitle="Expansion vs contraction vs churn, per signup-month cohort — the retention-quality lens behind the single NRR number on /revenue."
+        summary={nrrSummary(report)}
+        subtitle="Expansion vs contraction vs churn, per signup-month cohort. The retention-quality lens behind the single NRR number on /revenue."
       >
         <Link href="/revenue" className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 rounded-lg px-3 py-1.5">
           ← Revenue overview

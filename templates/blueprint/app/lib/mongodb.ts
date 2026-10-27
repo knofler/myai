@@ -11,7 +11,9 @@ interface MongooseCache {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
+  // `var` is required here (TS `declare global` augmentation only accepts
+  // `var`, not `let`/`const`) — no eslint-disable needed, the active flat
+  // config (eslint-config-next's exported arrays) doesn't enable `no-var`.
   var _mongoose: MongooseCache | undefined;
 }
 

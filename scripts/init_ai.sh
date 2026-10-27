@@ -9,7 +9,9 @@ set -e
 TARGET_DIR=$1
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TRACKING_FILE="$REPO_DIR/config/managed_repos.txt"
+# TRACKING_FILE override (same as update_all.sh): tests point it at a sandbox
+# copy so a run never appends temp paths to the tracked roster.
+TRACKING_FILE="${TRACKING_FILE:-$REPO_DIR/config/managed_repos.txt}"
 
 if [ -z "$TARGET_DIR" ]; then
     echo "Error: No target directory specified."
@@ -25,6 +27,11 @@ fi
 . "$REPO_DIR/scripts/lib/merge_json.sh"
 # shellcheck source=lib/sync_guard.sh
 . "$REPO_DIR/scripts/lib/sync_guard.sh"
+# sync_mcp_config() — shared with scripts/update_all.sh (scripts/lib/mcp_config.sh)
+# so a freshly-scaffolded repo's .mcp.json (base servers + web/docker/api
+# stack-detection overlays) can't drift from what the fleet sync ships.
+# shellcheck source=lib/mcp_config.sh
+. "$REPO_DIR/scripts/lib/mcp_config.sh"
 
 # Ensure we are in the root of the master template
 if [ ! -f "$REPO_DIR/documentation/AI_RULES.md" ]; then
@@ -149,6 +156,12 @@ for script in remote.sh telegram-setup.sh rotate_state.sh local-ci.sh yolo.sh ba
     chmod +x "$TARGET_DIR/AI/scripts/$script" || true
   fi
 done
+# local-ci.sh sources lib/ci_check_map.sh — without it every freshly scaffolded
+# repo's `./AI/scripts/local-ci.sh` fails at the first line (found via task-1944ac8e).
+mkdir -p "$TARGET_DIR/AI/scripts/lib"
+if [ -f "$REPO_DIR/scripts/lib/ci_check_map.sh" ]; then
+  cp -v "$REPO_DIR/scripts/lib/ci_check_map.sh" "$TARGET_DIR/AI/scripts/lib/"
+fi
 
 # ── Install zero-prompt policy + safety hooks at repo root ──────────────
 # The framework's zero-prompt policy (auto defaultMode — bypass is org-gated since 2026-09-03 — + 136-pattern
@@ -187,6 +200,22 @@ if [ -f "$REPO_DIR/.claude/settings.json" ]; then
   rm -f "$_settings_tmp"
 fi
 
+# ── .githooks/ (conflicted-copy pre-commit guard + local-ci pre-push gate) ──
+# Blueprint-audit gap (plan/blueprint-audit-2026-09-10.md): a scaffolded repo
+# never got the committed pre-push hook until its first update_all.sh run —
+# core.hooksPath is only wired below, once the target is a git repo.
+if [ -d "$REPO_DIR/.githooks" ]; then
+  sync_tree "$REPO_DIR/.githooks" "$TARGET_DIR/.githooks"
+  chmod +x "$TARGET_DIR"/.githooks/* 2>/dev/null || true
+  echo "Copied git hooks → .githooks/"
+fi
+
+# ── .mcp.json (base MCP servers + web/docker/api stack-detection overlays) ──
+# Same blueprint-audit gap as .githooks/ above — scaffolded repos previously
+# shipped with no .mcp.json at all. Shared with update_all.sh via
+# scripts/lib/mcp_config.sh so scaffold and fleet-sync can't drift apart.
+sync_mcp_config "$TARGET_DIR"
+
 # Copy CLAUDE_TEMPLATE.md as the project's root CLAUDE.md
 cp -v "$REPO_DIR/templates/CLAUDE_TEMPLATE.md" "$TARGET_DIR/CLAUDE.md"
 
@@ -224,6 +253,11 @@ if [ ! -d ".git" ]; then
     echo "Initialized new Git repository in $TARGET_DIR"
 fi
 
+# Wire core.hooksPath at .githooks/ now that TARGET_DIR is definitely a git
+# repo (the DEVOPS 2026-07-20 conflicted-copy guard is inert until this runs).
+# Idempotent — safe on every init/re-init.
+"$REPO_DIR/scripts/install_git_hooks.sh" "$TARGET_DIR" || true
+
 # A developer Mac always has ~/.gitconfig user.name/user.email set, but CI
 # runners and other sandboxes commit as nobody — `git commit` then dies with
 # "fatal: unable to auto-detect email address" (exit 128). Never override a
@@ -237,7 +271,7 @@ git config user.name  >/dev/null 2>&1 || git config user.name  "AI Management In
 # exit non-zero under `set -e` and abort the run — so guard on a dirty index.
 git add AI/ CLAUDE.md
 git add .gitignore .dockerignore .env.example 2>/dev/null || true
-git add .claude/settings.json hooks/ 2>/dev/null || true
+git add .claude/settings.json hooks/ .githooks/ .mcp.json 2>/dev/null || true
 if git diff --cached --quiet 2>/dev/null; then
     echo "Re-init: AI framework already up to date — nothing new to commit."
 else

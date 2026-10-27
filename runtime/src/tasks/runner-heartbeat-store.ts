@@ -25,6 +25,13 @@ export interface RecordHeartbeatInput {
   machine: string;
   /** Runner identity for this fire, e.g. "runner-host/12345". */
   holder: string;
+  /** AGENT_MESSAGING_DISPATCH — mailbox address this runner answers to, for
+   *  non-Claude CLI lanes (agy/codex/ollama) that have no other identity
+   *  record. Omit to leave the previous value (or unset) alone. */
+  address?: string;
+  /** Capability tags this runner can act on (lane name, installed models,
+   *  skills). Omit to leave the previous value alone. */
+  capabilities?: string[];
 }
 
 export interface RunnerHeartbeatView {
@@ -35,6 +42,8 @@ export interface RunnerHeartbeatView {
   minutesSince: number;
   /** lastHeartbeatAt older than the liveness threshold. */
   down: boolean;
+  address?: string;
+  capabilities?: string[];
 }
 
 export interface RunnerLivenessResult {
@@ -61,6 +70,8 @@ function toView(doc: IRunnerHeartbeat, now: Date, thresholdMs: number): RunnerHe
     lastHeartbeatAt: doc.lastHeartbeatAt,
     minutesSince: Math.floor(ageMs / 60_000),
     down: ageMs > thresholdMs,
+    address: doc.address,
+    capabilities: doc.capabilities && doc.capabilities.length ? [...doc.capabilities] : undefined,
   };
 }
 
@@ -75,13 +86,16 @@ export async function recordHeartbeat(
 ): Promise<{ ok: true; lastHeartbeatAt: Date }> {
   requireDb();
   const now = new Date();
+  const set: Record<string, unknown> = { holder: input.holder, lastHeartbeatAt: now };
+  if (typeof input.address === 'string' && input.address.trim()) set.address = input.address.trim().toLowerCase();
+  if (Array.isArray(input.capabilities) && input.capabilities.length) set.capabilities = input.capabilities;
   const doc = await scopedFindOneAndUpdate(
     RunnerHeartbeatModel, tenantId,
     { machine: input.machine },
-    { $set: { holder: input.holder, lastHeartbeatAt: now } },
+    { $set: set },
     { upsert: true, new: true },
   ) as IRunnerHeartbeat;
-  log.debug({ machine: input.machine, holder: input.holder }, 'Runner heartbeat recorded');
+  log.debug({ machine: input.machine, holder: input.holder, address: doc.address }, 'Runner heartbeat recorded');
   return { ok: true, lastHeartbeatAt: doc.lastHeartbeatAt };
 }
 

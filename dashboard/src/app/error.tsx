@@ -18,7 +18,7 @@ export default function RootError({
       <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/30">
         <span className="text-2xl text-red-400">!</span>
       </div>
-      <h1 className="text-xl font-bold text-[rgb(var(--text-primary))]">Something went wrong</h1>
+      <h1 className="text-title font-bold text-[rgb(var(--text-primary))]">Something went wrong</h1>
       <p className="text-sm text-[rgb(var(--text-muted))] max-w-sm mx-auto">
         {error.message || 'An unexpected error occurred.'}
       </p>

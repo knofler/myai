@@ -12,10 +12,35 @@ import { fmtTokens, fmtUsd } from '@/lib/format';
 import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { DataTable, type DataRow } from '@/components/ui/data-table';
 import { PageHeader } from '@/components/page-header';
+import { plural } from '@/lib/summary';
 import AutoRefresh from '@/components/auto-refresh';
 import ShareButton from './share-button';
 
 export const dynamic = 'force-dynamic';
+
+/* ── The one-line answer (§5.1) ────────────────────────────── */
+
+function savingsSummary(
+  month: { tokens: number; boots: number; usd: number },
+  total: { tokens: number; boots: number; usd: number },
+  contributors: number,
+  dbError: boolean,
+): string {
+  if (dbError) return 'Savings cannot be read right now because the database is unreachable.';
+  if (total.boots === 0) {
+    return 'Nothing has been saved yet. The meter starts filling the first time an agent boots through the gateway.';
+  }
+  if (month.boots === 0) {
+    return `Nothing was saved this month, but myAI has saved you ${fmtUsd(total.usd)} of context re-teaching all time across ${plural(total.boots, 'boot')}.`;
+  }
+  const head = `You saved ${fmtUsd(month.usd)} this month, because myAI served your context on ${plural(month.boots, 'boot')} instead of you re-teaching it by hand.`;
+  const tail = ` That is ${fmtTokens(month.tokens)} tokens this month and ${fmtUsd(total.usd)} since you started.`;
+  // `contributors` counts byUser rows, one of which is the anonymous system/agent
+  // row the table below labels as such — counting it as a "member" overstates a
+  // single-operator tenant as two.
+  const who = contributors > 1 ? ` ${plural(contributors, 'contributor')} fed into it.` : '';
+  return `${head}${tail}${who}`;
+}
 
 export default async function SavingsPage() {
   let dbError = false;
@@ -50,8 +75,10 @@ export default async function SavingsPage() {
     <div className="max-w-5xl mx-auto">
       <AutoRefresh seconds={60} />
       <PageHeader
+        icon="savings"
         title="Tokens saved"
-        subtitle="Every boot, myAI serves your context instead of you re-teaching it by hand. This is what that saved — cumulative, and shareable."
+        summary={savingsSummary(month, total, byUser.length, dbError)}
+        subtitle="Cumulative, and shareable."
       />
 
       {dbError && (
@@ -62,10 +89,10 @@ export default async function SavingsPage() {
 
       {/* Headline savings */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard label="Tokens saved (month)" value={fmtTokens(month.tokens)} sub={`${month.boots.toLocaleString()} boots`} accent="green" />
-        <StatCard label="$ saved (month)" value={fmtUsd(month.usd)} sub={`@ $${summary.usdPerMTokens}/M tokens`} accent="green" />
-        <StatCard label="Tokens saved (all-time)" value={fmtTokens(total.tokens)} sub={`${total.boots.toLocaleString()} boots`} accent="blue" />
-        <StatCard label="$ saved (all-time)" value={fmtUsd(total.usd)} accent="blue" />
+        <StatCard label="Tokens saved this month" value={fmtTokens(month.tokens)} sub={`${month.boots.toLocaleString()} boots`} icon="savings" tone={month.tokens > 0 ? 'ok' : 'muted'} />
+        <StatCard label="Saved this month" value={fmtUsd(month.usd)} sub={`@ $${summary.usdPerMTokens}/M tokens`} icon="revenue" tone={month.usd > 0 ? 'ok' : 'muted'} />
+        <StatCard label="Tokens saved all time" value={fmtTokens(total.tokens)} sub={`${total.boots.toLocaleString()} boots`} icon="memory" tone="muted" />
+        <StatCard label="Saved all time" value={fmtUsd(total.usd)} icon="revenue" tone="muted" />
       </div>
 
       {/* Share card + CTA */}

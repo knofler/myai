@@ -24,8 +24,12 @@
  * anywhere on the network. Local access uses the same login as everything
  * else.
  *
- * Edge-safe: uses Web Crypto only (no node:crypto), so it runs inside
- * middleware.
+ * Uses Web Crypto only (no node:crypto) — historically required because
+ * middleware ran on the Edge runtime. Next.js 16's proxy.ts always runs on
+ * the Node.js runtime (the Edge option was removed), so node:crypto would
+ * work too now, but Web Crypto is kept: it also runs in route handlers
+ * without an extra import surface, and there is no reason to reintroduce a
+ * node:crypto dependency into code this security-sensitive.
  */
 
 const enc = new TextEncoder();

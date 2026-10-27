@@ -594,7 +594,7 @@ function pageShell({ title, bodyHtml, depth, activeFile, generatedAt, toc = [] }
     <div class="page">
       <article class="markdown-body">
 ${bodyHtml}
-<footer>Generated ${generatedAt} · <a href="https://github.com/knofler/myai">knofler/myai</a></footer>
+<footer>Generated ${generatedAt} · <a href="https://github.com/knofler/myai">myAI on GitHub</a></footer>
       </article>
       ${tocHtml}
     </div>

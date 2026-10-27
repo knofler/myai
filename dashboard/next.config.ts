@@ -1,5 +1,6 @@
 import type { NextConfig } from 'next';
 import createNextIntlPlugin from 'next-intl/plugin';
+import { securityHeaders } from './src/lib/security-headers';
 
 const withNextIntl = createNextIntlPlugin('./src/i18n/request.ts');
 
@@ -57,6 +58,8 @@ const nextConfig: NextConfig = {
   // a service worker delays every future update of everything it controls.
   async headers() {
     return [
+      // Audit M-6 (v1 G5): CSP, framing, nosniff, referrer, HSTS on every route.
+      { source: '/:path*', headers: securityHeaders() },
       {
         source: '/:file(icon.svg|icon-192.png|icon-512.png|apple-touch-icon.png|apple-touch-icon.svg)',
         headers: [

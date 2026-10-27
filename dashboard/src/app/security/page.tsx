@@ -56,6 +56,7 @@ function Td({ children }: { children: React.ReactNode }) {
 export default function SecurityPage() {
   return (
     <LegalShell
+      icon="security"
       title="Security & Data Locality"
       updated="2026-08-16"
       intro={

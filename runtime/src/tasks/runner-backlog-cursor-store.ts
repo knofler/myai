@@ -38,3 +38,33 @@ export async function setBacklogCursor(tenantId: string, consumed: number): Prom
   ) as IRunnerBacklogCursor;
   return doc.consumed;
 }
+
+/**
+ * Durable consumed-titles ledger (task-aa331af6). See the `confirmedTitles`
+ * doc comment on IRunnerBacklogCursor for why this exists: unlike a
+ * tasks_list(limit:2000) lookup, membership here never ages out as the
+ * fleet-wide task table grows, so it is safe to use as a floor a corrected
+ * cursor may never rewind past.
+ */
+
+/** Titles confirmed so far for the tenant; empty when no doc exists yet. */
+export async function getConfirmedTitles(tenantId: string): Promise<string[]> {
+  requireDb();
+  const doc = await scopedFindOne(RunnerBacklogCursorModel, tenantId, {})
+    .lean()
+    .exec() as IRunnerBacklogCursor | null;
+  return doc?.confirmedTitles ?? [];
+}
+
+/** Add titles to the ledger (idempotent, set semantics). Returns the full updated list. */
+export async function addConfirmedTitles(tenantId: string, titles: string[]): Promise<string[]> {
+  requireDb();
+  if (titles.length === 0) return getConfirmedTitles(tenantId);
+  const doc = await scopedFindOneAndUpdate(
+    RunnerBacklogCursorModel, tenantId,
+    {},
+    { $addToSet: { confirmedTitles: { $each: titles } } },
+    { upsert: true, new: true },
+  ) as IRunnerBacklogCursor;
+  return doc.confirmedTitles ?? [];
+}

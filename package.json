@@ -1,6 +1,6 @@
 {
   "name": "ai-management",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "mcpName": "io.github.knofler/myai",
   "description": "myai — a self-owned, git-versioned AI memory + multi-agent framework. Plug any agent (Claude, Cursor, Gemini, Codex, opencode) into your own portable brain so it boots already knowing your projects, decisions, and context. Local-first (Docker), MCP-native, with an autonomous runner, RAG search, a live dashboard, and one-command full-stack app blueprints.",
   "bin": {
@@ -41,11 +41,13 @@
     "dashboard/postcss.config.mjs",
     "dashboard/tsconfig.json",
     "dashboard/Dockerfile",
+    "dashboard/loopback-gate.js",
     "dashboard/.dockerignore",
     "documentation/",
     "config/*.example",
     "config/agent_paths.conf",
     "config/generation-stages.json",
+    "config/docker_mcp_profiles.txt",
     "config/project-config-template.json",
     "docker-compose.yml",
     "package.json",
@@ -56,6 +58,7 @@
     "LICENSE",
     "SECURITY.md",
     "!**/*.test.ts",
+    "!**/*.test.tsx",
     "!**/tests/**",
     "!scripts/tests/**",
     "!scripts/setup_sentry.sh",
@@ -74,8 +77,13 @@
     "!scripts/rollout_ci_thrift.sh",
     "!skills/fleet/**",
     "!.claude/skills/fleet/**",
-    "!documentation/POWERHOUSE_KEYWORDS.md",
-    "!documentation/MULTI_ORG_WORKFLOW.md"
+    "!documentation/operator/**",
+    "!documentation/MULTI_ORG_WORKFLOW.md",
+    "!agents/standing-blog-scout.md",
+    "!.claude/agents/standing-blog-scout.md",
+    "!scripts/blog_scout_step.sh",
+    "!scripts/register_blog_scout_recurring.sh",
+    "!scripts/bootstrap_mac.sh"
   ],
   "scripts": {
     "smoke": "npm pack --dry-run",

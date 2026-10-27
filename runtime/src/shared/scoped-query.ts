@@ -31,7 +31,7 @@
  * "nothing to consume until it exists" per ADR-031's own Consequences) — this
  * is the plumbing that call needs, not the call itself.
  */
-import type { Model, FilterQuery, UpdateQuery, PipelineStage, Connection } from 'mongoose';
+import type { Model, FilterQuery, UpdateQuery, UpdateWithAggregationPipeline, PipelineStage, Connection } from 'mongoose';
 import { AuthError } from '../core/tenant-context.js';
 
 /**
@@ -104,8 +104,14 @@ export function scopedUpdateOne<T extends Scoped>(model: Model<T>, tenantId: str
   return resolveScopedModel(model, connection).updateOne(withTenant(tenantId, filter) as FilterQuery<T>, update, options ?? {});
 }
 
-/** `Model.findOneAndUpdate` scoped to a tenant (used by the upsert stores). */
-export function scopedFindOneAndUpdate<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter, update: UpdateQuery<T>, options?: Record<string, unknown>, connection?: Connection) {
+/**
+ * `Model.findOneAndUpdate` scoped to a tenant (used by the upsert stores).
+ * Accepts an aggregation-pipeline update (array) as well as a classic update
+ * document — the keyed-lease store uses pipelines so `$$NOW` (Mongo server
+ * time) drives lease expiry instead of each gateway's own clock. Only the
+ * UPDATE may be a pipeline; the tenant scope is still injected into the filter.
+ */
+export function scopedFindOneAndUpdate<T extends Scoped>(model: Model<T>, tenantId: string | undefined, filter: Filter, update: UpdateQuery<T> | UpdateWithAggregationPipeline, options?: Record<string, unknown>, connection?: Connection) {
   return resolveScopedModel(model, connection).findOneAndUpdate(withTenant(tenantId, filter) as FilterQuery<T>, update, options ?? {});
 }
 

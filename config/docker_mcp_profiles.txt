@@ -1,0 +1,31 @@
+# docker_mcp_profiles.txt — Docker MCP gateway profiles + which lane gets which.
+# Docker MCP rollout, direction A, phase 0.
+#
+#   profile <id> <catalog-server>...   servers from catalog mcp/docker-mcp-catalog
+#   role    <role> <profile-id>        role = master | worker | runner — resolved
+#                                      per session (v1 G6): runner for runner
+#                                      fires (MYAI_RUNNER_FIRE=1), master for the
+#                                      lane in ~/.myai/swarm/master.<host>, worker
+#                                      for every other lane
+#   lane    <lane> <profile-id>        optional: pin one named lane (wins over role)
+#
+# scripts/docker_mcp_profiles.sh ensure converges THIS Mac's profiles onto this
+# file (boot phase 6c); scripts/lib/mcp_docker_gateway.sh resolves the lane at
+# MCP spawn. Profiles not listed here are never touched.
+# A config/docker_mcp_profiles.operator.txt, when present (never shipped),
+# replaces this file — that is where a fleet keeps its own named lanes.
+
+profile myai_master  docker-docs context7
+profile myai_worker  docker-docs context7
+profile myai_runner  docker-docs context7
+
+# context7 is remote and keyless. Not here, by evidence:
+#   playwright      — in the gateway's container it cannot reach host apps
+#                     (host.docker.internal navigation is blocked), and the
+#                     image lacks browser_emulate_media + browser_find.
+#   github-official — needs `docker mcp secret set github.personal_access_token`
+#                     and renames its tools mcp__github__* → mcp__docker__*.
+
+role master  myai_master
+role worker  myai_worker
+role runner  myai_runner

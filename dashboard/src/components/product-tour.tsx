@@ -209,12 +209,12 @@ export function ProductTour() {
       {/* card */}
       <div className="gel-surface relative w-full max-w-lg rounded-3xl border border-[rgb(var(--border-subtle))] p-7 shadow-2xl">
         <div className="flex items-center justify-between">
-          <span className="text-[11px] uppercase tracking-widest text-teal-300" data-testid="tour-eyebrow">
+          <span className="text-label uppercase tracking-widest text-teal-300" data-testid="tour-eyebrow">
             {step.eyebrow}
           </span>
           {autoAdvancing && (
             <span
-              className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[rgb(var(--text-muted))]"
+              className="flex items-center gap-1.5 text-label uppercase tracking-widest text-[rgb(var(--text-muted))]"
               data-testid="tour-autoadvance"
             >
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal-400" />
@@ -238,7 +238,7 @@ export function ProductTour() {
           <div className="mt-5 grid grid-cols-2 gap-3">
             {step.pillars.map((p) => (
               <div key={p.label} className="rounded-xl border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))]/50 p-3">
-                <div className="text-xs font-semibold text-brand-orange">{p.label}</div>
+                <div className="text-label font-semibold uppercase tracking-wide text-[rgb(var(--text-secondary))]">{p.label}</div>
                 <div className="mt-1 text-xs text-[rgb(var(--text-muted))]">{p.note}</div>
               </div>
             ))}
@@ -295,7 +295,7 @@ export function ProductTour() {
           {skipReady && (
             <button
               onClick={close}
-              className="text-[11px] text-zinc-600 underline-offset-2 transition hover:text-[rgb(var(--text-secondary))] hover:underline"
+              className="text-label text-zinc-600 underline-offset-2 transition hover:text-[rgb(var(--text-secondary))] hover:underline"
               data-testid="tour-skip"
             >
               Skip for now

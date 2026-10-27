@@ -247,8 +247,116 @@ export function RecommendationBadge({ recommendation }: { recommendation: string
   return <Badge className={RECOMMENDATION[recommendation] ?? RECOMMENDATION.keep}>{label}</Badge>;
 }
 
+/* ── Structured log level (/logs) ──────────────────────────── */
+// Was an inline LEVEL_COLOR map in the /logs client viewer.
+
+const LOG_LEVEL: Record<string, string> = {
+  debug: 'bg-zinc-700/40 text-[rgb(var(--text-muted))] border-zinc-600/50',
+  info: 'bg-zinc-700/40 text-[rgb(var(--text-primary))] border-zinc-600/50',
+  warn: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  error: 'bg-red-500/15 text-red-400 border-red-500/30',
+};
+
+export function LogLevelBadge({ level }: { level: string }) {
+  return <Badge className={LOG_LEVEL[level]}>{level}</Badge>;
+}
+
+/* ── Runner job-history outcome (/runs) ────────────────────── */
+// Was an inline STATUS_COLOR map in the /runs client search.
+
+const RUN_OUTCOME: Record<string, string> = {
+  done: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  blocked: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  failed: 'bg-red-500/15 text-red-400 border-red-500/30',
+  'no-result': 'bg-zinc-700/40 text-[rgb(var(--text-muted))] border-zinc-600/50',
+};
+
+export function RunOutcomeBadge({ status }: { status: string }) {
+  return <Badge className={RUN_OUTCOME[status]}>{status}</Badge>;
+}
+
+/* ── Public status-page component health (/status) ─────────── */
+// Was an inline DOT/BANNER map hardcoded to white/black neutrals in the
+// public /status page (predates the token system entirely).
+
+const COMPONENT_STATUS: Record<string, string> = {
+  operational: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  degraded: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  down: 'bg-red-500/15 text-red-400 border-red-500/30',
+};
+
+export function ComponentStatusBadge({ status }: { status: string }) {
+  return <Badge className={COMPONENT_STATUS[status] ?? COMPONENT_STATUS.operational}>{status}</Badge>;
+}
+
+const COMPONENT_LEVEL: Record<string, 'ok' | 'warn' | 'error'> = {
+  operational: 'ok',
+  degraded: 'warn',
+  down: 'error',
+};
+
+export function componentLevel(status: string): 'ok' | 'warn' | 'error' {
+  return COMPONENT_LEVEL[status] ?? 'ok';
+}
+
 /* ── Enabled/on-off dot ────────────────────────────────────── */
 
 export function OnDot({ on }: { on: boolean }) {
   return <span className={`inline-block w-2 h-2 rounded-full ${on ? 'bg-emerald-400' : 'bg-zinc-600'}`} />;
+}
+
+/* ── Marketplace payout ledger entry status (/marketplace/earnings) ── */
+// Was an inline STATUS_BADGE map in the earnings page.
+
+const LEDGER_STATUS: Record<string, string> = {
+  pending: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  available: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  paid: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  reversed: 'bg-red-500/15 text-red-400 border-red-500/30',
+};
+
+export function LedgerStatusBadge({ status }: { status: string }) {
+  return <Badge className={LEDGER_STATUS[status]}>{status}</Badge>;
+}
+
+/* ── Marketplace listing version status (/marketplace/[slug]) ─── */
+// Was an inline VERSION_BADGE map in the listing detail page.
+
+const LISTING_VERSION_STATUS: Record<string, string> = {
+  published: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  yanked: 'bg-red-500/15 text-red-400 border-red-500/30',
+  in_review: 'bg-purple-500/15 text-purple-300 border-purple-500/30',
+  approved: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  draft: 'bg-zinc-600/20 text-[rgb(var(--text-secondary))] border-zinc-600/30',
+};
+
+export function ListingVersionStatusBadge({ status }: { status: string }) {
+  return <Badge className={LISTING_VERSION_STATUS[status]}>{status}</Badge>;
+}
+
+/* ── Marketplace listing pricing model (/marketplace) ──────────── */
+// Was an inline PRICING_BADGE map in the catalog browse page.
+
+const PRICING: Record<string, string> = {
+  free: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  one_time: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  subscription: 'bg-purple-500/15 text-purple-300 border-purple-500/30',
+  usage: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+};
+
+export function PricingBadge({ pricingModel, children }: { pricingModel: string; children: React.ReactNode }) {
+  return <Badge className={PRICING[pricingModel]}>{children}</Badge>;
+}
+
+/* ── API key state (/api-keys) ─────────────────────────────────── */
+// Was an inline keyState() color map in the api-keys client manager.
+
+const API_KEY_STATE: Record<string, string> = {
+  revoked: 'bg-red-500/15 text-red-400 border-red-500/30',
+  expiring: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  active: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+};
+
+export function ApiKeyStatusBadge({ state }: { state: 'revoked' | 'expiring' | 'active' }) {
+  return <Badge className={API_KEY_STATE[state]}>{state}</Badge>;
 }

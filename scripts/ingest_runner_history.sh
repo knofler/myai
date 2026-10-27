@@ -44,7 +44,7 @@ fi
 # no curl quoting hazards for RESULT lines that embed quotes/backticks).
 GW_URL="$GATEWAY_MCP" GW_TOKEN="$GATEWAY_LOCAL_TOKEN" LOG_ROOT="$LOG_ROOT" DRY_RUN="$DRY_RUN" \
 /usr/bin/python3 <<'PYEOF'
-import gzip, json, os, re, socket, sys, time, urllib.request
+import calendar, gzip, json, os, re, socket, sys, time, urllib.request
 
 log_root = os.environ["LOG_ROOT"]
 dry = os.environ.get("DRY_RUN") == "1"
@@ -115,7 +115,7 @@ for name in sorted(os.listdir(log_root)):
         continue
     date_s, time_s, repo, task_id, _gz = m.groups()
     try:
-        started_ms = int(time.mktime(time.strptime(date_s + time_s, "%Y%m%d%H%M%S")) * 1000)
+        started_ms = int(calendar.timegm(time.strptime(date_s + time_s, "%Y%m%d%H%M%S")) * 1000)  # log-name stamps are UTC
     except ValueError:
         skipped += 1
         continue

@@ -123,19 +123,22 @@ SYSTEM_PROMPT = (
 # Unknown model ids fall back to the most expensive known row (fail-safe: the
 # budget gate overestimates rather than under-counts).
 PRICES_PER_M = {
-    # DeepSeek — `deepseek-chat` / `deepseek-reasoner` were RETIRED 2026-07-24
-    # and alias to V4-Flash (non-thinking / thinking). V4-Flash list price on
-    # 2026-09-09: $0.14/M input (cache miss), $0.28/M output. SECONDARY-SOURCED:
-    # api-docs.deepseek.com reset every connection from this network on
-    # 2026-09-09, so these rows come from OpenRouter's models API plus three
-    # Sep-2026 price trackers that agree — re-verify against the vendor page
-    # when it is reachable.
-    "deepseek-chat": (0.14, 0.28),
-    "deepseek-reasoner": (0.14, 0.28),
-    "deepseek-v4-flash": (0.14, 0.28),
+    # DeepSeek — provisional, from secondary sources 2026-10-26; first-party
+    # api-docs.deepseek.com unreachable from the office Mac; verify and lower.
+    # `deepseek-chat` / `deepseek-reasoner` alias the current Flash model, and a
+    # V4.1-Flash family has shipped since the 2026-09-09 V4-Flash list price
+    # ($0.14/$0.28). OpenRouter resellers list V4.1-Flash at $0.02-0.15 in /
+    # $0.60-1.00 out; one tracker gives first-party $0.30/$1.20. Until the
+    # vendor page is read, all three rows carry that highest figure as a
+    # fail-safe overestimate, so AGENTIC_FALLBACK_DAILY_USD_CAP never
+    # under-counts.
+    "deepseek-chat": (0.30, 1.20),
+    "deepseek-reasoner": (0.30, 1.20),
+    "deepseek-v4-flash": (0.30, 1.20),
     # Moonshot/Kimi — VERIFIED 2026-09-09 on platform.kimi.ai/docs/pricing/chat-k26:
     # kimi-k2.6 $0.95/M input (cache miss; $0.16 cache hit), $4.00/M output —
-    # up from the 0.60/2.50 recorded 2026-07-25. kimi-k2 and moonshot-v1-8k are
+    # up from the 0.60/2.50 recorded 2026-07-25. Re-checked 2026-10-26: the
+    # Moonshot AI first-party endpoint on OpenRouter still lists $0.95/$4.00. kimi-k2 and moonshot-v1-8k are
     # no longer listed on the vendor pricing page; kept at their last published
     # rates for historical cost attribution only.
     "kimi-k2.6": (0.95, 4.00),
@@ -152,7 +155,7 @@ FALLBACK_PRICE = (0.60, 2.50)
 # warns once the table is older than PRICING_MAX_AGE_DAYS, so the
 # AGENTIC_FALLBACK_DAILY_USD_CAP enforcement doesn't silently run on stale
 # rates. Bump PRICING_LAST_CHECKED whenever PRICES_PER_M is verified/updated.
-PRICING_LAST_CHECKED = "2026-09-09"
+PRICING_LAST_CHECKED = "2026-10-26"
 PRICING_MAX_AGE_DAYS = int(os.environ.get("AGENTIC_PRICING_MAX_AGE_DAYS", "45"))
 
 

@@ -9,8 +9,32 @@ import { Card } from '@/components/ui/card';
 import { DeclaredToolsDiffView } from '@/components/marketplace-declared-tools-diff';
 import { MarketplaceReviewActions } from '@/components/marketplace-review-actions';
 import { getReviewQueueEntry } from '@/lib/marketplace-store';
+import type { DeclaredToolsDiff, ListingVersion, MarketplaceListing } from '@/lib/marketplace';
+import { plural } from '@/lib/summary';
 
 export const dynamic = 'force-dynamic';
+
+/** The one-line answer (DESIGN_LANGUAGE §5.1) for a single submission: what is
+ *  being asked for, and whether it widens what this package can do. One item,
+ *  so it states that item's standing rather than a count of the queue. */
+function submissionSummary(
+  listing: MarketplaceListing,
+  version: ListingVersion,
+  priorApproved: ListingVersion | undefined,
+  diff: DeclaredToolsDiff,
+): string {
+  const lineage = priorApproved
+    ? `a resubmission over ${priorApproved.version}`
+    : 'its first version for review';
+  const head = `${listing.title} wants to publish ${version.version} as ${lineage}.`;
+  const tools =
+    diff.added.length > 0
+      ? `It asks for ${plural(diff.added.length, 'tool')} it did not have before (${diff.added.join(', ')}), so check that against the changelog before approving.`
+      : priorApproved
+        ? 'It asks for no tools it did not already have.'
+        : 'Check the declared tools below against what the changelog says it does.';
+  return `${head} ${tools}`;
+}
 
 export default async function MarketplaceReviewDetailPage({
   params,
@@ -26,7 +50,9 @@ export default async function MarketplaceReviewDetailPage({
   return (
     <div className="max-w-4xl mx-auto">
       <PageHeader
+        icon="audit"
         title={`Review: ${listing.title} @ ${v.version}`}
+        summary={submissionSummary(listing, v, priorApproved, declaredToolsDiff)}
         subtitle={
           <Link href="/marketplace/review" className="hover:text-emerald-400">
             ← back to review queue
@@ -40,7 +66,7 @@ export default async function MarketplaceReviewDetailPage({
             <div>
               <span className="text-[rgb(var(--text-muted))]">Listing:</span>{' '}
               <span className="text-[rgb(var(--text-primary))]">{listing.title}</span>{' '}
-              <span className="text-zinc-600">({listing.slug}, {listing.kind})</span>
+              <span className="text-[rgb(var(--text-muted))]">({listing.slug}, {listing.kind})</span>
             </div>
             <div>
               <span className="text-[rgb(var(--text-muted))]">Manifest hash:</span>{' '}

@@ -14,6 +14,14 @@ const TABS = [
   { id: 'sessions', label: 'Sessions & RAG' },
 ];
 
+// The one-line answer (DESIGN_LANGUAGE §5.1). This page loads no data of its
+// own — both tabs are self-fetching views — so the sentence says what the tab
+// is FOR rather than inventing a count the page does not have in scope.
+const SUMMARIES: Record<string, string> = {
+  sona: 'Everything your AI has worked out for itself, and how much it trusts each pattern.',
+  sessions: 'Everything your AI remembers. Search the corpus it recalls from, and read back any session it has run.',
+};
+
 const SUBTITLES: Record<string, string> = {
   sona: 'Pattern analytics — confidence, usage, categories.',
   sessions: 'RAG vector corpus inspection, semantic search, and gateway sessions.',
@@ -26,7 +34,12 @@ export default async function MemoryPage({ searchParams }: { searchParams: Promi
   return (
     <div className="max-w-7xl mx-auto">
       <AutoRefresh seconds={15} />
-      <PageHeader title="Memory" subtitle={SUBTITLES[tab]} />
+      <PageHeader
+        icon="memory"
+        title="Memory"
+        summary={SUMMARIES[tab]}
+        subtitle={SUBTITLES[tab]}
+      />
       <TabBar base="/memory" tabs={TABS} active={tab} />
       <div className="mt-6">
         {tab === 'sona' && <SonaView />}

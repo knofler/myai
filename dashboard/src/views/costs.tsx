@@ -234,25 +234,29 @@ export default async function CostsPage() {
           label="Total spend (all time)"
           value={fmtUsd(allTimeSpend)}
           sub="Across all providers and models"
-          accent="green"
+          icon="revenue"
+          tone="muted"
         />
         <StatCard
           label="This month"
           value={fmtUsd(mtdSpend)}
           sub={`Since ${monthStart.toISOString().slice(0, 10)} UTC`}
-          accent="blue"
+          icon="billing"
+          tone="muted"
         />
         <StatCard
           label="Today"
           value={fmtUsd(todaySpend)}
           sub={`Since ${dayStart.toISOString().slice(0, 10)} UTC`}
-          accent={todaySpend > 0 ? 'yellow' : 'gray'}
+          icon="clock"
+          tone={todaySpend > 0 ? 'accent' : 'muted'}
         />
         <StatCard
           label="Avg daily (30d)"
           value={fmtUsd(avgDaily30d)}
           sub={`${fmtUsd(thirtyDaySpend)} over 30 days`}
-          accent="gray"
+          icon="analytics"
+          tone="muted"
         />
       </div>
 
@@ -498,7 +502,7 @@ export default async function CostsPage() {
                     style={{ height: `${Math.max(heightPct, m.cost > 0 ? 2 : 0)}%` }}
                   />
                 </div>
-                <span className={`text-[10px] font-mono ${isCurrent ? 'text-emerald-400' : 'text-[rgb(var(--text-muted))]'}`}>
+                <span className={`text-label font-mono ${isCurrent ? 'text-emerald-400' : 'text-[rgb(var(--text-muted))]'}`}>
                   {m._id.slice(5)}
                 </span>
               </div>

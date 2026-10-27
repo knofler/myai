@@ -5,6 +5,8 @@
 // access notice. The raw key is returned ONCE by create/rotate and shown in a
 // dismissable "copy it now" banner; the list only ever holds non-secret views.
 import { useCallback, useEffect, useState } from 'react';
+import { ApiKeyStatusBadge } from '@/components/ui/badge';
+import { DataTable, type DataRow } from '@/components/ui/data-table';
 
 interface ApiKeyView {
   keyId: string;
@@ -27,19 +29,10 @@ function fmt(iso?: string): string {
 
 // A rotated-out key keeps status 'active' but carries a future expiresAt — it is
 // authenticating only through its grace window, so surface it distinctly.
-function keyState(k: ApiKeyView): { label: string; cls: string } {
-  if (k.status === 'revoked') return { label: 'revoked', cls: 'text-red-400 bg-red-950/40' };
-  if (k.expiresAt && new Date(k.expiresAt).getTime() > Date.now()) {
-    return { label: 'expiring', cls: 'text-amber-400 bg-amber-950/40' };
-  }
-  return { label: 'active', cls: 'text-emerald-400 bg-emerald-950/40' };
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return <th className="text-left font-medium text-[rgb(var(--text-primary))] px-3 py-2 border-b border-[rgb(var(--border-subtle))] whitespace-nowrap">{children}</th>;
-}
-function Td({ children }: { children: React.ReactNode }) {
-  return <td className="px-3 py-2 border-b border-[rgb(var(--border-subtle))] text-[rgb(var(--text-secondary))] align-top">{children}</td>;
+function keyState(k: ApiKeyView): 'revoked' | 'expiring' | 'active' {
+  if (k.status === 'revoked') return 'revoked';
+  if (k.expiresAt && new Date(k.expiresAt).getTime() > Date.now()) return 'expiring';
+  return 'active';
 }
 
 export default function ApiKeysManager() {
@@ -159,7 +152,7 @@ export default function ApiKeysManager() {
   return (
     <div className="space-y-6">
       {error && (
-        <div className="rounded-lg border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">{error}</div>
+        <div role="alert" className="rounded-lg border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">{error}</div>
       )}
 
       {rawKey && (
@@ -218,54 +211,56 @@ export default function ApiKeysManager() {
       </div>
 
       {/* List */}
-      <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-subtle))]">
-        <table className="w-full text-sm">
-          <thead>
-            <tr>
-              <Th>Name</Th><Th>Prefix</Th><Th>Scopes</Th><Th>Status</Th><Th>Last used</Th><Th>Created</Th><Th>Actions</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><Td>Loading…</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td></tr>
-            ) : keys.length === 0 && !error ? (
-              <tr><Td>No API keys yet — create one above.</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td><Td>{''}</Td></tr>
-            ) : (
-              keys.map((k) => {
-                const st = keyState(k);
-                return (
-                  <tr key={k.keyId}>
-                    <Td>
-                      <span className="text-[rgb(var(--text-primary))]">{k.name}</span>
-                      <span className="ml-2 rounded bg-[rgb(var(--bg-hover))] px-1.5 py-0.5 text-[10px] uppercase text-[rgb(var(--text-secondary))]">{k.env}</span>
-                    </Td>
-                    <Td><code className="font-mono text-xs text-[rgb(var(--text-primary))]">{k.prefix}…</code></Td>
-                    <Td><span className="font-mono text-xs">{k.scopes.join(', ')}</span></Td>
-                    <Td>
-                      <span className={`rounded px-2 py-0.5 text-xs ${st.cls}`}>{st.label}</span>
-                      {st.label === 'expiring' && k.expiresAt && (
-                        <div className="mt-1 text-[11px] text-amber-500/80">until {fmt(k.expiresAt)}</div>
-                      )}
-                    </Td>
-                    <Td>{fmt(k.lastUsedAt)}</Td>
-                    <Td>{fmt(k.createdAt)}</Td>
-                    <Td>
-                      {k.status === 'active' ? (
-                        <div className="flex gap-2">
-                          <button onClick={() => void rotate(k)} disabled={busy} className="rounded border border-amber-700 px-2 py-1 text-xs text-amber-300 hover:bg-amber-950/40 disabled:opacity-50">Rotate</button>
-                          <button onClick={() => void revoke(k)} disabled={busy} className="rounded border border-red-800 px-2 py-1 text-xs text-red-300 hover:bg-red-950/40 disabled:opacity-50">Revoke</button>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-zinc-600">—</span>
-                      )}
-                    </Td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+      {loading ? (
+        <p className="text-sm text-[rgb(var(--text-muted))]">Loading…</p>
+      ) : (
+        <DataTable
+          title="API keys"
+          meta={`${keys.length} key${keys.length === 1 ? '' : 's'}`}
+          searchPlaceholder="Search keys…"
+          emptyText="No API keys yet — create one above."
+          columns={[
+            { label: 'Name', mobile: 'title' },
+            { label: 'Prefix', mobile: 'detail' },
+            { label: 'Scopes', mobile: 'detail' },
+            { label: 'Status', mobile: 'badge' },
+            { label: 'Last used', mobile: 'detail' },
+            { label: 'Created', mobile: 'detail' },
+            { label: 'Actions', mobile: 'detail' },
+          ]}
+          rows={keys.map((k): DataRow => {
+            const st = keyState(k);
+            return {
+              id: k.keyId,
+              search: `${k.name} ${k.env} ${k.prefix} ${st}`.toLowerCase(),
+              cells: [
+                <>
+                  <span className="text-[rgb(var(--text-primary))]">{k.name}</span>
+                  <span className="ml-2 rounded bg-[rgb(var(--bg-hover))] px-1.5 py-0.5 text-label uppercase text-[rgb(var(--text-secondary))]">{k.env}</span>
+                </>,
+                <code className="font-mono text-xs text-[rgb(var(--text-primary))]">{k.prefix}…</code>,
+                <span className="font-mono text-xs">{k.scopes.join(', ')}</span>,
+                <>
+                  <ApiKeyStatusBadge state={st} />
+                  {st === 'expiring' && k.expiresAt && (
+                    <div className="mt-1 text-label text-amber-500/80">until {fmt(k.expiresAt)}</div>
+                  )}
+                </>,
+                fmt(k.lastUsedAt),
+                fmt(k.createdAt),
+                k.status === 'active' ? (
+                  <div className="flex gap-2">
+                    <button onClick={() => void rotate(k)} disabled={busy} className="rounded border border-amber-700 px-2 py-1 text-xs text-amber-300 hover:bg-amber-950/40 disabled:opacity-50">Rotate</button>
+                    <button onClick={() => void revoke(k)} disabled={busy} className="rounded border border-red-800 px-2 py-1 text-xs text-red-300 hover:bg-red-950/40 disabled:opacity-50">Revoke</button>
+                  </div>
+                ) : (
+                  <span className="text-xs text-zinc-600">—</span>
+                ),
+              ],
+            };
+          })}
+        />
+      )}
     </div>
   );
 }

@@ -3,8 +3,10 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { RecommendationBadge } from '@/components/ui/badge';
-import type { BudgetCapSuggestions, CapOverrideField, CapSuggestion } from '@/lib/budget-suggestions';
-import { buildApplyPayload, canApplySuggestion, summarizeSuggestion } from '@/lib/budget-suggestions';
+import type { BudgetCapSuggestions } from '@/lib/budget-suggestions';
+// Values only from the client-safe module — budget-suggestions.ts imports the
+// Mongoose model layer, which crashes in the browser.
+import { buildApplyPayload, canApplySuggestion, summarizeSuggestion, type CapOverrideField, type CapSuggestion } from '@/lib/budget-suggestions-shared';
 
 function fmtUsd(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -60,7 +62,7 @@ function ApplyCell({ field, s }: { field: CapOverrideField; s: CapSuggestion }) 
       >
         {applying ? 'Applying…' : 'Apply suggestion'}
       </button>
-      {error && <span className="text-xs text-rose-400 max-w-[160px] text-right">{error}</span>}
+      {error && <span role="alert" className="text-xs text-rose-400 max-w-[160px] text-right">{error}</span>}
     </div>
   );
 }

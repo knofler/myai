@@ -6,6 +6,7 @@
 // so the whole pack is one click apart.
 import Link from 'next/link';
 import { CookieSettingsButton } from '@/components/cookie-consent';
+import { IconTile, type IconName } from '@/components/ui/icon';
 
 const TRUST_LINKS: { href: string; label: string }[] = [
   { href: '/privacy', label: 'Privacy' },
@@ -20,11 +21,21 @@ export function LegalShell({
   title,
   updated,
   intro,
+  icon,
   children,
 }: {
   title: string;
   updated: string;
   intro?: React.ReactNode;
+  /**
+   * Optional big glyph beside the title (DESIGN_LANGUAGE §5a). /security is a
+   * product claim as much as a legal one, so it takes the icon; the legal pack
+   * proper (terms, privacy, DPA, subprocessors, acceptable use) passes nothing
+   * and renders exactly as before. Deliberately NOT a PageHeader: this shell
+   * already emits the page's one <h1>, and a second one on a public,
+   * SEO-indexed page would duplicate the title.
+   */
+  icon?: IconName;
   children: React.ReactNode;
 }) {
   return (
@@ -50,8 +61,13 @@ export function LegalShell({
 
       {/* Body */}
       <main className="max-w-3xl mx-auto px-5 md:px-8 py-10 md:py-14">
-        <h1 className="text-2xl md:text-3xl font-bold tracking-tight">{title}</h1>
-        <p className="mt-2 text-xs text-[rgb(var(--text-muted))]">Last updated: {updated}</p>
+        <div className="flex items-start gap-3">
+          {icon && <IconTile name={icon} className="mt-0.5" />}
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight">{title}</h1>
+            <p className="mt-2 text-xs text-[rgb(var(--text-muted))]">Last updated: {updated}</p>
+          </div>
+        </div>
         {intro && <div className="mt-5 text-sm text-[rgb(var(--text-secondary))] leading-relaxed">{intro}</div>}
         <div className="mt-8 space-y-8">{children}</div>
       </main>

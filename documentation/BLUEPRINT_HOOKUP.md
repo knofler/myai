@@ -81,9 +81,9 @@ fire **only on `main`** (`deploymentEnabled: { main: true, test: false }`), so
 pushes to `test`/`codeclot` do **not** burn preview builds. Production ships when
 a PR merges to `main`.
 
-> Powerhouse Enterprise team has SSO/Deployment Protection on by default, which
+> An Enterprise Vercel team usually has SSO/Deployment Protection on by default, which
 > makes preview URLs unviewable. For test/sandbox apps deploy to the **personal**
-> scope (`knoflers-projects`); `init_blueprint.sh --vercel` already defaults there.
+> scope (`<personal-vercel-scope>`); `init_blueprint.sh --vercel` already defaults there.
 
 ---
 
@@ -102,7 +102,7 @@ a PR merges to `main`.
 > **Cost pool:** interactive `claude` CLI work draws on the **subscription**.
 > Programmatic/scheduled agents (`claude -p`, standing agents, the
 > `claude-review.yml` workflow) should draw on the **Agent SDK credit pool** —
-> see `plan/POWERHOUSE_BLUEPRINT.md` §4.
+> see the blueprint plan (§4).
 
 ---
 

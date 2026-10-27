@@ -1,0 +1,10 @@
+# hosted_runner_orgs.txt — GitHub orgs whose repos may keep GitHub-HOSTED
+# runners (CRITICAL RULE 9 / AI_RULES §21): their hosted minutes are paid for.
+# Every other repo runs CI on the local self-hosted runner.
+# Copy to config/hosted_runner_orgs.txt (a repo checkout) or, for an npm
+# install, to ~/.myai/hosted_runner_orgs.txt (survives upgrades), and list one
+# org per line (case-insensitive; blank lines and # comments are ignored).
+# Empty = none. Read by scripts/lib/selfhosted_runner.sh: $SELFHOSTED_EXEMPT_ORG
+# overrides, then the install-root config/ file, then the ~/.myai one.
+#
+# my-company-org

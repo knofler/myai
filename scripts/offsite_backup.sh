@@ -99,12 +99,21 @@ if [ "$MODE" = "fetch" ]; then
     exit 1
   fi
   mkdir -p "$(dirname "$OUT")"
+  # openssl's exit code alone does not prove the key was right. A wrong key is
+  # not detected because AES-CBC has no integrity check: it "decrypts" with exit 0 whenever the
+  # garbage happens to end in valid PKCS#7 padding (~1 in 256 — measured 8/2000;
+  # the CI flake of 2026-10-27). Decrypt into the stage, accept it only when it
+  # is a real myai-backup archive (gzip tar carrying manifest.json), and only
+  # then move it to --out — a failed fetch never leaves a file behind.
   if ! openssl enc -d -aes-256-cbc -md sha256 -pbkdf2 -iter 200000 \
-      -in "$STAGE/fetched.enc" -out "$OUT" -pass env:OFFSITE_PP 2>/dev/null; then
-    rm -f "$OUT"
+      -in "$STAGE/fetched.enc" -out "$STAGE/fetched.tar.gz" -pass env:OFFSITE_PP 2>/dev/null \
+     || ! tar -tzf "$STAGE/fetched.tar.gz" >"$STAGE/fetched.list" 2>/dev/null \
+     || ! grep -qE '^(\./)?manifest\.json$' "$STAGE/fetched.list"; then
+    rm -f "$STAGE/fetched.tar.gz"
     echo "✗ decryption failed for $KEY — wrong passphrase or corrupt object" >&2
     exit 1
   fi
+  mv -f "$STAGE/fetched.tar.gz" "$OUT"
   if [ "$QUIET" = "1" ]; then
     printf '%s\n' "$OUT"
   else

@@ -112,7 +112,7 @@ export function CoachMarks({ steps }: { steps: OnboardingStep[] }) {
           <button
             type="button"
             onClick={dismiss}
-            className="text-[11px] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
+            className="text-label text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
             data-testid="coach-mark-dismiss"
           >
             Got it, dismiss tour

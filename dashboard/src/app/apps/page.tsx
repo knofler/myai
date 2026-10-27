@@ -58,7 +58,7 @@ function LinkRow({ label, url }: { label: string; url?: string }) {
       // 44px target with a press response, not a hairline text link (registry pass).
       className="tap-press flex items-center gap-2 text-xs -mx-1 px-1 py-2 sm:py-0.5 min-h-[44px] sm:min-h-0 rounded-md active:bg-[rgb(var(--bg-hover))]/60"
     >
-      <span className="w-16 shrink-0 text-zinc-600 uppercase tracking-wider text-[10px]">{label}</span>
+      <span className="w-16 shrink-0 text-zinc-600 uppercase tracking-wider text-label">{label}</span>
       <span className="text-emerald-400/90 hover:text-emerald-300 truncate font-mono">{url}</span>
     </a>
   );
@@ -68,7 +68,7 @@ function InfoRow({ label, value }: { label: string; value?: string }) {
   if (!value) return null;
   return (
     <div className="flex items-center gap-2 text-xs">
-      <span className="w-16 shrink-0 text-zinc-600 uppercase tracking-wider text-[10px]">{label}</span>
+      <span className="w-16 shrink-0 text-zinc-600 uppercase tracking-wider text-label">{label}</span>
       <span className="text-[rgb(var(--text-primary))] truncate font-mono">{value}</span>
     </div>
   );
@@ -78,7 +78,7 @@ function AheadBadge({ count }: { count?: number }) {
   if (!count || count < 1) return null;
   return (
     <span
-      className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/20"
+      className="shrink-0 text-label font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/20"
       title={`test is ${count} commit${count === 1 ? '' : 's'} ahead of main — pending 'ship it'`}
     >
       {count} ahead
@@ -88,7 +88,7 @@ function AheadBadge({ count }: { count?: number }) {
 
 function FrameworkDot({ ok, label }: { ok?: boolean; label: string }) {
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] text-[rgb(var(--text-muted))]" title={`${label}: ${ok === undefined ? 'unknown' : ok ? 'present' : 'missing'}`}>
+    <span className="inline-flex items-center gap-1 text-label text-[rgb(var(--text-muted))]" title={`${label}: ${ok === undefined ? 'unknown' : ok ? 'present' : 'missing'}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${ok === undefined ? 'bg-zinc-700' : ok ? 'bg-emerald-400' : 'bg-red-400'}`} />
       {label}
     </span>
@@ -116,16 +116,16 @@ async function DirectoryTab({ tenantId }: { tenantId: string }) {
   return (
     <div className="space-y-6">
       {dbError && (
-        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
+        <div role="alert" className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
           {dbUnreachableHint('the directory')}
         </div>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Tracked apps" value={cards.length} />
-        <StatCard label="Reporting status" value={reported} accent={reported > 0 ? 'green' : 'gray'} />
-        <StatCard label="Awaiting first report" value={cards.length - reported} />
-        <StatCard label="Pending ship it" value={pendingShip} accent={pendingShip > 0 ? 'yellow' : 'gray'} />
+        <StatCard label="Tracked apps" value={cards.length} icon="apps" tone="muted" />
+        <StatCard label="Reporting status" value={reported} icon="status" tone={reported > 0 ? 'ok' : 'muted'} />
+        <StatCard label="Awaiting first report" value={cards.length - reported} icon="clock" tone={cards.length - reported > 0 ? 'warn' : 'muted'} />
+        <StatCard label="Pending ship it" value={pendingShip} icon="alert" tone={pendingShip > 0 ? 'warn' : 'muted'} />
       </div>
 
       {cards.length === 0 && !dbError && (
@@ -171,10 +171,10 @@ async function DirectoryTab({ tenantId }: { tenantId: string }) {
                   </div>
 
                   <div className="border-t border-[rgb(var(--border-subtle))]/70 pt-2">
-                    <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">Last status</p>
+                    <p className="text-label text-zinc-600 uppercase tracking-wider mb-0.5">Last status</p>
                     <p className="text-xs text-[rgb(var(--text-primary))] line-clamp-3">{c.lastStatus || '—'}</p>
                     <div className="flex items-center justify-between mt-1.5">
-                      <p className="text-[10px] text-zinc-600">
+                      <p className="text-label text-zinc-600">
                         {fmtSydney(c.updatedAt)}{stale !== null && stale > 7 ? ` · ${stale}d ago ⚠` : ''}
                         {c.reportedBy ? ` · ${c.reportedBy}` : ''}
                       </p>
@@ -194,6 +194,14 @@ async function DirectoryTab({ tenantId }: { tenantId: string }) {
   );
 }
 
+/** The one-line answer (DESIGN_LANGUAGE §5.1). This shell loads no counts of
+ *  its own — the card query lives in DirectoryTab and the health tab fetches
+ *  client-side — so the sentence says what the page is FOR rather than
+ *  inventing a number the header cannot see. The tiles below carry the counts. */
+function appsSummary(): string {
+  return 'Every app your AI looks after lives here, with the links you open it by and whether its wiring is still healthy.';
+}
+
 export default async function AppsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const { tab: requested } = await searchParams;
   try { await connectDB(); } catch { /* directory tab reports the error */ }
@@ -210,7 +218,9 @@ export default async function AppsPage({ searchParams }: { searchParams: Promise
     <div className="max-w-7xl mx-auto">
       <AutoRefresh seconds={15} />
       <PageHeader
+        icon="apps"
         title="Apps"
+        summary={appsSummary()}
         subtitle="One-point pointer for every tracked app — URLs, datastore, framework wiring, and last-update status."
       >
         <a

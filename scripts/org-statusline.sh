@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 # org-statusline.sh — Claude Code statusline showing the ACTIVE org profile in colour.
 #
-# Multi-Org-Auth: each org runs in its own CLAUDE_CONFIG_DIR (~/.claude,
-# ~/.claude-museum, ~/.claude-tech, ~/.claude-personal). Claude Code does NOT
+# Multi-Org-Auth: each org runs in its own CLAUDE_CONFIG_DIR (~/.claude, or
+# ~/.claude-<name> per named profile). Claude Code does NOT
 # pass the config dir / account to the statusline, but it DOES pass
 # `transcript_path`, which always lives UNDER the active config dir — so we
 # resolve the profile from that (env-independent, reliable).
 #
-# Output (single line, coloured): "● claude-museum› Powerhouse Museum · Opus · 8%"
-#   museum   -> bold magenta   tech -> bold cyan
-#   personal -> bold green     bare default -> bold yellow
+# Output (single line, coloured): "📁 my-repo  ● claude-work› My Org · Opus · 8%"
+#   The FOLDER/REPO comes FIRST (operator, 2026-09-18): with several shells open
+#   the pane is narrow and the statusline is clipped from the RIGHT, so the last
+#   segment is the one that vanishes — and the repo name was the last segment.
+#   Leftmost = always visible, whatever the pane width.
+#   Colour is by ROLE, never by name (v1 G6 P4): the swarm master's profile
+#   (~/.myai/swarm/master.<host> lane=) -> bold orange; bare default -> bold
+#   yellow; every other profile takes cyan, gold, violet, green … in the
+#   master config's order= (then by name), so the colours stay stable.
 #
 # Registered as `statusLine` in each profile's settings.json by setup_org_dirs.sh.
 # (Named .sh for repo convention; interpreter is python3 via the shebang.)
@@ -94,6 +100,82 @@ def _bar(p, width=10):
     filled = max(0, min(width, int(round(p / 100 * width))))
     return "█" * filled + "░" * (width - filled)
 
+def persist_rate_limits(data, key):
+    """Multi-Mac phase 2: Claude Code's statusLine payload carries the REAL quota
+    (rate_limits.five_hour / seven_day: used_percentage + resets_at). Save it per
+    account so scripts/usage_push.sh can ship it to the shared ledger — the
+    ground truth the runner/balancer otherwise could only estimate. Atomic,
+    silent, never raises (a statusline must never break)."""
+    rl = data.get("rate_limits")
+    if not isinstance(rl, dict) or key == "default" or not _NAME.match(key):
+        return
+    try:
+        import time, socket
+        # MYAI_HOME is the STATE dir; a framework checkout there (old portable
+        # meaning) wrote usage-live/ into the AI repo root (2026-10-18).
+        h = os.environ.get("MYAI_HOME") or ""
+        if h and os.path.isfile(os.path.join(h, "scripts", "lib", "brain.sh")) \
+                and os.path.isdir(os.path.join(h, "runtime")):
+            h = ""
+        d = os.path.join(h or os.path.expanduser("~/.myai"), "usage-live")
+        os.makedirs(d, exist_ok=True)
+        rec = {"account": key, "host": socket.gethostname().split(".")[0].lower(),
+               "at": int(time.time()), "five_hour": rl.get("five_hour"), "seven_day": rl.get("seven_day")}
+        tmp = os.path.join(d, ".%s.%d.tmp" % (key, os.getpid()))
+        with open(tmp, "w") as fh:
+            json.dump(rec, fh)
+        os.replace(tmp, os.path.join(d, key + ".json"))
+    except Exception:
+        pass
+
+
+import re
+_NAME = re.compile(r"^[a-z0-9_-]+$")
+_PROFILE_IN_PATH = re.compile(r"/\.claude-([a-z0-9_-]+)/")
+# 256-colour codes (not basic ANSI) so the dark-daltonized palette can't remap
+# two profiles into looking alike. Orange↔cyan is colour-blind-safe.
+MASTER_COLOR, DEFAULT_COLOR = "1;38;5;208", "1;38;5;220"   # bold orange / yellow
+WORKER_COLORS = ("1;38;5;45", "1;38;5;214", "1;38;5;141", "1;38;5;118")  # cyan, gold-orange, violet, green
+
+
+def _master_config():
+    """(master lane, order list) from ~/.myai/swarm/master.<host>, or ("", [])."""
+    import socket
+    d = os.environ.get("SWARM_DIR") or os.path.expanduser("~/.myai/swarm")
+    host = socket.gethostname().split(".")[0].lower()
+    lane, order = "", []
+    try:
+        with open(os.path.join(d, "master." + host)) as fh:
+            for line in fh:
+                k, _, v = line.strip().partition("=")
+                if k == "lane":
+                    lane = v
+                elif k == "order":
+                    order = v.split()
+    except Exception:
+        pass
+    return lane, order
+
+
+def profile_color(key, home):
+    """The statusline colour for profile <key>, by role."""
+    if key == "default":
+        return DEFAULT_COLOR
+    master, order = _master_config()
+    if key == master:
+        return MASTER_COLOR
+    try:
+        named = sorted(n[len(".claude-"):] for n in os.listdir(home)
+                       if n.startswith(".claude-") and os.path.isdir(os.path.join(home, n)))
+    except Exception:
+        named = []
+    ranked = [n for n in order if n != master and n != "default"]
+    ranked += [n for n in named if n not in ranked and n != master]
+    if key not in ranked:
+        ranked.append(key)
+    return WORKER_COLORS[ranked.index(key) % len(WORKER_COLORS)]
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -105,28 +187,23 @@ def main():
 
     # Resolve the active profile from the transcript path (preferred), then
     # fall back to CLAUDE_CONFIG_DIR, then the bare default.
-    if "/.claude-museum/" in tp:
-        key = "museum"
-    elif "/.claude-tech/" in tp:
-        key = "tech"
-    elif "/.claude-personal/" in tp:
-        key = "personal"
+    m = _PROFILE_IN_PATH.search(tp)
+    if m:
+        key = m.group(1)
     elif "/.claude/" in tp:
         key = "default"
     else:
         base = os.path.basename(os.environ.get("CLAUDE_CONFIG_DIR", "").rstrip("/"))
-        key = {".claude-museum": "museum", ".claude-tech": "tech",
-               ".claude-personal": "personal"}.get(base, "default")
+        key = base[len(".claude-"):] if base.startswith(".claude-") else "default"
+        if not _NAME.match(key):
+            key = "default"
 
-    # 256-colour codes (not basic ANSI) so the dark-daltonized palette can't
-    # remap museum/tech into looking alike. Orange↔cyan is colour-blind-safe.
-    profiles = {
-        "museum":   (home + "/.claude-museum",   "claude-museum",   "1;38;5;208"),  # bold orange
-        "tech":     (home + "/.claude-tech",     "claude-tech",     "1;38;5;45"),   # bold cyan
-        "personal": (home + "/.claude-personal", "claude-personal", "1;38;5;214"),   # bold gold-orange
-        "default":  (home + "/.claude",          "claude",          "1;38;5;220"),  # bold yellow
-    }
-    cfgdir, label, color = profiles[key]
+    persist_rate_limits(data, key)
+    if key == "default":
+        cfgdir, label = home + "/.claude", "claude"
+    else:
+        cfgdir, label = home + "/.claude-" + key, "claude-" + key
+    color = profile_color(key, home)
 
     # Pull the real org/account name from the profile's own .claude.json.
     org = ""
@@ -163,7 +240,10 @@ def main():
     MODEL = "\033[1;38;5;255m"    # model — bold bright-white so it reads clearly
     c = "\033[" + color + "m"
 
-    out = c + "● " + label + "›" + RESET
+    out = ""
+    if repo:                      # repo/folder FIRST — leftmost never gets clipped
+        out += BLUE + BOLD + "📁 " + repo + RESET + "  "
+    out += c + "● " + label + "›" + RESET
     if org:                       # org/account — dim, secondary
         out += " " + DIM + org + RESET
     if model:                     # model — the bit you actually scan for: BOLD/bright
@@ -194,8 +274,6 @@ def main():
             out += " " + DIM + "· 🧠 myAI off" + RESET
     except Exception:
         out += " " + DIM + "· 🧠 myAI off" + RESET
-    if repo:
-        out += "  " + BLUE + BOLD + "📁 " + repo + RESET
 
     sys.stdout.write(out)
 

@@ -3,7 +3,7 @@
  * ground-truth self-check (task-0824a68e / task-05526048).
  *
  * scripts/lib/pool_capacity_drift.py + scripts/pool_capacity_drift_check.sh
- * re-derive claude-tech's daily/weekly spent-token figures directly from the
+ * re-derive the paced pool's daily/weekly spent-token figures directly from the
  * Claude Code transcripts and compare them against
  * state/pool-capacity.json's INCREMENTAL-ledger numbers (the same figures
  * pool-capacity-alerter.ts above alerts on for budget exhaustion). Until
@@ -172,7 +172,7 @@ function formatBreachMessage(b: PoolCapacityDriftBreach): string {
   const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
   const icon = b.severity === 'critical' ? '\u{1F6A8}' : '\u{26A0}\u{FE0F}';
   const lines = [
-    `${icon} Pool Capacity Drift — claude-tech ledger disagrees with transcripts`,
+    `${icon} Pool Capacity Drift — pool ledger disagrees with transcripts`,
     ...b.windows.map(
       w =>
         `${w.label}: recorded=${w.recorded.toLocaleString('en-US')} actual=${w.actual.toLocaleString(

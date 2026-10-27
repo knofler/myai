@@ -25,10 +25,34 @@ import {
 import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { DataTable, type DataRow } from '@/components/ui/data-table';
 import { PageHeader } from '@/components/page-header';
+import { plural, rate } from '@/lib/summary';
 import AutoRefresh from '@/components/auto-refresh';
 import { dbUnreachableHint } from '@/lib/db-hint';
 
 export const dynamic = 'force-dynamic';
+
+/* ── The one-line answer (§5.1) ─────────────────────── */
+
+function velocitySummary(
+  totalShipped: number,
+  repoCount: number,
+  thisWeek: number,
+  prevWeek: number,
+  direction: VelocityTrend['direction'],
+): string {
+  if (totalShipped === 0) {
+    return `Nothing has shipped in the last ${DEFAULT_VELOCITY_WEEKS} weeks. Velocity appears here once your queue starts completing work.`;
+  }
+  const perWeek = rate(totalShipped / DEFAULT_VELOCITY_WEEKS);
+  const head = `Your fleet shipped ${plural(totalShipped, 'task')} in the last ${DEFAULT_VELOCITY_WEEKS} weeks, about ${perWeek} a week across ${plural(repoCount, 'repo')}.`;
+  const compare =
+    thisWeek > prevWeek ? `up from ${prevWeek} last week`
+      : thisWeek < prevWeek ? `down from ${prevWeek} last week`
+      : 'the same as last week';
+  const pace = direction === 'up' ? 'speeding up' : direction === 'down' ? 'slowing down' : 'holding steady';
+  const week = thisWeek === 0 ? 'Nothing has shipped this week' : `${plural(thisWeek, 'task')} shipped this week`;
+  return `${head} ${week}, ${compare}, and throughput is ${pace}.`;
+}
 
 function trendLabel(trend: VelocityTrend): string {
   const arrow = trend.direction === 'up' ? '▲' : trend.direction === 'down' ? '▼' : '→';
@@ -77,7 +101,12 @@ export default async function VelocityPage() {
   if (dbError) {
     return (
       <div className="max-w-7xl mx-auto">
-        <PageHeader title="Velocity" subtitle="Tasks shipped/week · cycle time · throughput trend, per repo." />
+        <PageHeader
+          icon="velocity"
+          title="Velocity"
+          summary="Velocity cannot be read right now because the database is unreachable."
+          subtitle="Tasks shipped a week, cycle time and throughput trend, per repo."
+        />
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
           {dbUnreachableHint('delivery-velocity metrics')}
         </div>
@@ -105,30 +134,35 @@ export default async function VelocityPage() {
     <div className="max-w-7xl mx-auto">
       <AutoRefresh seconds={60} />
       <PageHeader
+        icon="velocity"
         title="Velocity"
-        subtitle={`Tasks shipped/week · median queued→done cycle time · throughput trend — per repo, last ${DEFAULT_VELOCITY_WEEKS} weeks (UTC weeks from ${weekStarts[0]}).`}
+        summary={velocitySummary(fleet.totalShipped, repos.length, thisWeek, prevWeek, fleet.trend.direction)}
+        subtitle={`Last ${DEFAULT_VELOCITY_WEEKS} weeks · UTC weeks from ${weekStarts[0]} · cycle time is queued to done`}
       />
 
       {/* Headline stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard
-          label={`Shipped (${DEFAULT_VELOCITY_WEEKS}w)`}
+          label={`Shipped (${DEFAULT_VELOCITY_WEEKS} weeks)`}
           value={fleet.totalShipped}
           sub={`~${perWeekAvg.toFixed(1)}/week · ${repos.length} repo${repos.length === 1 ? '' : 's'}`}
-          accent="green"
+          icon="check"
+          tone={fleet.totalShipped > 0 ? 'ok' : 'muted'}
         />
-        <StatCard label="This week" value={thisWeek} sub={`prev week ${prevWeek}`} accent="blue" />
+        <StatCard label="This week" value={thisWeek} sub={`prev week ${prevWeek}`} icon="velocity" tone={thisWeek > 0 ? 'ok' : 'muted'} />
         <StatCard
           label="Median cycle time"
           value={fmtCycleMs(fleet.medianCycleMs)}
           sub={`p90 ${fmtCycleMs(fleet.p90CycleMs)} · queued→done`}
-          accent="purple"
+          icon="clock"
+          tone="muted"
         />
         <StatCard
           label="Throughput trend"
           value={trendLabel(fleet.trend)}
           sub={`last ${Math.floor(DEFAULT_VELOCITY_WEEKS / 2)}w (${fleet.trend.recent}) vs prior (${fleet.trend.prior})`}
-          accent={fleet.trend.direction === 'up' ? 'green' : fleet.trend.direction === 'down' ? 'red' : 'gray'}
+          icon="analytics"
+          tone={fleet.totalShipped === 0 ? 'muted' : fleet.trend.direction === 'up' ? 'ok' : fleet.trend.direction === 'down' ? 'warn' : 'muted'}
         />
       </div>
 
@@ -143,12 +177,12 @@ export default async function VelocityPage() {
                 const max = Math.max(1, ...fleet.shippedByWeek);
                 return (
                   <div key={weekStarts[i]} className="flex-1 flex flex-col items-center gap-1">
-                    <span className="text-[10px] font-mono text-[rgb(var(--text-secondary))]">{count > 0 ? count : ''}</span>
+                    <span className="text-label font-mono text-[rgb(var(--text-secondary))]">{count > 0 ? count : ''}</span>
                     <div
                       className={`w-full rounded-t ${count > 0 ? 'bg-gradient-to-t from-teal-600/70 to-emerald-400/70' : 'bg-[rgb(var(--bg-hover))]'}`}
                       style={{ height: `${Math.max(4, (count / max) * 100)}%` }}
                     />
-                    <span className="text-[10px] text-[rgb(var(--text-muted))] font-mono">{weekLabel(weekStarts[i])}</span>
+                    <span className="text-label text-[rgb(var(--text-muted))] font-mono">{weekLabel(weekStarts[i])}</span>
                   </div>
                 );
               })}

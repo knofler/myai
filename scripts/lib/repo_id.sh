@@ -2,8 +2,8 @@
 # repo_id.sh — the ONE place that resolves a repo's canonical task-queue id
 # (task-89077bf0-f4a1-490c-ac69-1be63c050a2f).
 #
-# THE PROBLEM: the master framework repo's checkout folder is literally named
-# "AI" (under _MY_PROJECT/AI), but every other subsystem that talks about this
+# THE PROBLEM: the master framework repo's checkout folder is often literally
+# named "AI", but every other subsystem that talks about this
 # repo calls it "ai_management" — the task store's `repo` field, the brain
 # namespace (slugified further to "ai-management" by _brain_slugify/
 # runtime's slugify()), the dashboard, etc. Before this file existed, each
@@ -12,7 +12,7 @@
 # that folder→id mapping:
 #   • scripts/schedule_task.sh had NONE — it defaulted --repo to the raw git
 #     basename, so run from the master checkout it queued/queried "AI".
-#   • hooks/session/17-schedule-status.sh special-cased `_MY_PROJECT/AI` →
+#   • hooks/session/17-schedule-status.sh special-cased the master checkout →
 #     "ai_management" for its SCHEDULE banner query.
 #   • scripts/reconcile_review_tasks.sh, scripts/cli_task_runner.sh and
 #     scripts/triage_blocked_tasks.sh each carried their own
@@ -39,10 +39,20 @@ repo_id_from_path() {
   local path="$1" name parent
   name="$(basename "$path")"
   parent="$(basename "$(dirname "$path")")"
-  case "$parent/$name" in
-    # The master repo's checkout folder — canonicalize to the one id every
-    # other subsystem (task queue, brain namespace, dashboard) recognizes.
-    _MY_PROJECT/AI) echo "ai_management"; return ;;
+  # The framework's own checkout, whatever its folder is called (it is
+  # recognised by its package name) — canonicalize to the one id every other
+  # subsystem (task queue, brain namespace, dashboard) recognizes.
+  if [ -f "$path/package.json" ] && grep -qE '"name"[[:space:]]*:[[:space:]]*"ai-management"' "$path/package.json" 2>/dev/null; then
+    echo "ai_management"; return
+  fi
+  # A lane worktree (scripts/lane_worktree.sh: ~/.myai/worktrees/<repo>/<task>)
+  # belongs to <repo>, not to a repo named after the task — otherwise a worker
+  # building in its lane lost its repo's mail and swarm eligibility.
+  case "$path" in
+    */.myai/worktrees/*/*)
+      if [ "$(basename "$(dirname "$(dirname "$path")")")" = worktrees ]; then
+        canonical_repo_id "$parent"; return
+      fi ;;
   esac
   # A bare "AI" folder under any other parent (a worktree, a fresh clone
   # elsewhere) is still assumed to be this same master checkout — it is the

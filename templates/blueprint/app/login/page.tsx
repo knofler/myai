@@ -1,7 +1,7 @@
 "use client";
 
 // /login — single-operator sign-in for the control plane (see
-// app/lib/operator-auth.ts + middleware.ts). Posts to /api/auth/operator and
+// app/lib/operator-auth.ts + proxy.ts). Posts to /api/auth/operator and
 // follows ?next= back to the page the operator was denied. This is
 // deliberately minimal — one credential, one form, no self-service signup.
 

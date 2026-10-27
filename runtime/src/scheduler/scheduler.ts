@@ -1,10 +1,11 @@
 import cronParser from 'cron-parser';
-import { findDueSchedules, recordRunResult } from './schedule-store.js';
+import { findDueSchedules, recordRunResult, updateSchedule } from './schedule-store.js';
+import { scheduleRunContext, scheduleTargetAllowed, scheduleTenantInactive, scheduleToolName } from './schedule-auth.js';
 
 const { parseExpression } = cronParser;
 import { executeTool } from '../mcp/tools.js';
 import { createChildLogger } from '../shared/logger.js';
-import { SYSTEM_CONTEXT, type ToolContext } from '../core/tenant-context.js';
+import type { ToolContext } from '../core/tenant-context.js';
 
 const log = createChildLogger({ module: 'scheduler' });
 
@@ -60,8 +61,10 @@ export async function tick(now: Date = new Date()): Promise<TickResult> {
     for (const s of due) {
       // Each schedule fires under ITS OWN tenant context — the per-minute sweep
       // spans tenants (findDueSchedules), but dispatch + bookkeeping must stay
-      // scoped to the owning tenant, never cross-tenant.
-      const sctx: ToolContext = { ...SYSTEM_CONTEXT, tenantId: s.tenantId };
+      // scoped to the owning tenant, never cross-tenant. Only the operator's
+      // (default tenant) schedules run as `system`; any other tenant's run as
+      // that tenant (G5 N-1), so operator-only tools stay out of reach.
+      const sctx: ToolContext = await scheduleRunContext(s.tenantId);
       const ranAt = now;
       let nextRun: Date;
       try {
@@ -75,6 +78,41 @@ export async function tick(now: Date = new Date()): Promise<TickResult> {
           nextRun: new Date(now.getTime() + 60 * 60 * 1000), // park 1h to avoid hot loop
           ranAt,
         });
+        result.failed++;
+        continue;
+      }
+
+      const inactive = await scheduleTenantInactive(s.tenantId);
+      if (inactive) {
+        log.warn({ scheduleId: s.scheduleId, tenantId: s.tenantId, status: inactive }, 'schedule skipped — tenant is not active');
+        await recordRunResult(s.tenantId, {
+          scheduleId: s.scheduleId,
+          status: 'error',
+          error: `Skipped: tenant is ${inactive}`,
+          nextRun,
+          ranAt,
+        });
+        result.skipped++;
+        continue;
+      }
+
+      if (!scheduleTargetAllowed(sctx, s.kind, s.target)) {
+        // Saved before create-time checks existed, or the tool became
+        // operator-only later. Refuse loudly and disable — never retry per minute.
+        const tool = scheduleToolName(s.kind, s.target);
+        log.error({ scheduleId: s.scheduleId, tenantId: s.tenantId, tool }, 'SECURITY: schedule targets a tool its tenant cannot use — refused and disabled');
+        try {
+          await recordRunResult(s.tenantId, {
+            scheduleId: s.scheduleId,
+            status: 'error',
+            error: `Refused: tool ${tool} is not available to this tenant; schedule disabled`,
+            nextRun: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+            ranAt,
+          });
+          await updateSchedule(s.tenantId, { scheduleId: s.scheduleId, enabled: false });
+        } catch (err) {
+          log.error({ scheduleId: s.scheduleId, err }, 'could not disable refused schedule');
+        }
         result.failed++;
         continue;
       }

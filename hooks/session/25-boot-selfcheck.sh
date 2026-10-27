@@ -107,11 +107,24 @@ except Exception:
   if [ "$NEEDS_NPX" = "1" ] && ! command -v npx >/dev/null 2>&1; then
     MCP_STATUS="FAIL (npx)"
   elif grep -q "mcp_myai_stdio" "$MCPFILE" 2>/dev/null; then
-    WRAPPER="$ROOT/scripts/lib/mcp_myai_stdio.sh"
-    [ -f "$WRAPPER" ] || WRAPPER="$ROOT/AI/scripts/lib/mcp_myai_stdio.sh"
-    if [ ! -f "$WRAPPER" ]; then
-      MCP_STATUS="FAIL (no wrapper)"
-    elif [ ! -x "$WRAPPER" ]; then
+    # Since 2026-09-21 the template entry is a resolver chain: repo AI/ → repo
+    # scripts/ → $MYAI_HOME → globally installed ai-management module. Accept
+    # whichever the chain would land on; a repo with no AI/ folder is healthy
+    # when the global module carries the bridge.
+    WRAPPER=""
+    for _w in "$ROOT/scripts/lib/mcp_myai_stdio.sh" "$ROOT/AI/scripts/lib/mcp_myai_stdio.sh" \
+              "${MYAI_HOME:-/nonexistent}/scripts/lib/mcp_myai_stdio.sh" \
+              "$HOME/.local/lib/node_modules/ai-management/scripts/lib/mcp_myai_stdio.sh" \
+              /opt/homebrew/lib/node_modules/ai-management/scripts/lib/mcp_myai_stdio.sh \
+              /usr/local/lib/node_modules/ai-management/scripts/lib/mcp_myai_stdio.sh; do
+      [ -f "$_w" ] && WRAPPER="$_w" && break
+    done
+    # shellcheck disable=SC2016  # the grep below matches the chain's literal '$p' text
+    if [ -z "$WRAPPER" ]; then
+      MCP_STATUS="FAIL (no wrapper — repo AI/, MYAI_HOME or global ai-management)"
+    elif [ ! -x "$WRAPPER" ] && ! grep -q 'exec bash "\$p"' "$MCPFILE" 2>/dev/null; then
+      # single-path legacy entries `exec "<wrapper>"` need the x-bit; the chain
+      # runs `bash "$p"` and does not.
       MCP_STATUS="FAIL (wrapper not executable)"
     fi
   fi

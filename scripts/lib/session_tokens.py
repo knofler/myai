@@ -20,7 +20,7 @@ Usage:
 
 WHY reconcile exists (2026-09-08, "Pool-capacity drift: CRITICAL"): the delta path
 above attributes tokens to ONE runner fire, so tok-<day|week> only ever recorded
-runner spend — while interactive claude-tech sessions draw on the same Team pool
+runner spend — while interactive sessions on the runner profile draw on the same Team pool
 and were invisible to the router/reserve headroom (28% day / 45% week drift on
 2026-09-08 was exactly one long interactive session). reconcile re-sums
 message.usage.output_tokens for the Sydney day/week window straight from the
@@ -37,7 +37,23 @@ runner's always-on session-count cap remains the reliable guard (never fails ope
 import sys, os, glob, json
 
 
+def _project_slug(cwd):
+    """Claude Code files a session's transcript under projects/<slug>/, where slug is
+    the absolute working dir with every non-alphanumeric char replaced by '-'."""
+    import re
+    return re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(cwd))
+
+
 def _transcripts(cfg):
+    # SESSION_TOKENS_CWD (2026-10-02, "Pool-capacity drift: CRITICAL" #2): when set,
+    # count ONLY that working dir's transcripts. Without it every transcript under
+    # the profile is diffed, so N concurrent runner fires (and any interactive
+    # runner-profile session) each counted EVERYONE's output — the ledger read 7.0M
+    # vs 3.0M actual and a swarm's token budget tripped on phantom spend. The
+    # runner exports it per fire as its task worktree, which is unique per task.
+    cwd = os.environ.get("SESSION_TOKENS_CWD", "").strip()
+    if cwd:
+        return glob.glob(os.path.join(cfg, "projects", _project_slug(cwd), "*.jsonl"))
     return glob.glob(os.path.join(cfg, "projects", "**", "*.jsonl"), recursive=True)
 
 
@@ -51,17 +67,36 @@ def _snapshot(cfg):
     return snap
 
 
+def _usage_key(d):
+    """Claude Code repeats the SAME message.usage on every content-block line of
+    one assistant message, so per-line sums over-count ~2x. Dedupe on
+    message.id (fallback requestId); None = no id, count the line once."""
+    return (d.get("message") or {}).get("id") or d.get("requestId") or None
+
+
+def _output_of(d):
+    try:
+        return int(((d.get("message") or {}).get("usage") or {}).get("output_tokens", 0) or 0)
+    except (ValueError, TypeError):
+        return 0
+
+
 def _sum_output_tokens(fh):
-    total = 0
+    """Sum output_tokens, keeping the LAST line per message id."""
+    by_id, total = {}, 0
     for line in fh:
         if '"output_tokens"' not in line:
             continue
         try:
-            usage = (json.loads(line).get("message") or {}).get("usage") or {}
-            total += int(usage.get("output_tokens", 0) or 0)
+            d = json.loads(line)
         except (ValueError, TypeError):
-            pass
-    return total
+            continue
+        k = _usage_key(d)
+        if k is None:
+            total += _output_of(d)
+        else:
+            by_id[k] = _output_of(d)
+    return total + sum(by_id.values())
 
 
 def _delta(cfg, snapfile):
@@ -122,6 +157,7 @@ def _sum_windows(cfg, day_start, week_start, end):
     [day_start, end) / [week_start, end). Lexicographic compare is safe: Claude
     Code emits fixed-width zero-padded UTC ISO-8601 with a Z suffix."""
     day_total = week_total = 0
+    by_id = {}      # message id → (ts, output) — last line wins (see _usage_key)
     for f in _transcripts(cfg):
         try:
             with open(f, encoding="utf-8", errors="ignore") as fh:
@@ -135,16 +171,20 @@ def _sum_windows(cfg, day_start, week_start, end):
                     ts = d.get("timestamp")
                     if not isinstance(ts, str) or not (week_start <= ts < end):
                         continue
-                    usage = (d.get("message") or {}).get("usage") or {}
-                    try:
-                        n = int(usage.get("output_tokens", 0) or 0)
-                    except (ValueError, TypeError):
-                        n = 0
+                    n = _output_of(d)
+                    k = _usage_key(d)
+                    if k is not None:
+                        by_id[k] = (ts, n)
+                        continue
                     week_total += n
                     if ts >= day_start:
                         day_total += n
         except OSError:
             pass
+    for ts, n in by_id.values():
+        week_total += n
+        if ts >= day_start:
+            day_total += n
     return day_total, week_total
 
 

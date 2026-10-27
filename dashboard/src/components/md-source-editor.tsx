@@ -103,7 +103,7 @@ export function MdSourceEditor({ kind, name, onSaved }: { kind: Kind; name: stri
         </button>
       ) : (
         <div className="space-y-3">
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
 
           {loading ? (
             <p className="text-xs text-[rgb(var(--text-muted))]">Loading…</p>
@@ -113,7 +113,8 @@ export function MdSourceEditor({ kind, name, onSaved }: { kind: Kind; name: stri
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 spellCheck={false}
-                className="w-full h-64 text-xs font-mono bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded-md p-3 text-[rgb(var(--text-primary))] focus:outline-none focus:border-teal-500/50"
+                aria-label="Source file contents"
+                className="w-full h-64 text-xs font-mono bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded-md p-3 text-[rgb(var(--text-primary))] focus:outline-none focus:border-teal-500/50 focus-visible:ring-2 focus-visible:ring-teal-500/50"
               />
 
               <div className="flex items-center gap-2 flex-wrap">
@@ -125,7 +126,7 @@ export function MdSourceEditor({ kind, name, onSaved }: { kind: Kind; name: stri
                   {showDiff ? 'Hide diff' : 'Preview diff'}
                 </button>
                 {dirty && (
-                  <span className="text-[10px] text-[rgb(var(--text-muted))]">
+                  <span className="text-label text-[rgb(var(--text-muted))]">
                     <span className="text-emerald-400">+{stats.additions}</span>{' '}
                     <span className="text-red-400">-{stats.deletions}</span>
                   </span>
@@ -157,7 +158,8 @@ export function MdSourceEditor({ kind, name, onSaved }: { kind: Kind; name: stri
                 value={commitMessage}
                 onChange={(e) => setCommitMessage(e.target.value)}
                 placeholder={`chore(${kind}): edit ${name} via dashboard editor`}
-                className="w-full text-xs bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded-md px-3 py-1.5 text-[rgb(var(--text-primary))] focus:outline-none focus:border-teal-500/50"
+                aria-label="Commit message"
+                className="w-full text-xs bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded-md px-3 py-1.5 text-[rgb(var(--text-primary))] focus:outline-none focus:border-teal-500/50 focus-visible:ring-2 focus-visible:ring-teal-500/50"
               />
 
               {saveInfo && (

@@ -75,7 +75,7 @@ export function SavedViewsBar({
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 mt-3" role="group" aria-label="Saved views">
-      <span className="text-[11px] uppercase tracking-wider text-zinc-600 mr-1">Views</span>
+      <span className="text-label uppercase tracking-wider text-zinc-600 mr-1">Views</span>
 
       {views.map((v) => {
         const isActive = v.viewId === activeViewId;
@@ -139,7 +139,7 @@ export function SavedViewsBar({
             maxLength={MAX_VIEW_NAME}
             placeholder="View name (e.g. core P1 in review)"
             aria-label="Saved view name"
-            className="px-3 py-1.5 rounded-full text-xs bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:border-purple-500/50 w-56"
+            className="px-3 py-1.5 rounded-full text-xs bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:border-purple-500/50 focus-visible:ring-2 focus-visible:ring-purple-500/50 w-56"
           />
           <button
             type="submit"
@@ -158,7 +158,7 @@ export function SavedViewsBar({
         </form>
       )}
 
-      {error && <span className="text-xs text-red-400 ml-1">{error}</span>}
+      {error && <span role="alert" className="text-xs text-red-400 ml-1">{error}</span>}
     </div>
   );
 }

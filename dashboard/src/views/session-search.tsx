@@ -64,6 +64,7 @@ export default function SessionSearch({ sources }: { sources: string[] }) {
         <input
           type="text"
           placeholder="Search RAG corpus (regex-capable)..."
+          aria-label="Search RAG corpus (regex-capable)"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="flex-1 px-4 py-2 bg-[rgb(var(--bg-page))] border border-zinc-700 rounded-lg text-sm text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30"
@@ -71,7 +72,8 @@ export default function SessionSearch({ sources }: { sources: string[] }) {
         <select
           value={sourceFilter}
           onChange={(e) => setSourceFilter(e.target.value)}
-          className="px-3 py-2 bg-[rgb(var(--bg-page))] border border-zinc-700 rounded-lg text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:border-emerald-500/50"
+          aria-label="Filter by source"
+          className="px-3 py-2 bg-[rgb(var(--bg-page))] border border-zinc-700 rounded-lg text-sm text-[rgb(var(--text-primary))] focus:outline-none focus:border-emerald-500/50 focus-visible:ring-2 focus-visible:ring-emerald-500/50"
         >
           <option value="all">All sources</option>
           {sources.map((s) => (
@@ -91,7 +93,7 @@ export default function SessionSearch({ sources }: { sources: string[] }) {
 
       {/* Error */}
       {error && (
-        <div className="mb-4 px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400">
+        <div role="alert" className="mb-4 px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400">
           {error}
         </div>
       )}
@@ -116,17 +118,17 @@ export default function SessionSearch({ sources }: { sources: string[] }) {
                     <div className="flex items-center gap-2 mb-1.5">
                       <SourceBadge source={v.source} />
                       {v.repo && (
-                        <span className="text-[10px] font-mono text-zinc-600">
+                        <span className="text-label font-mono text-zinc-600">
                           {v.repo}
                         </span>
                       )}
                       {v.sessionId && (
-                        <span className="text-[10px] font-mono text-zinc-600">
+                        <span className="text-label font-mono text-zinc-600">
                           session:{v.sessionId.slice(0, 8)}
                         </span>
                       )}
                       {v.createdAt && (
-                        <span className="text-[10px] text-zinc-600 ml-auto">
+                        <span className="text-label text-zinc-600 ml-auto">
                           {new Date(v.createdAt).toLocaleString()}
                         </span>
                       )}
@@ -139,7 +141,7 @@ export default function SessionSearch({ sources }: { sources: string[] }) {
                         {v.tags.map((t) => (
                           <span
                             key={t}
-                            className="text-[10px] font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))] rounded"
+                            className="text-label font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-muted))] rounded"
                           >
                             {t}
                           </span>

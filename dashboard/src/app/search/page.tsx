@@ -11,6 +11,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { PageHeader } from '@/components/page-header';
 import { Card, EmptyState } from '@/components/ui/card';
+import { plural, joinClauses, cap } from '@/lib/summary';
 import type { SearchHit, SearchHitKind } from '@/lib/search';
 
 interface SearchResponse {
@@ -41,6 +42,32 @@ const KIND_ACCENT: Record<SearchHitKind, string> = {
 
 const EMPTY_GROUPS: Record<SearchHitKind, SearchHit[]> = { task: [], plan: [], repo: [], atom: [], session: [] };
 
+/** The one-line answer (DESIGN_LANGUAGE §5.1) — what this query found and where
+ *  it found it, from the response already in state. Before a query is typed it
+ *  says what the page is for, since there is nothing loaded to count. */
+function searchSummary(
+  query: string,
+  total: number,
+  groups: Record<SearchHitKind, SearchHit[]>,
+  loading: boolean,
+  error: string | null,
+): string {
+  const q = query.trim();
+  if (!q) return 'Search everything your AI knows: tasks, plans, repos, brain atoms and past sessions, in one ranked list.';
+  if (loading) return `Searching for ${q}...`;
+  if (error) return `That search did not run. ${error}`;
+  if (total === 0) return `Nothing matches ${q}. Try a shorter word or a repo name.`;
+  const where = joinClauses([
+    groups.task.length > 0 && plural(groups.task.length, 'task'),
+    groups.plan.length > 0 && plural(groups.plan.length, 'plan'),
+    groups.repo.length > 0 && plural(groups.repo.length, 'repo'),
+    groups.atom.length > 0 && plural(groups.atom.length, 'brain atom'),
+    groups.session.length > 0 && plural(groups.session.length, 'session'),
+  ]);
+  const head = `${cap(plural(total, 'result'))} for ${q}.`;
+  return where ? `${head} ${cap(where)}.` : head;
+}
+
 function ResultRow({ hit }: { hit: SearchHit }) {
   return (
     <Link
@@ -48,7 +75,7 @@ function ResultRow({ hit }: { hit: SearchHit }) {
       className="block px-4 py-3 border-b border-[rgb(var(--border-subtle))]/60 last:border-b-0 hover:bg-[rgb(var(--bg-hover))]/40 transition-colors"
     >
       <div className="flex items-center gap-2 flex-wrap">
-        <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${KIND_ACCENT[hit.kind]}`}>
+        <span className={`text-label px-1.5 py-0.5 rounded ${KIND_ACCENT[hit.kind]}`}>
           {KIND_LABEL[hit.kind]}
         </span>
         {hit.repo && <span className="text-xs text-[rgb(var(--text-muted))]">{hit.repo}</span>}
@@ -125,7 +152,12 @@ function SearchPageInner() {
 
   return (
     <div>
-      <PageHeader title="Search" subtitle="tasks · plans · repos · brain atoms — cross-entity, tenant-scoped" />
+      <PageHeader
+        icon="search"
+        title="Search"
+        summary={searchSummary(query, data?.results.length ?? 0, groups, loading, error)}
+        subtitle="Tasks · plans · repos · brain atoms · sessions"
+      />
 
       <form
         onSubmit={(e) => {
@@ -139,8 +171,9 @@ function SearchPageInner() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Search tasks, plans, repos, brain atoms…"
+          aria-label="Search tasks, plans, repos, brain atoms"
           autoFocus
-          className="w-full bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg px-4 py-2.5 text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:outline-none focus:border-teal-500/60"
+          className="w-full bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg px-4 py-2.5 text-sm text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:outline-none focus:border-teal-500/60 focus-visible:ring-2 focus-visible:ring-teal-500/50"
         />
       </form>
 

@@ -48,7 +48,7 @@ _myai_ns_code_id() {
 }
 
 # _myai_ns_owner <code_repo_dir> — the git "group"/owner segment from origin
-# (git@github.com:knofler/app.git → knofler; https://…/knofler/app → knofler).
+# (git@github.com:<owner>/app.git → <owner>; https://…/<owner>/app → <owner>).
 # Empty when there is no origin remote. This is the "name/group" collision hint.
 _myai_ns_owner() {
   local dir="$1" url owner=""

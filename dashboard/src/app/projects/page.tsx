@@ -22,6 +22,7 @@ import { Card, StatCard, EmptyState } from '@/components/ui/card';
 import { LevelDot } from '@/components/ui/badge';
 import { RecommendationChip, ActionStatus } from '@/components/fleet-status-chips';
 import { timeAgo, formatDuration } from '@/lib/format';
+import { plural, verb, joinClauses, cap } from '@/lib/summary';
 import AutoRefresh from '@/components/auto-refresh';
 import {
   buildProjectRollups,
@@ -81,6 +82,37 @@ function RunnerBadge({ liveness }: { liveness: Awaited<ReturnType<typeof getRunn
   );
 }
 
+/** The one-line answer (DESIGN_LANGUAGE §5.1) — how much you own, what is
+ *  moving across it, and whether the runner is alive to move it. Built only
+ *  from the rollups this page already computes. */
+function projectsSummary(
+  projectCount: number,
+  repoCount: number,
+  counts: { queueDepth: number; inFlight: number; needsAttention: number; review: number },
+  runnerAlive: boolean,
+): string {
+  if (projectCount === 0) {
+    return 'No repos registered yet. They appear here as soon as a repo reports a card or has a queued task.';
+  }
+  const head = `You have ${plural(repoCount, 'repo')} across ${plural(projectCount, 'project')}.`;
+  const body =
+    counts.queueDepth === 0 && counts.needsAttention === 0
+      ? counts.review > 0
+        ? `${plural(counts.review, 'task')} ${verb(counts.review, 'is', 'are')} ready for your review.`
+        : 'Nothing is queued and nothing needs you.'
+      : `${cap(
+          joinClauses([
+            counts.queueDepth > 0 &&
+              `${plural(counts.queueDepth, 'task')} ${verb(counts.queueDepth, 'is', 'are')} queued or running`,
+            counts.inFlight > 0 && `${counts.inFlight} in flight right now`,
+            counts.needsAttention > 0 &&
+              `${plural(counts.needsAttention, 'task')} ${verb(counts.needsAttention, 'needs', 'need')} attention`,
+          ]),
+        )}.`;
+  const runner = runnerAlive ? '' : ' The runner is down, so nothing new will start.';
+  return `${head} ${body}${runner}`;
+}
+
 export default async function ProjectsPage() {
   await connectDB();
   const tenantId = await getActiveTenant();
@@ -133,7 +165,12 @@ export default async function ProjectsPage() {
   return (
     <div className="max-w-7xl mx-auto">
       <AutoRefresh seconds={20} />
-      <PageHeader title="Projects" subtitle="Multi-repo orchestration — the view and the lever across every repo at once.">
+      <PageHeader
+        icon="projects"
+        title="Projects"
+        summary={projectsSummary(projects.length, totalRepos, summary, liveness.alive)}
+        subtitle="Multi-repo orchestration — the view and the lever across every repo at once."
+      >
         <RunnerBadge liveness={liveness} />
       </PageHeader>
 
@@ -148,11 +185,11 @@ export default async function ProjectsPage() {
       ) : (
         <div className="space-y-6">
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-            <StatCard label="Projects" value={projects.length} />
-            <StatCard label="Repos" value={totalRepos} />
-            <StatCard label="Queue depth" value={summary.queueDepth} sub="pending + working" accent={summary.queueDepth > 0 ? 'blue' : 'gray'} />
-            <StatCard label="In-flight" value={summary.inFlight} accent={summary.inFlight > 0 ? 'blue' : 'gray'} />
-            <StatCard label="Needs attention" value={summary.needsAttention} sub="blocked + dead-lettered" accent={summary.needsAttention > 0 ? 'red' : 'gray'} />
+            <StatCard label="Projects" value={projects.length} icon="projects" tone="muted" />
+            <StatCard label="Repos" value={totalRepos} icon="fleet" tone="muted" href="/apps" />
+            <StatCard label="Queue depth" value={summary.queueDepth} sub="pending + working" icon="queue" tone="muted" href="/work" />
+            <StatCard label="In-flight" value={summary.inFlight} icon="runs" tone={summary.inFlight > 0 ? 'accent' : 'muted'} href="/work?tab=orchestration" />
+            <StatCard label="Needs attention" value={summary.needsAttention} sub="blocked + dead-lettered" icon="alert" tone={summary.needsAttention > 0 ? 'err' : 'muted'} />
           </div>
 
           {/* Per-project rollup grid */}
@@ -173,7 +210,7 @@ export default async function ProjectsPage() {
                   {p.description && <p className="text-xs text-[rgb(var(--text-muted))] mb-3">{p.description}</p>}
                   <table className="card-table w-full text-sm">
                     <thead>
-                      <tr className="text-left text-[11px] text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
+                      <tr className="text-left text-label text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
                         <th className="px-2 py-2 font-medium">Repo</th>
                         <th className="px-2 py-2 font-medium text-right">Pending</th>
                         <th className="px-2 py-2 font-medium text-right">Working</th>
@@ -211,7 +248,7 @@ export default async function ProjectsPage() {
                                     <span className="truncate max-w-[10rem]" title={lastShip.status}>{lastShip.status || '—'}</span>
                                     <span className="text-zinc-600">· {timeAgo(lastShip.at)}</span>
                                     {!!lastShip.commitsAhead && lastShip.commitsAhead > 0 && (
-                                      <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px]">
+                                      <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-label">
                                         {lastShip.commitsAhead} unshipped
                                       </span>
                                     )}
@@ -242,7 +279,7 @@ export default async function ProjectsPage() {
                   <div key={run.runId} className="border border-[rgb(var(--border-subtle))] rounded-md p-3">
                     <div className="flex items-center justify-between gap-2 mb-2">
                       <span className="font-mono text-xs text-[rgb(var(--text-secondary))]">{run.runId}</span>
-                      <span className="text-[11px] text-[rgb(var(--text-muted))]">
+                      <span className="text-label text-[rgb(var(--text-muted))]">
                         {run.summary?.shipped ?? 0}/{run.summary?.total ?? run.repos.length} done
                         {!!run.summary?.failed && <span className="text-red-400"> · {run.summary.failed} failed</span>}
                         <span className="ml-2">· {timeAgo(run.startedAt)}</span>

@@ -43,7 +43,7 @@ function initials(name: string): string {
 }
 
 export function TenantSwitcher() {
-  const { current, tenants, switchTenant, logout, loading } = useTenant();
+  const { current, tenants, switchTenant, logout, loading, operator, operatorLogout } = useTenant();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -166,11 +166,41 @@ export function TenantSwitcher() {
 
   if (loading) return null;
 
+  // An OPERATOR session is a real session — it is just not a tenant one. Showing
+  // "Sign in" to someone who signed in at /operator-login (which is exactly
+  // where this component's own link sends them) was the 2026-09-12 report:
+  // the two auth systems are independent and the UI only knew about one.
+  if (!current && operator) {
+    return (
+      <div className="gel-surface flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg border border-[rgb(var(--border-subtle))]">
+        <span className="gel-brand flex items-center justify-center w-7 h-7 rounded-md text-label font-bold text-teal-200 shrink-0">
+          {initials(operator.user)}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-meta font-medium text-[rgb(var(--text-primary))]">
+            {operator.user}
+          </span>
+          <span className="block truncate text-label text-[rgb(var(--text-muted))]">Operator</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => void operatorLogout()}
+          className="shrink-0 rounded px-2 py-1 text-label text-[rgb(var(--text-muted))] hover:bg-[rgb(var(--bg-hover))] hover:text-[rgb(var(--text-primary))]"
+        >
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
   if (!current) {
     return (
       <Link
         href="/operator-login"
-        className="gel-surface flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-sm text-teal-300 hover:text-teal-200 transition-colors"
+        // A link is legible from shape + weight, not teal (DESIGN_LANGUAGE §2);
+        // nowrap + shrink-0 because at 375px it used to break onto two lines
+        // and jut out of the top bar (task-a6310312 lead).
+        className="gel-surface inline-flex min-h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-[rgb(var(--border-subtle))] px-3 text-meta font-medium text-[rgb(var(--text-primary))] transition-colors hover:bg-[rgb(var(--bg-hover))]"
       >
         <span className="text-xs">→</span> Sign in
       </Link>
@@ -186,14 +216,14 @@ export function TenantSwitcher() {
         onClick={() => setOpen((o) => !o)}
         className="gel-surface flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg border border-[rgb(var(--border-subtle))] text-left hover:border-zinc-700 active:border-zinc-700 active:scale-[0.99] transition-[border-color,transform]"
       >
-        <span className="gel-brand flex items-center justify-center w-7 h-7 rounded-md text-[11px] font-bold text-teal-200 shrink-0">
+        <span className="gel-brand flex items-center justify-center w-7 h-7 rounded-md text-label font-bold text-teal-200 shrink-0">
           {initials(current.name)}
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-xs font-medium text-[rgb(var(--text-primary))] truncate">{current.name}</span>
-          <span className="block text-[10px] text-[rgb(var(--text-muted))]">{PLAN_LABEL[current.plan] ?? current.plan} plan</span>
+          <span className="block text-label text-[rgb(var(--text-muted))]">{PLAN_LABEL[current.plan] ?? current.plan} plan</span>
         </span>
-        <span className="text-zinc-600 text-[10px]">{open ? '▾' : '▸'}</span>
+        <span className="text-zinc-600 text-label">{open ? '▾' : '▸'}</span>
       </button>
 
       {open && (
@@ -202,7 +232,7 @@ export function TenantSwitcher() {
           className="absolute bottom-full left-0 right-0 mb-2 gel-surface bg-[rgb(var(--bg-surface))] border border-[rgb(var(--border-subtle))] rounded-lg p-1.5 shadow-xl z-50"
         >
           {tenants.length > 1 && (
-            <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-600">Switch tenant</div>
+            <div className="px-2 py-1 text-label uppercase tracking-wide text-zinc-600">Switch tenant</div>
           )}
           {tenants.map((t) => {
             const active = t.tenantId === current.tenantId;
@@ -218,11 +248,11 @@ export function TenantSwitcher() {
                   active ? 'gel-brand text-teal-200' : 'text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))] hover:bg-[rgb(var(--bg-hover))]'
                 }`}
               >
-                <span className="flex items-center justify-center w-5 h-5 rounded text-[9px] font-bold bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-primary))] shrink-0">
+                <span className="flex items-center justify-center w-5 h-5 rounded text-label font-bold bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-primary))] shrink-0">
                   {initials(t.name)}
                 </span>
                 <span className="min-w-0 flex-1 truncate">{t.name}</span>
-                {active && <span className="text-teal-300 text-[10px]">✓</span>}
+                {active && <span className="text-teal-300 text-label">✓</span>}
               </button>
             );
           })}
@@ -230,7 +260,7 @@ export function TenantSwitcher() {
           {members !== null && (
             <>
               <div className="my-1 border-t border-[rgb(var(--border-subtle))]" />
-              <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-600">
+              <div className="px-2 py-1 text-label uppercase tracking-wide text-zinc-600">
                 Members ({members.length})
               </div>
               <div className="max-h-40 overflow-y-auto">
@@ -244,7 +274,7 @@ export function TenantSwitcher() {
                   return (
                     <div key={m.userId} className="px-2 py-1 text-xs">
                       <div className="flex items-center gap-2.5">
-                        <span className="flex items-center justify-center w-5 h-5 rounded text-[9px] font-bold bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-primary))] shrink-0">
+                        <span className="flex items-center justify-center w-5 h-5 rounded text-label font-bold bg-[rgb(var(--bg-hover))] text-[rgb(var(--text-primary))] shrink-0">
                           {initials(m.displayName || m.email)}
                         </span>
                         <span className="min-w-0 flex-1 truncate text-[rgb(var(--text-secondary))]">
@@ -257,7 +287,7 @@ export function TenantSwitcher() {
                             value={m.role}
                             disabled={roleBusyId === m.userId}
                             onChange={(e) => changeRole(m.userId, e.target.value)}
-                            className="bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded px-1 py-0.5 text-[9px] uppercase tracking-wide text-[rgb(var(--text-primary))] focus:border-teal-600 outline-none disabled:opacity-40 transition-colors"
+                            className="bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded px-1 py-0.5 text-label uppercase tracking-wide text-[rgb(var(--text-primary))] focus:border-teal-600 outline-none disabled:opacity-40 transition-colors"
                           >
                             {ASSIGNABLE_ROLES.map((r) => (
                               <option key={r} value={r}>
@@ -267,7 +297,7 @@ export function TenantSwitcher() {
                           </select>
                         ) : (
                           <span
-                            className={`text-[9px] uppercase tracking-wide ${
+                            className={`text-label uppercase tracking-wide ${
                               m.role === 'owner' ? 'text-teal-400' : 'text-zinc-600'
                             }`}
                           >
@@ -275,7 +305,7 @@ export function TenantSwitcher() {
                           </span>
                         )}
                       </div>
-                      {errored && <p className="mt-0.5 ml-7 text-[9px] text-rose-400">{roleError!.msg}</p>}
+                      {errored && <p role="alert" className="mt-0.5 ml-7 text-label text-rose-400">{roleError!.msg}</p>}
                     </div>
                   );
                 })}
@@ -296,16 +326,16 @@ export function TenantSwitcher() {
                     </button>
                   ) : inviteLink ? (
                     <div className="space-y-1.5">
-                      <p className="text-[10px] text-[rgb(var(--text-muted))]">
+                      <p className="text-label text-[rgb(var(--text-muted))]">
                         Share this link — it expires and only works for the invited email:
                       </p>
-                      <code className="block px-2 py-1 rounded bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] text-[10px] text-teal-300 break-all select-all">
+                      <code className="block px-2 py-1 rounded bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] text-label text-teal-300 break-all select-all">
                         {inviteLink}
                       </code>
                       <div className="flex gap-2">
                         <button
                           onClick={copyInviteLink}
-                          className="flex-1 px-2 py-1 rounded gel-brand text-[11px] text-teal-100 hover:brightness-110 transition"
+                          className="flex-1 px-2 py-1 rounded gel-brand text-label text-teal-100 hover:brightness-110 transition"
                         >
                           {linkCopied ? '✓ Copied' : 'Copy link'}
                         </button>
@@ -314,7 +344,7 @@ export function TenantSwitcher() {
                             setInviteOpen(false);
                             setInviteLink(null);
                           }}
-                          className="px-2 py-1 rounded text-[11px] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
+                          className="px-2 py-1 rounded text-label text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
                         >
                           Done
                         </button>
@@ -327,22 +357,22 @@ export function TenantSwitcher() {
                         value={inviteEmail}
                         onChange={(e) => setInviteEmail(e.target.value)}
                         placeholder="teammate@acme.com"
-                        className="w-full px-2 py-1 rounded bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] text-[11px] text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors"
+                        className="w-full px-2 py-1 rounded bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] text-label text-[rgb(var(--text-primary))] placeholder-zinc-600 focus:border-teal-600 outline-none transition-colors"
                         required
                       />
-                      {inviteErr && <p className="text-[10px] text-rose-400">{inviteErr}</p>}
+                      {inviteErr && <p className="text-label text-rose-400">{inviteErr}</p>}
                       <div className="flex gap-2">
                         <button
                           type="submit"
                           disabled={inviteBusy || !inviteEmail.trim()}
-                          className="flex-1 px-2 py-1 rounded gel-brand text-[11px] text-teal-100 hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                          className="flex-1 px-2 py-1 rounded gel-brand text-label text-teal-100 hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition"
                         >
                           {inviteBusy ? 'Creating…' : 'Create invite link'}
                         </button>
                         <button
                           type="button"
                           onClick={() => setInviteOpen(false)}
-                          className="px-2 py-1 rounded text-[11px] text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
+                          className="px-2 py-1 rounded text-label text-[rgb(var(--text-muted))] hover:text-[rgb(var(--text-primary))] transition"
                         >
                           Cancel
                         </button>

@@ -44,7 +44,7 @@ export function NotificationBell() {
       >
         <span className="text-base leading-none">🔔</span>
         {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 flex items-center justify-center rounded-full bg-brand-orange text-[10px] font-bold text-zinc-950">
+          <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 flex items-center justify-center rounded-full bg-[rgb(var(--warn))] text-label font-bold text-zinc-950">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
@@ -63,7 +63,7 @@ export function NotificationBell() {
               <button
                 type="button"
                 onClick={markAllRead}
-                className="text-[11px] text-teal-400 hover:text-teal-300"
+                className="text-label text-teal-400 hover:text-teal-300"
               >
                 Mark all read
               </button>
@@ -84,12 +84,12 @@ export function NotificationBell() {
                     <div className="min-w-0 flex-1">
                       <p className="text-xs text-[rgb(var(--text-primary))] leading-snug">{displayTitle(n)}</p>
                       <div className="flex items-center gap-2 mt-1">
-                        <span className="text-[10px] text-[rgb(var(--text-muted))]">{timeAgo(n.sentAt)}</span>
+                        <span className="text-label text-[rgb(var(--text-muted))]">{timeAgo(n.sentAt)}</span>
                         {n.source && (
-                          <span className="text-[10px] text-zinc-600 font-mono truncate">· {n.source}</span>
+                          <span className="text-label text-zinc-600 font-mono truncate">· {n.source}</span>
                         )}
                         {!n.success && (
-                          <span className="text-[10px] text-red-400/80">· failed</span>
+                          <span className="text-label text-red-400/80">· failed</span>
                         )}
                       </div>
                     </div>
@@ -102,7 +102,7 @@ export function NotificationBell() {
           <Link
             href="/notifications"
             onClick={() => setOpen(false)}
-            className="block px-4 py-2.5 text-center text-[11px] text-[rgb(var(--text-secondary))] hover:text-teal-300 border-t border-[rgb(var(--border-subtle))] transition-colors"
+            className="block px-4 py-2.5 text-center text-label text-[rgb(var(--text-secondary))] hover:text-teal-300 border-t border-[rgb(var(--border-subtle))] transition-colors"
           >
             View all notifications →
           </Link>

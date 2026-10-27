@@ -18,6 +18,7 @@ import { PushOnboardCard } from '@/components/push-onboard-card';
 import { useNotifications } from '@/lib/use-notifications';
 import { LEVEL_STYLE, displayTitle, displayBody, type NotificationLevel } from '@/lib/notifications';
 import { timeAgo, fmtSydney } from '@/lib/format';
+import { plural, verb } from '@/lib/summary';
 
 type Filter = 'all' | 'unread' | NotificationLevel;
 
@@ -29,6 +30,21 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'error', label: 'Error' },
   { key: 'critical', label: 'Critical' },
 ];
+
+/** The one-line answer (DESIGN_LANGUAGE §5.1) — how much has come in and how
+ *  much of it you have not looked at, from the live feed already in this page. */
+function notificationsSummary(total: number, unread: number, connected: boolean): string {
+  const link = connected ? '' : ' The live feed is reconnecting, so this may be behind.';
+  if (total === 0) {
+    return `Nothing has come in yet. Stage events, deploys and alerts land here the moment they happen.${link}`;
+  }
+  const head = `You have ${plural(total, 'recent notification')}.`;
+  const tail =
+    unread > 0
+      ? ` ${unread} of them ${verb(unread, 'is', 'are')} still unread.`
+      : ' You have read all of them.';
+  return `${head}${tail}${link}`;
+}
 
 export default function NotificationsPage() {
   const { notifications, unreadCount, connected, markAllRead } = useNotifications();
@@ -53,12 +69,16 @@ export default function NotificationsPage() {
   return (
     <div className="max-w-3xl">
       <PageHeader
+        icon="notifications"
         title="Notifications"
+        summary={notificationsSummary(notifications.length, unreadCount, connected)}
         subtitle={
           <span className="inline-flex items-center gap-2">
-            <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-            {connected ? 'Live' : 'Reconnecting'} · {notifications.length} recent
-            {unreadCount > 0 && <span className="text-brand-orange">· {unreadCount} unread</span>}
+            <span
+              aria-hidden="true"
+              className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-[rgb(var(--ok))]' : 'bg-[rgb(var(--border-strong))]'}`}
+            />
+            {connected ? 'Live' : 'Reconnecting'} · showing {filtered.length} of {notifications.length}
           </span>
         }
       >
@@ -66,7 +86,7 @@ export default function NotificationsPage() {
           <button
             type="button"
             onClick={markAllRead}
-            className="px-3 py-1.5 rounded-lg border border-[rgb(var(--border-subtle))] text-xs text-teal-400 hover:text-teal-300 hover:border-zinc-700 transition-colors"
+            className="px-3 py-1.5 rounded-lg border border-[rgb(var(--border-subtle))] text-xs text-teal-400 hover:text-teal-300 hover:border-[rgb(var(--border-strong))] transition-colors"
           >
             Mark all read
           </button>
@@ -120,7 +140,7 @@ export default function NotificationsPage() {
                     {unread && <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${style.dot}`} aria-label="unread" />}
                   </div>
                   {body && <p className="text-xs text-[rgb(var(--text-secondary))] mt-1 leading-snug">{body}</p>}
-                  <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[10px] text-[rgb(var(--text-muted))]">
+                  <div className="flex flex-wrap items-center gap-2 mt-1.5 text-label text-[rgb(var(--text-muted))]">
                     <span title={fmtSydney(n.sentAt, 'full')}>{timeAgo(n.sentAt)}</span>
                     <span className="font-mono">· {n.channel}</span>
                     {n.source && <span className="font-mono truncate">· {n.source}</span>}

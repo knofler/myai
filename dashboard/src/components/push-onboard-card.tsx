@@ -92,11 +92,11 @@ export function PushOnboardCard() {
               : 'Quiet hours are respected — set a do-not-disturb window below and push stays silent inside it.'}
           </p>
           {pushUnconfigured && (
-            <p className="text-[11px] text-yellow-500/80">
+            <p className="text-label text-yellow-500/80">
               Push isn’t configured on the gateway yet (set VAPID keys in AI/.env) — you can still enable it once it is.
             </p>
           )}
-          {error && <p className="text-[11px] text-red-400/80">{error}</p>}
+          {error && <p role="alert" className="text-label text-red-400/80">{error}</p>}
           <div className="flex items-center gap-2 pt-0.5">
             <button
               type="button"

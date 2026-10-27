@@ -2,7 +2,7 @@
 # myai_new_app.sh — `myai new-app <path|idea>`: two provisioning modes, one verb.
 #
 # WHY ONE VERB, TWO MODES (task-658282af): `myai new-app <path>` already
-# shipped (README/CHANGELOG, tested) as the OFFLINE Powerhouse Blueprint
+# shipped (README/CHANGELOG, tested) as the OFFLINE myAI Blueprint
 # scaffold (→ init_blueprint.sh). Separately, agentFlow shipped a headless
 # idea→app pipeline (commit ac38bc0: `POST /api/headless/new-app`, token-gated
 # via `x-gateway-local-token` — the SAME bridge token the myai gateway trusts,
@@ -60,7 +60,7 @@ Usage:
   myai new-app --idea "<idea>" [same idea flags]
 
 Dispatches by argument shape: a single-token argument (no whitespace) is
-treated as a PATH (offline Powerhouse Blueprint scaffold — init_blueprint.sh);
+treated as a PATH (offline myAI Blueprint scaffold — init_blueprint.sh);
 an argument containing whitespace, or an explicit --idea "<text>", is treated
 as a plain-English IDEA and drives agentFlow's headless idea->app pipeline.
 EOF

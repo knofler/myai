@@ -56,10 +56,30 @@ c_err()  { printf '  %s✗%s %s\n' "$RED" "$RESET" "$1"; }
 c_info() { printf '  %s·%s %s\n' "$CYAN" "$RESET" "$1"; }
 hr()     { printf '%s\n' "────────────────────────────────────────────────────────────"; }
 
+# ── Docker gate: refuse BEFORE compose, in words a first-time user can act on ──
+# Without Docker, `docker compose up` fails with a stack trace that never says
+# "install Docker". scripts/lib/docker_gate.sh explains what/why/how per OS.
+# First thing after the helpers: nothing (not even a generated .env token) is
+# written for a stack that cannot start. -h/--help is never gated.
+case " $* " in *" -h "*|*" --help "*) MYAI_SKIP_DOCKER_GATE=1 ;; esac
+if [ "${MYAI_SKIP_DOCKER_GATE:-0}" != 1 ]; then
+    # shellcheck source=scripts/lib/docker_gate.sh
+    . "$SCRIPT_DIR/lib/docker_gate.sh"
+    _dg_state="$(docker_gate_state)"
+    if [ "$_dg_state" != ok ]; then
+        docker_gate_explain "$_dg_state" >&2
+        docker_gate_mark_pending
+        c_err "myai up needs Docker — $(docker_gate_remedy "$_dg_state")"
+        exit 3
+    fi
+    docker_gate_clear_pending
+fi
+
+
 # ── deployment mode ───────────────────────────────────────────────────────────
 # `myai init` scaffolds AI/ + a portable docker-compose.yml into the target repo;
 # `myai up` runs from THERE. The installed package ships no root compose, so we
-# must run from the user's project, with MYAI_HOME pointing at the framework
+# must run from the user's project, with MYAI_FRAMEWORK_DIR pointing at the framework
 # install (REPO_ROOT) for the gateway/dashboard build context.
 #   PORTABLE=1 → downloader project (the caller's dir has docker-compose.yml + AI/)
 #             → OR a greenfield project / bare global install with no per-project
@@ -90,7 +110,7 @@ else
     c_err "no docker-compose.yml here. Run 'myai init <path>' first, then 'cd <path>' and 'myai up'."
     exit 1
 fi
-# Bring-your-own .env (ports, MONGODB_URI, key, MYAI_HOME override) from the project.
+# Bring-your-own .env (ports, MONGODB_URI, key, MYAI_FRAMEWORK_DIR override) from the project.
 for _envf in "$PROJECT_DIR/.env" "$PROJECT_DIR/AI/.env"; do
     [ -f "$_envf" ] && { set -a; . "$_envf" 2>/dev/null || true; set +a; }
 done
@@ -123,10 +143,122 @@ ensure_local_token() {
     c_ok "generated a random GATEWAY_LOCAL_TOKEN into $(basename "$PROJECT_DIR")/.env (first boot — was unset/published default)"
 }
 ensure_local_token
-# Default MYAI_HOME (framework install) AFTER sourcing — the project's .env may
-# carry an EMPTY MYAI_HOME= placeholder, which must not clobber the default.
-[ -n "${MYAI_HOME:-}" ] || MYAI_HOME="$REPO_ROOT"
-export MYAI_HOME
+
+# ── first-boot secrets for a fresh install (v1 gate G5) ──────────────────────
+# _gen_secret → 64 hex chars; _env_set KEY VALUE → replace/append one line in
+# the env file compose reads, keeping every other line.
+_gen_secret() {
+    if command -v openssl >/dev/null 2>&1; then openssl rand -hex 32
+    elif command -v python3 >/dev/null 2>&1; then python3 -c 'import secrets; print(secrets.token_hex(32))'
+    else return 1; fi
+}
+_env_set() {
+    local env_file="$PROJECT_DIR/.env" tmp
+    tmp="$(mktemp "${env_file}.XXXXXX")" || return 1
+    [ -f "$env_file" ] && grep -v "^$1=" "$env_file" > "$tmp" 2>/dev/null || true
+    printf '%s=%s\n' "$1" "$2" >> "$tmp"
+    mv "$tmp" "$env_file"
+}
+
+# JWT_SECRET signs every dashboard/password session. The compose files used to
+# default it to a value printed in the package, so anyone who could reach the
+# gateway could forge an owner session. Generate one when it is unset or still
+# that published value; a secret you set yourself is never touched (rotating it
+# would log out every session).
+KNOWN_DEFAULT_JWT_SECRET="myai-dev-jwt-secret-change-me"
+ensure_jwt_secret() {
+    if [ -n "${JWT_SECRET:-}" ] && [ "$JWT_SECRET" != "$KNOWN_DEFAULT_JWT_SECRET" ]; then
+        return 0
+    fi
+    local was_default=0 new
+    [ "${JWT_SECRET:-}" = "$KNOWN_DEFAULT_JWT_SECRET" ] && was_default=1
+    new="$(_gen_secret)" || { c_warn "neither openssl nor python3 found — cannot generate JWT_SECRET"; return 0; }
+    _env_set JWT_SECRET "$new" || { c_warn "could not write JWT_SECRET to $(basename "$PROJECT_DIR")/.env"; return 0; }
+    export JWT_SECRET="$new"
+    if [ "$was_default" = 1 ]; then
+        c_ok "replaced the published default JWT_SECRET in $(basename "$PROJECT_DIR")/.env (sessions signed with it were forgeable — sign in again)"
+    else
+        c_ok "generated a random JWT_SECRET into $(basename "$PROJECT_DIR")/.env (first boot)"
+    fi
+}
+ensure_jwt_secret
+
+# The bundled database's root password (portable stack only). A fresh install
+# gets a generated one. An existing data volume keeps the password it was
+# created with — changing it underneath the volume would lock the data out —
+# so for those we only print how to change it. Skipped when MONGODB_URI points
+# at your own database.
+ensure_mongo_password() {
+    # The portable compose file has no password fallback (G5 RV-4), so the env
+    # file always carries one: generated for a fresh database (also when an
+    # external MONGODB_URI leaves the bundled one unused), or the old default
+    # written out explicitly for an existing volume so its data stays readable.
+    [ "$PORTABLE" = 1 ] || return 0
+    case "${MONGO_ROOT_PASSWORD:-}" in ""|password) ;; *) return 0 ;; esac
+    local vol="${MYAI_PROJECT_NAME:-myai}_myai-mongo-data" vols new
+    if ! vols="$(docker volume ls --format '{{.Name}}' 2>/dev/null)"; then
+        c_warn "cannot list Docker volumes — leaving the database password as it is"
+        return 0
+    fi
+    if [ -z "${MONGODB_URI:-}" ] && grep -qxF "$vol" <<<"$vols"; then
+        if [ -z "${MONGO_ROOT_PASSWORD:-}" ]; then
+            _env_set MONGO_ROOT_PASSWORD password || c_warn "could not write MONGO_ROOT_PASSWORD to $(basename "$PROJECT_DIR")/.env"
+            export MONGO_ROOT_PASSWORD=password
+        fi
+        c_warn "the bundled database (volume $vol) uses the published default password; it is kept so your data stays readable."
+        c_warn "  to change it: docker compose exec mongo mongosh -u admin -p password --authenticationDatabase admin --eval 'db.getSiblingDB(\"admin\").changeUserPassword(\"admin\", \"<new>\")'"
+        c_warn "  then set MONGO_ROOT_PASSWORD=<new> in $(basename "$PROJECT_DIR")/.env and run myai up again (the port is bound to 127.0.0.1 either way)"
+        return 0
+    fi
+    new="$(_gen_secret)" || { c_warn "neither openssl nor python3 found — cannot generate MONGO_ROOT_PASSWORD"; return 0; }
+    _env_set MONGO_ROOT_PASSWORD "$new" || { c_warn "could not write MONGO_ROOT_PASSWORD to $(basename "$PROJECT_DIR")/.env"; return 0; }
+    export MONGO_ROOT_PASSWORD="$new"
+    c_ok "generated a random MONGO_ROOT_PASSWORD into $(basename "$PROJECT_DIR")/.env (fresh database)"
+}
+ensure_mongo_password
+
+# ── the user's brain, mounted into the gateway (v1 G2 B5) ────────────────────
+# The portable gateway used to keep a brain INSIDE its container: an agent's
+# brain_commit never reached the user's own brain (`myai brain log`), and a
+# `myai down` / rebuild dropped it. Resolve the host brain the CLI uses
+# (scripts/lib/brain.sh: $MYAI_BRAIN_DIR → brain.path → ~/.myai/brain), create
+# it as the USER if missing (so Docker never creates it root-owned), and record
+# it as MYAI_BRAIN_HOST in the stack's .env so every compose call in the stack
+# dir — up, restart, down — mounts the same path. MYAI_UID/MYAI_GID make the
+# gateway write as the USER: as root it left root-owned objects in the brain
+# that broke the user's own git on Linux.
+ensure_brain_mount() {
+    # The greenfield stack only — a managed project's own compose/.env is its own.
+    [ "$PORTABLE" = 1 ] && [ "$PROJECT_DIR" = "$STANDALONE_DIR" ] || return 0
+    local bd env_file="$PROJECT_DIR/.env" tmp uid gid
+    if [ -f "$REPO_ROOT/scripts/lib/brain.sh" ]; then
+        # shellcheck source=/dev/null
+        bd="$( . "$REPO_ROOT/scripts/lib/brain.sh" >/dev/null 2>&1; brain_dir 2>/dev/null )"
+    fi
+    [ -n "${bd:-}" ] || bd="${HOME}/.myai/brain"
+    mkdir -p "$bd" || { c_warn "cannot create the brain dir $bd — the gateway's brain will not persist"; return 0; }
+    tmp="$(mktemp "${env_file}.XXXXXX")"
+    [ -f "$env_file" ] && grep -v -E '^(MYAI_BRAIN_HOST|MYAI_UID|MYAI_GID)=' "$env_file" > "$tmp" 2>/dev/null || true
+    uid="$(id -u)"; gid="$(id -g)"
+    printf 'MYAI_BRAIN_HOST=%s\nMYAI_UID=%s\nMYAI_GID=%s\n' "$bd" "$uid" "$gid" >> "$tmp"
+    mv "$tmp" "$env_file"
+    export MYAI_BRAIN_HOST="$bd" MYAI_UID="$uid" MYAI_GID="$gid"
+    c_info "brain     $bd (mounted into the gateway)"
+}
+ensure_brain_mount
+# Resolved AFTER sourcing — the project's .env may carry an EMPTY placeholder,
+# which must not clobber the default.
+# Framework install dir (the portable compose's build context) has its OWN
+# name. It used to be exported as MYAI_HOME — but MYAI_HOME is the per-user
+# STATE dir (~/.myai) to every brain/session/usage writer, so everything this
+# script started wrote state into the framework checkout (2026-10-18). A
+# legacy .env that still sets MYAI_HOME to a framework checkout is translated.
+if [ -z "${MYAI_FRAMEWORK_DIR:-}" ] && [ -n "${MYAI_HOME:-}" ] \
+   && [ -f "$MYAI_HOME/scripts/lib/brain.sh" ] && [ -d "$MYAI_HOME/runtime" ]; then
+    MYAI_FRAMEWORK_DIR="$MYAI_HOME"; unset MYAI_HOME
+fi
+[ -n "${MYAI_FRAMEWORK_DIR:-}" ] || MYAI_FRAMEWORK_DIR="$REPO_ROOT"
+export MYAI_FRAMEWORK_DIR
 # Default the compose project name to the init'd project FOLDER (never the
 # literal "myai") so a portable stack can never collide with / tear down an
 # unrelated "myai" stack on the same host (e.g. the operator's master stack).
@@ -331,11 +463,11 @@ print_ready() {
 # ── run ───────────────────────────────────────────────────────────────────────
 if [ "$PORTABLE" = 1 ]; then
     # Downloader: run the portable stack from the init'd project, building the
-    # gateway + dashboard images from the framework install (MYAI_HOME).
+    # gateway + dashboard images from the framework install (MYAI_FRAMEWORK_DIR).
     BUILD_FLAG=""
     case " $BETAC_ARGS " in *" --build "*) BUILD_FLAG="--build" ;; esac
     c_info "project   $PROJECT_DIR"
-    c_info "framework  MYAI_HOME=$MYAI_HOME"
+    c_info "framework  MYAI_FRAMEWORK_DIR=$MYAI_FRAMEWORK_DIR"
     # shellcheck disable=SC2086
     ( cd "$PROJECT_DIR" && docker compose up -d $BUILD_FLAG gateway dashboard mongo ) \
         || { c_err "docker compose up failed — see: (cd $PROJECT_DIR && docker compose logs)"; exit 1; }

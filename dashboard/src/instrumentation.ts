@@ -42,7 +42,32 @@ export function scrubDashboardEvent(event: DashboardSentryEvent | null): Dashboa
   return out;
 }
 
+/** Warm the brain-read cache once the server is listening (see lib/warm.ts). */
+function scheduleStartupWarm(): void {
+  // Vercel has no long-lived process to warm, and no server on 127.0.0.1.
+  if (process.env.MYAI_WARM_ON_START === '0' || process.env.VERCEL) return;
+  setTimeout(() => {
+    void (async () => {
+      try {
+        const { warmToken } = await import('@/lib/warm');
+        const port = process.env.PORT ?? '3210';
+        await fetch(`http://127.0.0.1:${port}/api/warm`, {
+          headers: { 'x-warm-token': warmToken() },
+          signal: AbortSignal.timeout(30000),
+        });
+      } catch {
+        // Gateway down or server not up yet — pages still work, just cold.
+      }
+    })();
+  }, 3000);
+}
+
 export async function register(): Promise<void> {
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    scheduleStartupWarm();
+    // Gateway → Atlas fallback for the cloud (no gateway on Vercel); server only.
+    await import('@/lib/gateway-fallback-register');
+  }
   const dsn = process.env.SENTRY_DSN;
   if (!dsn) return;
   if (process.env.NEXT_RUNTIME !== 'nodejs') return; // server runtime only

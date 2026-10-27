@@ -10,6 +10,7 @@ import {
   Schedule,
   BudgetUsage,
 } from '@/lib/db';
+import { operatorFromRequest } from '@/lib/operator-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,9 +77,20 @@ async function checkGateway(): Promise<CheckResult> {
 
     // In Docker the gateway is reachable via its compose service name, not localhost
     const gatewayUrl = process.env.GATEWAY_MCP_URL ?? 'http://gateway:3100/mcp';
+    // The dashboard is a non-loopback caller on the compose bridge, so /mcp
+    // needs the local-trust header. Without it every 10 s Docker healthcheck
+    // was a gateway 401 (26,470 "auth rejected" WARNs in 3 days, 2026-09-21)
+    // and this tile read "error" while the gateway was perfectly healthy.
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+    };
+    if (process.env.GATEWAY_LOCAL_TOKEN) {
+      headers['x-gateway-local-token'] = process.env.GATEWAY_LOCAL_TOKEN;
+    }
     const res = await fetch(gatewayUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 }),
       signal: controller.signal,
     });
@@ -98,7 +110,9 @@ async function checkGateway(): Promise<CheckResult> {
   }
 }
 
-export async function GET() {
+// Public (the Docker healthchecks only need the status code), so the
+// cross-tenant model counts go to a signed-in operator only (audit L-9, v1 G5).
+export async function GET(req: Request) {
   const [dbResult, gatewayCheck] = await Promise.all([
     checkDatabase(),
     checkGateway(),
@@ -116,13 +130,14 @@ export async function GET() {
     status = 'degraded';
   }
 
+  const operator = await operatorFromRequest(req);
   return NextResponse.json({
     status,
     timestamp: new Date().toISOString(),
     checks: {
       database: dbResult.check,
       gateway: gatewayCheck,
-      models: dbResult.models,
+      ...(operator ? { models: dbResult.models } : {}),
     },
     version: '0.1.0',
   });

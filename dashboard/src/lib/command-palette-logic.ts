@@ -3,7 +3,7 @@
 // product-tour-logic.ts), so the entry-building and filtering rules are
 // unit-testable without a browser.
 //
-// DASHBOARD Cmd-K powerhouse pass: global nav (existing NAV_ENTRIES) + three
+// DASHBOARD Cmd-K power-user pass: global nav (existing NAV_ENTRIES) + three
 // quick-action kinds — jump to a repo, switch tenant, dispatch a task.
 
 export type PaletteEntryKind = 'nav' | 'repo' | 'tenant' | 'action';
@@ -31,11 +31,11 @@ export interface TenantLike {
 const NAV_RAW: Array<Omit<PaletteEntry, 'id' | 'kind' | 'keywords'> & { keywords: string }> = [
   { label: 'Mission Control', hint: 'running · review · up next', href: '/', keywords: 'home status mission control overview' },
   { label: 'Work — Up Next', hint: 'pending queue', href: '/work', keywords: 'tasks queue pending backlog' },
-  { label: 'Work — Needs Review', hint: 'waiting on you', href: '/work?tab=review', keywords: 'review approve ship' },
+  { label: 'Work — Needs You', hint: 'waiting on you', href: '/work?tab=review', keywords: 'review approve ship needs review' },
   { label: 'Work — Scheduled Runs', hint: 'cron schedules', href: '/work?tab=schedules', keywords: 'schedule cron fires runner' },
   { label: 'Work — 10-Day Plans', hint: 'per-repo plans', href: '/work?tab=plans', keywords: 'plan ten day roadmap' },
-  { label: 'Work — Orchestration', hint: 'dispatch engine', href: '/work?tab=orchestration', keywords: 'orchestration dispatch workers history done' },
-  { label: 'Swarm', hint: 'topology picker · live lanes', href: '/swarm', keywords: 'swarm topology hierarchical mesh ring star multi-agent dispatch lanes coordinator' },
+  { label: 'Work — Running', hint: 'dispatch engine', href: '/work?tab=orchestration', keywords: 'orchestration running dispatch workers history done' },
+  { label: 'Swarm', hint: 'live swarms · approve · stop · mailbox', href: '/swarm', keywords: 'swarm approve stop kill mailbox children multi-agent dispatch coordinator' },
   { label: 'Projects', hint: 'cross-repo board · bulk dispatch', href: '/projects', keywords: 'projects cross-repo board bulk dispatch fanout' },
   { label: 'Apps — Directory', hint: 'URLs, mongo, status per app', href: '/apps', keywords: 'apps directory repos urls vercel dns localhost' },
   { label: 'Apps — Repo Health', hint: 'AI/ STATE.md CLAUDE.md', href: '/apps?tab=health', keywords: 'repos health framework compliance' },
@@ -51,6 +51,7 @@ const NAV_RAW: Array<Omit<PaletteEntry, 'id' | 'kind' | 'keywords'> & { keywords
   { label: 'Memory — SONA', hint: 'pattern analytics', href: '/memory', keywords: 'memory sona analytics confidence' },
   { label: 'Memory — Sessions', hint: 'sessions + RAG corpus', href: '/memory?tab=sessions', keywords: 'sessions rag corpus vectors recall' },
   { label: 'Brain — Overview', hint: 'namespaces · branches · commits', href: '/brain', keywords: 'brain namespaces branches commits git memory atoms' },
+  { label: 'Brain tour', hint: 'animated walkthrough + cinematic reel', href: '/tour', keywords: 'tour animation video brain how it works reel walkthrough' },
   { label: 'Brain — Atoms', hint: 'sessions · handoffs · memory', href: '/brain?tab=atoms', keywords: 'brain atoms sessions handoffs memory facts' },
   { label: 'Brain — Stashes', hint: 'frozen context', href: '/brain?tab=stashes', keywords: 'brain stashes frozen context pop resume' },
   { label: 'Brain — Provenance', hint: 'code ↔ memory links', href: '/brain?tab=provenance', keywords: 'brain provenance blame code memory links' },

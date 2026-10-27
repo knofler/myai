@@ -1,0 +1,34 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "baseBranches": ["test"],
+  "labels": ["dependencies"],
+  "schedule": ["before 6am on monday"],
+  "packageRules": [
+    {
+      "description": "Group all minor + patch updates into a single weekly PR — keeps the review queue small; majors below stay ungrouped for individual review.",
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "minor and patch dependency updates"
+    },
+    {
+      "description": "Auto-merge patch-only updates once CI is green — lowest risk update class.",
+      "matchUpdateTypes": ["patch"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Major bumps get one PR each (no grouping, no automerge) — reviewed and verified individually, same discipline as the blueprint_freshness.sh audit.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "automerge": false
+  }
+}

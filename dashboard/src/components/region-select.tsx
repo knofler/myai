@@ -33,7 +33,7 @@ export function RegionSelect({
           </option>
         ))}
       </select>
-      <span className="block text-[11px] text-[rgb(var(--text-muted))] mt-1 leading-relaxed">
+      <span className="block text-label text-[rgb(var(--text-muted))] mt-1 leading-relaxed">
         Where your data and off-hours runner work are pinned and enforced at the gateway. Changing it later is a
         support-assisted move, not self-serve — pick carefully.
       </span>

@@ -247,12 +247,28 @@ bar "banner"
 
 CFG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CFG_BASE="$(basename "$CFG_DIR")"
+# The dot is by ROLE, never by name (v1 G6 P4; same rule as org-statusline.sh):
+# the swarm master's profile 🟣, the bare default 🟡, every other profile 🔵 🟢 🟠 🟤
+# in the master config's order= (then by name).
+ORG_LABEL="${CFG_BASE#.}"; DOT="🟡"
 case "$CFG_BASE" in
-  .claude-museum)   ORG_LABEL="claude-museum";   DOT="🟣" ;;
-  .claude-tech)     ORG_LABEL="claude-tech";     DOT="🔵" ;;
-  .claude-personal) ORG_LABEL="claude-personal"; DOT="🟢" ;;
-  .claude)          ORG_LABEL="claude";          DOT="🟡" ;;
-  *)                ORG_LABEL="$CFG_BASE";       DOT="🟡" ;;
+  .claude-*)
+    _lane="${CFG_BASE#.claude-}"
+    if [ -f "$LIBDIR/swarm_roles.sh" ] && . "$LIBDIR/swarm_roles.sh" 2>/dev/null; then
+      _master="$(role_master_lane 2>/dev/null)"
+      if [ "$_lane" = "$_master" ]; then DOT="🟣"
+      else
+        _i=0; _seen=" "
+        for _n in $(smc_get order 2>/dev/null) $(role_profile_names 2>/dev/null | LC_ALL=C sort); do
+          case "$_n" in "$_master"|default) continue ;; esac
+          case "$_seen" in *" $_n "*) continue ;; esac
+          _seen="$_seen$_n "
+          [ "$_n" = "$_lane" ] && break
+          _i=$((_i+1))
+        done
+        case $((_i % 4)) in 0) DOT="🔵" ;; 1) DOT="🟢" ;; 2) DOT="🟠" ;; 3) DOT="🟤" ;; esac
+      fi
+    fi ;;
 esac
 ORG_NAME=""
 if [ -f "$CFG_DIR/.claude.json" ] && command -v python3 >/dev/null 2>&1; then

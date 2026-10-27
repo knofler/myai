@@ -149,6 +149,13 @@ if [ -n "$EVERY_HOURS" ]; then
 else
     MINUTES=$EVERY_MINUTES; CADENCE="every ${EVERY_MINUTES}m"
 fi
+# Runner profile from the role resolver — never a spelled profile name. Detect
+# first, so a reinstall keeps the profile this host's existing scheduler entry
+# already uses (runner_profile_detect writes runner.conf only when absent).
+# shellcheck source=scripts/lib/swarm_roles.sh
+. "$SCRIPT_DIR/lib/swarm_roles.sh"
+bash "$SCRIPT_DIR/lib/runner_profile_detect.sh" >/dev/null 2>&1 || true
+RUNNER_PROFILE="$(role_runner_profile)"
 RUN_PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 if [ "$BACKEND" = "systemd" ]; then
@@ -161,7 +168,7 @@ Description=myAI CLI task runner — claim one slot, work one queued task
 Type=oneshot
 ExecStart=/bin/bash $RUNNER
 Environment=PATH=$RUN_PATH
-Environment=CLAUDE_CONFIG_DIR=%h/.claude-tech
+Environment=CLAUDE_CONFIG_DIR=$RUNNER_PROFILE
 StandardOutput=append:$LOG_DIR/runner.out
 StandardError=append:$LOG_DIR/runner.err
 UNIT_EOF
@@ -197,7 +204,7 @@ else
         echo "ERROR: cron can't express ${MINUTES}m cleanly — pick a divisor of 60, a whole-hour multiple, or use --systemd." >&2
         exit 1
     fi
-    CRON_LINE="$CRON_EXPR PATH=$RUN_PATH CLAUDE_CONFIG_DIR=\$HOME/.claude-tech /bin/bash $RUNNER >> $LOG_DIR/runner.out 2>> $LOG_DIR/runner.err $CRON_MARKER"
+    CRON_LINE="$CRON_EXPR PATH=$RUN_PATH CLAUDE_CONFIG_DIR=$RUNNER_PROFILE /bin/bash $RUNNER >> $LOG_DIR/runner.out 2>> $LOG_DIR/runner.err $CRON_MARKER"
     # capture BEFORE piping to `crontab -` (see uninstall note — same race)
     new_tab=$(cron_lines_without_ours; echo "$CRON_LINE")
     printf '%s\n' "$new_tab" | crontab -

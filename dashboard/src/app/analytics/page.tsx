@@ -14,6 +14,7 @@ import { fmtUsd } from '@/lib/format';
 import { getActiveTenant, tenantFilter } from '@/lib/tenant';
 import { StatCard, Card, EmptyState } from '@/components/ui/card';
 import { PageHeader } from '@/components/page-header';
+import { plural, verb, joinClauses, rate } from '@/lib/summary';
 import AutoRefresh from '@/components/auto-refresh';
 import Link from 'next/link';
 import { dbUnreachableHint } from '@/lib/db-hint';
@@ -116,6 +117,43 @@ function lastNDates(n: number): string[] {
   return out;
 }
 
+/* ── The one-line answer (§5.1) ─────────────────────── */
+
+function analyticsSummary(a: {
+  days: number;
+  done: number;
+  perDay: number;
+  resolved: number;
+  successRate: number;
+  spend: number;
+  savedTokens: number;
+  working: number;
+  blocked: number;
+}): string {
+  // `blocked` is in the guard deliberately: blocked work is the one thing on
+  // this page that needs a person, so a quiet window must never swallow it.
+  if (a.done === 0 && a.spend === 0 && a.savedTokens === 0 && a.working === 0 && a.blocked === 0) {
+    return `Nothing has run in the last ${a.days} days. Throughput, spend and savings appear here as your AI works.`;
+  }
+  // `done`/`perDay` are windowed; `successRate` is ALL-TIME (doneTotal and
+  // blockedTotal are unwindowed counts). Saying both in one clause read as if
+  // the rate described the window, so the rate gets its own sentence that says
+  // which span it covers.
+  const head = a.done > 0
+    ? `Your fleet finished ${plural(a.done, 'task')} in the last ${a.days} days, about ${rate(a.perDay)} a day.`
+    : `Your fleet has not finished a task in the last ${a.days} days.`;
+  const rateSentence = a.resolved > 0 ? ` Across all time, ${a.successRate} percent of the work that resolved succeeded.` : '';
+  const clauses = joinClauses([
+    a.spend > 0 && `spent ${fmtUsd(a.spend)}`,
+    a.savedTokens > 0 && `saved ${fmtTokens(a.savedTokens)} cold-start tokens this month`,
+    a.working > 0 && `has ${plural(a.working, 'task')} running right now`,
+  ]);
+  const blockedTail = a.blocked > 0
+    ? ` ${plural(a.blocked, 'task')} ${verb(a.blocked, 'is', 'are')} blocked.`
+    : '';
+  return `${clauses ? `${head} It ${clauses}.` : head}${rateSentence}${blockedTail}`;
+}
+
 export default async function AnalyticsPage() {
   let dbError = false;
   try { await connectDB(); } catch { dbError = true; }
@@ -123,7 +161,12 @@ export default async function AnalyticsPage() {
   if (dbError) {
     return (
       <div className="max-w-7xl mx-auto">
-        <PageHeader title="Analytics" subtitle="Throughput, plan progress, runner activity, and cost trend." />
+        <PageHeader
+          icon="analytics"
+          title="Analytics"
+          summary="Analytics cannot be read right now because the database is unreachable."
+          subtitle="Throughput, plan progress, runner activity, and cost trend."
+        />
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">
           {dbUnreachableHint('analytics')}
         </div>
@@ -395,8 +438,20 @@ export default async function AnalyticsPage() {
     <div className="max-w-7xl mx-auto">
       <AutoRefresh seconds={30} />
       <PageHeader
+        icon="analytics"
         title="Analytics"
-        subtitle="Throughput, plan progress, runner activity, cost trend, and cold-start tokens saved across the fleet."
+        summary={analyticsSummary({
+          days: N,
+          done: tputTotal,
+          perDay: tputAvg,
+          resolved,
+          successRate,
+          spend: spendTotal,
+          savedTokens: contMonth.tokens,
+          working: workingNow,
+          blocked: blockedTotal,
+        })}
+        subtitle={`Last ${N} days · throughput, plan progress, runner activity, cost trend and cold-start tokens saved across the fleet`}
       />
 
       {/* ── Token economics — what you burn vs what the brain saves (front & centre) ── */}
@@ -495,16 +550,17 @@ export default async function AnalyticsPage() {
 
       {/* Headline stats */}
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-8">
-        <StatCard label={`Tasks done (${N}d)`} value={tputTotal} sub={`~${tputAvg.toFixed(1)}/day`} accent="green" />
-        <StatCard label="Task success rate" value={`${successRate}%`} sub={`${doneTotal} done · ${blockedTotal} blocked`} accent={successRate >= 90 ? 'green' : 'yellow'} />
-        <StatCard label="Runner success" value={`${runnerRate}%`} sub={`${totalRuns} runs · ${totalErrs} err`} accent={runnerRate >= 90 ? 'green' : 'yellow'} />
-        <StatCard label={`Spend (${N}d)`} value={fmtUsd(spendTotal)} sub={`${workingNow} working now`} accent="blue" />
-        <StatCard label="Tokens saved (month)" value={fmtTokens(contMonth.tokens)} sub={`${contMonth.boots} boots · ${fmtTokens(contAll.tokens)} all-time`} accent="green" />
+        <StatCard label={`Tasks done (${N}d)`} value={tputTotal} sub={`~${tputAvg.toFixed(1)}/day`} icon="check" tone={tputTotal > 0 ? 'ok' : 'muted'} />
+        <StatCard label="Task success rate" value={`${successRate}%`} sub={`${doneTotal} done · ${blockedTotal} blocked`} icon="analytics" tone={resolved === 0 ? 'muted' : successRate >= 90 ? 'ok' : 'warn'} />
+        <StatCard label="Runner success" value={`${runnerRate}%`} sub={`${totalRuns} runs · ${totalErrs} err`} icon="runs" tone={totalRuns === 0 ? 'muted' : runnerRate >= 90 ? 'ok' : 'warn'} />
+        <StatCard label={`Spend (${N}d)`} value={fmtUsd(spendTotal)} sub={`${workingNow} working now`} icon="billing" tone="muted" />
+        <StatCard label="Tokens saved (month)" value={fmtTokens(contMonth.tokens)} sub={`${contMonth.boots} boots · ${fmtTokens(contAll.tokens)} all-time`} icon="savings" tone={contMonth.tokens > 0 ? 'ok' : 'muted'} />
         <StatCard
           label="Fallback lane usage"
           value={lane7.total > 0 ? `${lane7.pct}%` : '—'}
           sub={`7d: ${lane7.fallback}/${lane7.total} · 30d: ${lane30.total > 0 ? `${lane30.pct}%` : '—'} (${lane30.fallback}/${lane30.total})`}
-          accent={lane7.total === 0 ? 'gray' : lane7.pct >= 50 ? 'yellow' : 'blue'}
+          icon="swarm"
+          tone={lane7.total === 0 ? 'muted' : lane7.pct >= 50 ? 'warn' : 'accent'}
         />
       </div>
 
@@ -518,14 +574,14 @@ export default async function AnalyticsPage() {
                 const isToday = d.date === dates[dates.length - 1];
                 return (
                   <div key={d.date} className="flex-1 flex flex-col items-center gap-1 group">
-                    <span className="text-[10px] font-mono text-[rgb(var(--text-muted))] group-hover:text-[rgb(var(--text-primary))]">{d.count > 0 ? d.count : ''}</span>
+                    <span className="text-label font-mono text-[rgb(var(--text-muted))] group-hover:text-[rgb(var(--text-primary))]">{d.count > 0 ? d.count : ''}</span>
                     <div className="w-full flex items-end justify-center" style={{ height: '110px' }}>
                       <div
                         className={`w-full rounded-t ${isToday ? 'bg-teal-400/70' : 'bg-teal-600/40'} group-hover:bg-teal-400/70 transition-colors`}
                         style={{ height: `${Math.max(h, d.count > 0 ? 4 : 0)}%` }}
                       />
                     </div>
-                    <span className={`text-[9px] font-mono ${isToday ? 'text-teal-400' : 'text-zinc-600'}`}>{d.date.slice(5)}</span>
+                    <span className={`text-label font-mono ${isToday ? 'text-teal-400' : 'text-zinc-600'}`}>{d.date.slice(5)}</span>
                   </div>
                 );
               })}
@@ -565,12 +621,12 @@ export default async function AnalyticsPage() {
           <div className="p-5 space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="rounded-lg bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] p-3">
-                <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider">Sessions</p>
+                <p className="text-label text-[rgb(var(--text-muted))] uppercase tracking-wider">Sessions</p>
                 <p className="text-2xl font-bold text-[rgb(var(--text-primary))] mt-1">{sessionTotal}</p>
                 <p className="text-xs text-[rgb(var(--text-muted))] mt-1">{sessionClosed} closed</p>
               </div>
               <div className="rounded-lg bg-[rgb(var(--bg-page))]/60 border border-[rgb(var(--border-subtle))] p-3">
-                <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider">Schedule runs</p>
+                <p className="text-label text-[rgb(var(--text-muted))] uppercase tracking-wider">Schedule runs</p>
                 <p className="text-2xl font-bold text-[rgb(var(--text-primary))] mt-1">{totalRuns}</p>
                 <p className="text-xs text-[rgb(var(--text-muted))] mt-1">{totalErrs} errors</p>
               </div>
@@ -789,14 +845,14 @@ export default async function AnalyticsPage() {
                 const isToday = d._id === dates[dates.length - 1];
                 return (
                   <div key={d._id} className="flex-1 flex flex-col items-center gap-1 group">
-                    <span className="text-[10px] font-mono text-[rgb(var(--text-muted))] group-hover:text-[rgb(var(--text-primary))]">{d.tokens > 0 ? fmtTokens(d.tokens) : ''}</span>
+                    <span className="text-label font-mono text-[rgb(var(--text-muted))] group-hover:text-[rgb(var(--text-primary))]">{d.tokens > 0 ? fmtTokens(d.tokens) : ''}</span>
                     <div className="w-full flex items-end justify-center" style={{ height: '84px' }}>
                       <div
                         className={`w-full rounded-t ${isToday ? 'bg-emerald-400/70' : 'bg-emerald-600/40'} group-hover:bg-emerald-400/70 transition-colors`}
                         style={{ height: `${Math.max(h, d.tokens > 0 ? 4 : 0)}%` }}
                       />
                     </div>
-                    <span className={`text-[9px] font-mono ${isToday ? 'text-emerald-400' : 'text-zinc-600'}`}>{d._id.slice(5)}</span>
+                    <span className={`text-label font-mono ${isToday ? 'text-emerald-400' : 'text-zinc-600'}`}>{d._id.slice(5)}</span>
                   </div>
                 );
               })}
@@ -869,7 +925,7 @@ export default async function AnalyticsPage() {
               <EmptyState>No calls metered yet — latency fills in as tools are invoked (needs a gateway rebuild to activate the meter).</EmptyState>
             ) : (
               <div className="space-y-1">
-                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-600 pb-1 border-b border-[rgb(var(--border-subtle))]">
+                <div className="flex items-center gap-2 text-label uppercase tracking-wider text-zinc-600 pb-1 border-b border-[rgb(var(--border-subtle))]">
                   <span className="flex-1">Tool</span>
                   <span className="w-12 text-right">calls</span>
                   <span className="w-14 text-right">p95</span>

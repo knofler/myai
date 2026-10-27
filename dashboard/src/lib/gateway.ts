@@ -23,6 +23,30 @@ export function gatewayHeaders(): Record<string, string> {
   return h;
 }
 
+/**
+ * Cloud fallback (operator decision 2026-10-02, "Atlas, no tunnel"): when the
+ * gateway is UNREACHABLE — always the case on Vercel, where the office-Mac
+ * gateway is deliberately not exposed — answer the tool from Atlas instead.
+ * The Atlas implementation (lib/gateway-atlas.ts: mongoose + next/headers) is
+ * SERVER-ONLY and this module is also bundled into client pages, so it is never
+ * imported here: instrumentation.ts registers it on globalThis at server boot
+ * (lib/gateway-fallback-register.ts). Tool-level errors from a reachable
+ * gateway are never masked — only unreachable / 5xx falls back.
+ */
+export const GATEWAY_FALLBACK_KEY = '__myaiGatewayAtlasFallback';
+type GatewayFallback = (toolName: string, args: Record<string, unknown>) => Promise<unknown | null>;
+
+async function atlasFallback<T>(toolName: string, args: Record<string, unknown>): Promise<T | null> {
+  const fb = (globalThis as Record<string, unknown>)[GATEWAY_FALLBACK_KEY] as GatewayFallback | undefined;
+  if (typeof fb !== 'function') return null;
+  try {
+    return (await fb(toolName, args)) as T | null;
+  } catch (err) {
+    console.warn(`[myAI] Atlas fallback ${toolName}:`, err instanceof Error ? err.message : 'failed');
+    return null;
+  }
+}
+
 export async function callGateway<T>(toolName: string, args: Record<string, unknown> = {}): Promise<T | null> {
   try {
     const res = await fetch(GATEWAY_URL, {
@@ -37,7 +61,7 @@ export async function callGateway<T>(toolName: string, args: Record<string, unkn
       cache: 'no-store',
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) return res.status >= 500 ? atlasFallback<T>(toolName, args) : null;
     const json = await res.json();
     const content = json?.result?.content;
     if (!content || !Array.isArray(content) || content.length === 0) return null;
@@ -53,7 +77,8 @@ export async function callGateway<T>(toolName: string, args: Record<string, unkn
     if (process.env.NODE_ENV === 'development') {
       console.warn(`[myAI] Gateway ${toolName}:`, err instanceof Error ? err.message : 'fetch failed');
     }
-    return null;
+    // Network failure / timeout = gateway unreachable → Atlas.
+    return atlasFallback<T>(toolName, args);
   }
 }
 
@@ -93,7 +118,13 @@ export async function callGatewayAsTenant<T>(
       cache: 'no-store',
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return { ok: false, error: `gateway HTTP ${res.status}` };
+    if (!res.ok) {
+      if (res.status >= 500) {
+        const data = await atlasFallback<T>(toolName, args);
+        if (data !== null) return { ok: true, data };
+      }
+      return { ok: false, error: `gateway HTTP ${res.status}` };
+    }
     const json = await res.json();
     if (json?.error) return { ok: false, error: json.error.message || 'gateway error' };
     const content = json?.result?.content;
@@ -110,6 +141,8 @@ export async function callGatewayAsTenant<T>(
       return { ok: false, error: 'malformed gateway response' };
     }
   } catch (err) {
+    const data = await atlasFallback<T>(toolName, args);
+    if (data !== null) return { ok: true, data };
     return { ok: false, error: err instanceof Error ? err.message : 'gateway unreachable' };
   }
 }

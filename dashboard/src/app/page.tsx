@@ -1,24 +1,35 @@
-// Mission Control — the only place you start. Answers the operator's three
-// questions without scrolling: what's running, what needs me, what's next.
-// Header strip: Fable window chip + health dots. Footer strip: next fires +
-// fleet health + today's numbers.
+// Today — the operator's home (dashboard redesign phase 4, operator GO
+// 2026-10-21). It answers "what needs me today" before anything else:
+//   1. Needs you · today — what the swarm is waiting on (client: swarm_live,
+//      the same rules and cards as /swarm's Control Room);
+//   2. older runner reviews — collapsed by age, so 17-day-old reviews don't
+//      bury today's decisions (they used to be the page's only "decision");
+//   3. what's running now;
+//   4. your Macs — each Mac's last 08:00 boot verdict, worst first, with its age
+//      (a silent Mac shows last week's report, and says so).
+// Side column: the swarm in one card, and the queue (waiting / running /
+// stuck / blocked) — replacing the four count tiles.
 
 import Link from 'next/link';
-import { connectDB, Task, Schedule, RepoCard, BudgetUsage } from '@/lib/db';
+import { Suspense } from 'react';
+import { connectDB, Task, RepoCard } from '@/lib/db';
 import { callGateway, fetchRoutingConfig, type RoutingConfig } from '@/lib/gateway';
 import { getActiveTenant, tenantFilter } from '@/lib/tenant';
-import { timeAgo, timeUntil, fmtSydney, fmtUsd } from '@/lib/format';
-import { PriorityBadge, ModelBadge, LevelDot, Badge } from '@/components/ui/badge';
-import { Card, EmptyState } from '@/components/ui/card';
-import { SydneyClock } from '@/components/sydney-clock';
-import { SavingsHero } from '@/components/savings-hero';
-import { getSavingsTrend, type SavingsTrend } from '@/lib/savings';
+import { timeAgo } from '@/lib/format';
+import { PriorityBadge, ModelBadge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
 import AutoRefresh from '@/components/auto-refresh';
 import { OnboardingChecklist } from '@/components/onboarding-checklist';
 import { CoachMarks } from '@/components/coach-marks';
 import { EmailVerifyBanner } from '@/components/email-verify-banner';
 import { ReconsentBanner } from '@/components/reconsent-banner';
+import { AskBar } from '@/components/home/ask-bar';
 import { buildOnboardingSteps } from '@/lib/onboarding-checklist';
+import { StageRail } from '@/components/stage-rail';
+import { TONE, type Tone } from '@/components/ui/tone';
+import { SectionHead } from '@/components/ui/section-head';
+import { TodaySwarmNeeds, TodaySwarmSummary } from '@/components/home/today-swarm';
+import { bootAgeDays, readBootReports, type BootReport } from '@/lib/boot-reports';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,19 +47,8 @@ interface TaskDoc {
   createdAt?: Date;
 }
 
-interface ScheduleDoc {
-  scheduleId: string;
-  name: string;
-  repo?: string;
-  nextRun?: Date;
-  lastRun?: Date;
-  lastStatus: string;
-  lastResultSummary?: string;
-}
-
 interface RepoCardDoc {
   repoName: string;
-  lastStatusLevel?: 'ok' | 'warn' | 'error' | 'unknown';
 }
 
 function effectiveModel(task: TaskDoc, routing: RoutingConfig | null): string {
@@ -58,9 +58,63 @@ function effectiveModel(task: TaskDoc, routing: RoutingConfig | null): string {
   return (tier ? routing?.tiers?.[tier]?.model : routing?.tiers?.standard?.model) ?? 'claude-sonnet-4-6';
 }
 
-// First-run quickstart — a zero-repo install has nothing to put in the three
-// columns, so show the three actions that bring Mission Control to life
-// instead of six empty boxes. Each card deep-links to the guided wizard.
+/** "Good evening" by the operator's clock (Sydney), the same tz the rest of the
+ *  dashboard formats in (lib/format fmtSydney). */
+function greeting(now = new Date()): string {
+  const hour = Number(
+    new Intl.DateTimeFormat('en-AU', { hour: 'numeric', hour12: false, timeZone: 'Australia/Sydney' }).format(now),
+  );
+  if (hour < 5) return 'Still up?';
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+/** The one-line answer. Counts, in words, never a table. What needs you is
+ *  the section right below — not a count of every old review in the queue. */
+function handledLine(handled: number, running: number): string {
+  if (handled === 0 && running === 0) return 'Your AI is standing by — nothing has run in the last 24 hours.';
+  const parts: string[] = [];
+  if (handled > 0) parts.push(`handled ${handled} ${handled === 1 ? 'thing' : 'things'} in the last 24 hours`);
+  if (running > 0) parts.push(`is working on ${running} now`);
+  return `Your AI ${parts.join(' and ')}.`;
+}
+
+const VERDICT_TONE: Record<BootReport['verdict'], Tone> = { RED: 'err', AMBER: 'warn', UNKNOWN: 'muted', GREEN: 'ok' };
+
+function bootWhen(r: BootReport): string {
+  const age = bootAgeDays(r);
+  if (age === null) return 'boot time unknown';
+  if (age === 0) return 'booted today';
+  if (age === 1) return 'last booted yesterday';
+  return `last booted ${age} days ago`;
+}
+
+function MacCard({ r }: { r: BootReport }) {
+  const tone = VERDICT_TONE[r.verdict];
+  const stale = (bootAgeDays(r) ?? 0) >= 2;
+  const first = r.problems[0];
+  return (
+    <li className="space-y-2 rounded-2xl border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))] p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-meta font-semibold text-[rgb(var(--text-primary))]">{r.host}</span>
+        <span className={`ml-auto rounded-full px-2 py-0.5 text-label font-semibold ${TONE[tone].box} ${TONE[tone].glyph}`}>
+          {r.verdict === 'UNKNOWN' ? 'No verdict' : r.verdict.charAt(0) + r.verdict.slice(1).toLowerCase()}
+        </span>
+      </div>
+      <p className={`text-label ${stale ? 'font-medium text-[rgb(var(--warn))]' : 'text-[rgb(var(--text-muted))]'}`}>
+        {bootWhen(r)} · {r.summary}
+      </p>
+      {first && (
+        <p className="text-meta text-[rgb(var(--text-secondary))]">
+          <span className="font-medium">{first.phase}:</span> {first.detail}
+        </p>
+      )}
+    </li>
+  );
+}
+
+// ── First run ──────────────────────────────────────────────────────────────
 const QUICKSTARTS = [
   {
     title: 'Register your repos',
@@ -82,27 +136,26 @@ const QUICKSTARTS = [
 function FirstRunQuickstart() {
   return (
     <Card
-      accent="emerald"
-      title="Welcome — nothing here yet"
-      meta={<Link href="/welcome/start" className="hover:text-emerald-400">guided first run →</Link>}
+      title="Nothing here yet"
+      meta={<Link href="/welcome/start" className="text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))]">guided first run →</Link>}
     >
-      <div className="p-4 space-y-4">
-        <p className="text-sm text-[rgb(var(--text-secondary))]">
+      <div className="space-y-4 p-4">
+        <p className="text-body text-[rgb(var(--text-secondary))]">
           No repos or tasks are registered yet. Run one of these from your terminal, or take the guided
           four-step first run — Mission Control fills in as soon as the first repo card or task lands.
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           {QUICKSTARTS.map((q) => (
             <Link
               key={q.title}
               href="/welcome/start"
-              className="block p-4 rounded-lg border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))]/60 hover:border-emerald-700 transition-colors"
+              className="block rounded-xl bg-[rgb(var(--bg-canvas))] p-4 transition-colors hover:bg-[rgb(var(--bg-hover))]"
             >
-              <p className="text-sm font-medium text-[rgb(var(--text-primary))]">{q.title} →</p>
-              <code className="mt-2 block px-2.5 py-1.5 rounded-md bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] text-xs text-teal-300 font-mono overflow-x-auto whitespace-nowrap">
+              <p className="text-body font-medium text-[rgb(var(--text-primary))]">{q.title} →</p>
+              <code className="mt-2 block overflow-x-auto whitespace-nowrap rounded-md bg-[rgb(var(--bg-surface))] px-2.5 py-1.5 font-mono text-label text-[rgb(var(--text-primary))]">
                 {q.command}
               </code>
-              <p className="mt-2 text-xs text-[rgb(var(--text-muted))]">{q.desc}</p>
+              <p className="mt-2 text-meta text-[rgb(var(--text-muted))]">{q.desc}</p>
             </Link>
           ))}
         </div>
@@ -111,117 +164,237 @@ function FirstRunQuickstart() {
   );
 }
 
-function ColumnRow({ top, bottom, right }: { top: React.ReactNode; bottom: React.ReactNode; right?: React.ReactNode }) {
+// ── Queue card ─────────────────────────────────────────────────────────────
+// Colour = meaning (DESIGN_LANGUAGE §2): stuck/blocked amber because they need
+// a person; waiting/running neutral. Each row opens the matching Work view.
+
+function QueueRow({ href, label, count, warn = false }: { href: string; label: string; count: number; warn?: boolean }) {
   return (
-    <li className="px-4 py-2.5 flex items-center justify-between gap-3 hover:bg-[rgb(var(--bg-hover))]/30">
-      <div className="min-w-0">
-        <p className="text-sm text-[rgb(var(--text-primary))] truncate">{top}</p>
-        <p className="text-xs text-[rgb(var(--text-muted))] truncate mt-0.5">{bottom}</p>
-      </div>
-      {right && <div className="shrink-0 text-right">{right}</div>}
-    </li>
+    <Link
+      href={href}
+      className={`flex min-h-tap items-center justify-between rounded-xl px-3 text-meta transition-colors hover:bg-[rgb(var(--bg-hover))] ${
+        warn && count > 0 ? 'text-[rgb(var(--warn))]' : 'text-[rgb(var(--text-secondary))]'
+      }`}
+    >
+      <span>{label}</span>
+      <span className="font-mono tabular-nums">{count}</span>
+    </Link>
   );
+}
+
+// ── Currently running ──────────────────────────────────────────────────────
+// StageRail lives in @/components/stage-rail (shared with the task detail page).
+// SectionHead lives in @/components/ui/section-head (extracted verbatim, so
+// every page's section heading is this one).
+
+function Quiet({ children }: { children: React.ReactNode }) {
+  return <p className="rounded-2xl bg-[rgb(var(--bg-surface))]/60 px-4 py-5 text-center text-meta text-[rgb(var(--text-muted))]">{children}</p>;
 }
 
 export default async function MissionControl() {
   let dbOk = false;
   let working: TaskDoc[] = [];
   let review: TaskDoc[] = [];
-  let pending: TaskDoc[] = [];
+  let workingTotal = 0;
+  let reviewTotal = 0;
   let pendingTotal = 0;
-  let nextFires: ScheduleDoc[] = [];
-  let lastRuns: ScheduleDoc[] = [];
+  let handled = 0;
   let fleet: RepoCardDoc[] = [];
-  let todaySpend = 0;
   let taskTotal = 0;
   let doneCount = 0;
-  let savingsTrend: SavingsTrend | null = null;
+  let reviewOld = 0;
+  let oldestReview: TaskDoc | undefined;
+  let stuckTotal = 0;
+  let blockedTotal = 0;
 
-  const startOfDayUTC = (() => {
-    const now = new Date();
-    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  })();
+  const dayAgo = new Date(Date.now() - 86_400_000);
+  const weekAgo = new Date(Date.now() - 7 * 86_400_000);
 
   try {
     await connectDB();
     dbOk = true;
     const tenantId = await getActiveTenant();
     const tf = tenantFilter(tenantId);
-    const [w, r, p, pt, nf, lr, fl, spend, tt, dc, st] = await Promise.all([
-      Task.find({ ...tf, status: 'working' }).sort({ startedAt: 1 }).limit(7).lean() as unknown as Promise<TaskDoc[]>,
-      Task.find({ ...tf, status: 'review' }).sort({ updatedAt: -1 }).limit(7).lean() as unknown as Promise<TaskDoc[]>,
-      Task.find({ ...tf, status: 'pending' }).sort({ priority: 1, createdAt: 1 }).limit(7).lean() as unknown as Promise<TaskDoc[]>,
+    const [w, r, wt, rt, pt, h, fl, tt, dc] = await Promise.all([
+      Task.find({ ...tf, status: 'working' }).sort({ startedAt: 1 }).limit(1).lean() as unknown as Promise<TaskDoc[]>,
+      Task.find({ ...tf, status: 'review' }).sort({ priority: 1, updatedAt: -1 }).limit(1).lean() as unknown as Promise<TaskDoc[]>,
+      Task.countDocuments({ ...tf, status: 'working' }) as Promise<number>,
+      Task.countDocuments({ ...tf, status: 'review' }) as Promise<number>,
       Task.countDocuments({ ...tf, status: 'pending' }) as Promise<number>,
-      Schedule.find({ ...tf, enabled: true, nextRun: { $ne: null } }).sort({ nextRun: 1 }).limit(4).lean() as unknown as Promise<ScheduleDoc[]>,
-      Schedule.find({ ...tf, lastRun: { $ne: null } }).sort({ lastRun: -1 }).limit(1).lean() as unknown as Promise<ScheduleDoc[]>,
-      RepoCard.find({ ...tf }).select('repoName lastStatusLevel').sort({ repoName: 1 }).lean() as unknown as Promise<RepoCardDoc[]>,
-      BudgetUsage.aggregate([
-        { $match: { ...tf, createdAt: { $gte: startOfDayUTC } } },
-        { $group: { _id: null, total: { $sum: '$costUsd' } } },
-      ]) as Promise<Array<{ total: number }>>,
+      Task.countDocuments({ ...tf, status: 'done', completedAt: { $gte: dayAgo } }) as Promise<number>,
+      RepoCard.find({ ...tf }).select('repoName').sort({ repoName: 1 }).lean() as unknown as Promise<RepoCardDoc[]>,
       Task.countDocuments({ ...tf }) as Promise<number>,
       Task.countDocuments({ ...tf, status: 'done' }) as Promise<number>,
-      getSavingsTrend(tf),
     ]);
-    working = w; review = r; pending = p; pendingTotal = pt;
-    nextFires = nf; lastRuns = lr; fleet = fl;
-    todaySpend = spend[0]?.total ?? 0;
-    taskTotal = tt; doneCount = dc;
-    savingsTrend = st;
+    working = w; review = r;
+    workingTotal = wt; reviewTotal = rt; pendingTotal = pt; handled = h;
+    fleet = fl; taskTotal = tt; doneCount = dc;
+    const [ro, oldest, st, bl] = await Promise.all([
+      Task.countDocuments({ ...tf, status: 'review', updatedAt: { $lt: weekAgo } }) as Promise<number>,
+      Task.find({ ...tf, status: 'review' }).sort({ updatedAt: 1 }).limit(1).lean() as unknown as Promise<TaskDoc[]>,
+      Task.countDocuments({ ...tf, status: 'dead_letter' }) as Promise<number>,
+      Task.countDocuments({ ...tf, status: 'blocked' }) as Promise<number>,
+    ]);
+    reviewOld = ro; oldestReview = oldest[0]; stuckTotal = st; blockedTotal = bl;
   } catch {
     // Mongo down — render the shell with empty states.
   }
 
-  const [routing, health] = await Promise.all([
+  const [routing, health, macs] = await Promise.all([
     fetchRoutingConfig(),
     callGateway<{ mongodb?: { connected?: boolean } }>('health_status'),
+    readBootReports(),
   ]);
-  const fable = routing?.fableWindow;
-  const fableDaysLeft = fable?.active
-    ? Math.max(0, Math.ceil((new Date(fable.until).getTime() - Date.now()) / 86_400_000))
-    : 0;
-  const lastRun = lastRuns[0];
+  const healthy = Boolean(health) && dbOk;
 
   // Fresh install: db reachable but no repo cards and no tasks anywhere.
-  // (Mongo down is an outage, not a first run — keep the normal shell then.)
-  const firstRun =
-    dbOk && fleet.length === 0 && working.length === 0 && review.length === 0 && pendingTotal === 0;
+  const firstRun = dbOk && fleet.length === 0 && taskTotal === 0;
+  const running = working[0];
+  const decision = review[0];
 
   return (
-    <div className="max-w-7xl mx-auto space-y-5">
+    <div className="mx-auto max-w-6xl space-y-6">
       <AutoRefresh seconds={15} />
 
-      {/* ── Header strip ──────────────────────────────────────── */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-brand-orange tracking-tight">Mission Control</h1>
-          <p className="text-sm text-[rgb(var(--text-muted))] mt-0.5">What&apos;s running · what needs you · what&apos;s next — live, 15s refresh</p>
+      {/* ── The answer ─────────────────────────────────────────── */}
+      <header className="space-y-1">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h1 className="text-title font-bold tracking-tight text-[rgb(var(--text-primary))]">{greeting()}</h1>
+          <Link
+            href="/status"
+            className={`inline-flex min-h-tap items-center gap-1.5 rounded-full px-3 text-label font-medium ${
+              healthy ? 'bg-[rgb(var(--accent))]/15 text-[rgb(var(--accent))]' : 'bg-[rgb(var(--warn))]/15 text-[rgb(var(--warn))]'
+            }`}
+          >
+            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${healthy ? 'bg-[rgb(var(--accent))]' : 'bg-[rgb(var(--warn))]'}`} />
+            {healthy ? 'System healthy' : 'Check system'}
+          </Link>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {fable?.active && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-purple-500/15 border border-purple-500/40 text-xs font-medium text-purple-300">
-              FABLE FREE · {fableDaysLeft}d left
-            </span>
-          )}
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[rgb(var(--bg-hover))]/80 border border-zinc-700/60 text-xs text-[rgb(var(--text-secondary))]">
-            <LevelDot level={health ? 'ok' : 'error'} className="!w-1.5 !h-1.5" /> gateway
-          </span>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[rgb(var(--bg-hover))]/80 border border-zinc-700/60 text-xs text-[rgb(var(--text-secondary))]">
-            <LevelDot level={dbOk ? 'ok' : 'error'} className="!w-1.5 !h-1.5" /> mongo
-          </span>
-          <SydneyClock />
-          <span className="hidden md:inline-flex items-center px-2 py-1 rounded-md bg-[rgb(var(--bg-hover))]/50 border border-zinc-700/40 text-[10px] text-[rgb(var(--text-muted))]">⌘K</span>
-        </div>
-      </div>
+        <p className="text-body text-[rgb(var(--text-secondary))]">{handledLine(handled, workingTotal)}</p>
+      </header>
+
+      <Suspense fallback={null}>
+        <AskBar repos={fleet.map((c) => c.repoName)} />
+      </Suspense>
 
       <EmailVerifyBanner />
       <ReconsentBanner />
 
+      {firstRun ? (
+        <FirstRunQuickstart />
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(260px,320px)]">
+        <div className="min-w-0 space-y-6">
+          {/* ── What needs you today (the swarm) ─────────────────── */}
+          <TodaySwarmNeeds />
+
+          {/* ── Older runner reviews, collapsed by age ───────────── */}
+          {reviewTotal > 0 && (
+            <details className="group rounded-2xl border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))] p-4">
+              <summary className="flex min-h-tap cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 text-meta text-[rgb(var(--text-secondary))]">
+                <span className="font-medium text-[rgb(var(--text-primary))]">Runner reviews</span>
+                <span>
+                  {reviewTotal} waiting
+                  {reviewOld > 0 ? ` · ${reviewOld} older than 7 days` : ''}
+                  {oldestReview?.updatedAt ? ` · oldest ${timeAgo(oldestReview.updatedAt)}` : ''}
+                </span>
+                <span aria-hidden="true" className="ml-auto text-[rgb(var(--text-muted))] group-open:rotate-90">›</span>
+              </summary>
+              {decision && (
+                <div className="mt-4 flex items-start gap-3 border-t border-[rgb(var(--border-subtle))] pt-4">
+                  <PriorityBadge priority={decision.priority} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-body font-medium text-[rgb(var(--text-primary))]">{decision.title}</p>
+                    <p className="mt-0.5 truncate text-meta text-[rgb(var(--text-secondary))]">
+                      {decision.assignedAgent ?? '—'} · {decision.repo} · ready {timeAgo(decision.updatedAt)}
+                    </p>
+                  </div>
+                </div>
+              )}
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Link
+                  href="/work?tab=review"
+                  className="flex min-h-tap flex-1 items-center justify-center rounded-xl bg-[rgb(var(--bg-canvas))] px-3 text-meta font-medium text-[rgb(var(--text-secondary))] transition-colors hover:text-[rgb(var(--text-primary))]"
+                >
+                  Review by repo
+                </Link>
+                {decision && (
+                  <Link
+                    href={`/work/${encodeURIComponent(decision.taskId)}`}
+                    className="flex min-h-tap flex-1 items-center justify-center rounded-xl bg-[rgb(var(--accent))] px-3 text-meta font-semibold text-[rgb(var(--accent-fg))] transition-opacity hover:opacity-90"
+                  >
+                    Review the top one →
+                  </Link>
+                )}
+              </div>
+            </details>
+          )}
+
+          {/* ── Currently running ────────────────────────────────── */}
+          <section className="space-y-3">
+            <SectionHead title="Currently running" count={workingTotal} href="/work?tab=orchestration" />
+            {running ? (
+              <Link
+                href={`/work/${encodeURIComponent(running.taskId)}`}
+                className="tap-press block rounded-2xl border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))] p-4 transition-colors hover:border-[rgb(var(--border-strong))]"
+              >
+                <div className="flex items-start gap-3">
+                  <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[rgb(var(--accent))]/15 text-[rgb(var(--accent))]">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-current" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-body font-medium text-[rgb(var(--text-primary))]">{running.title}</p>
+                    <p className="mt-0.5 truncate text-meta text-[rgb(var(--text-secondary))]">
+                      {running.assignedAgent ?? 'auto-select'} · {running.repo} · started {timeAgo(running.startedAt)}
+                    </p>
+                  </div>
+                  <ModelBadge model={effectiveModel(running, routing)} />
+                </div>
+                <div className="mt-4">
+                  <StageRail status={running.status} />
+                </div>
+              </Link>
+            ) : (
+              <Quiet>Nothing running. Your AI picks up the queue on its next free window.</Quiet>
+            )}
+          </section>
+
+          {/* ── Your Macs ────────────────────────────────────────── */}
+          {macs.length > 0 && (
+            <section aria-labelledby="macs-h" className="space-y-3">
+              <h2 id="macs-h" className="text-body font-semibold text-[rgb(var(--text-primary))]">
+                Your Macs
+              </h2>
+              <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {macs.map((r) => (
+                  <MacCard key={r.host} r={r} />
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
+
+        <aside className="min-w-0 space-y-6">
+          <TodaySwarmSummary />
+          <section aria-labelledby="queue-h" className="space-y-3">
+            <SectionHead title="Queue" href="/work" linkLabel="Open Work ›" />
+            <div className="rounded-2xl border border-[rgb(var(--border-subtle))] bg-[rgb(var(--bg-surface))] p-2">
+              <QueueRow href="/work?tab=queue" label="Waiting to run" count={pendingTotal} />
+              <QueueRow href="/work?tab=orchestration" label="Running now" count={workingTotal} />
+              <QueueRow href="/work?tab=deadletter" label="Stuck (out of retries)" count={stuckTotal} warn />
+              <QueueRow href="/work?tab=orchestration" label="Blocked" count={blockedTotal} warn />
+            </div>
+          </section>
+        </aside>
+        </div>
+      )}
+
+      {/* First-run guidance — self-hides once the four steps are done. */}
       {dbOk && (() => {
         const onboardingSteps = buildOnboardingSteps({
           repoCount: fleet.length,
           taskCount: taskTotal,
-          pickedUpCount: working.length + review.length + doneCount,
+          pickedUpCount: workingTotal + reviewTotal + doneCount,
           doneCount,
         });
         return (
@@ -231,140 +404,6 @@ export default async function MissionControl() {
           </>
         );
       })()}
-
-      {firstRun ? (
-        <FirstRunQuickstart />
-      ) : (
-        <>
-      {/* ── Savings hero (the product's headline metric) ──────── */}
-      {savingsTrend && <SavingsHero trend={savingsTrend} />}
-
-      {/* ── The three questions (operate summary) ─────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card
-          accent="blue"
-          title={<><span className="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse mr-2" />Running now</>}
-          meta={<Link href="/work?tab=orchestration" className="hover:text-emerald-400">{working.length} working →</Link>}
-        >
-          {working.length === 0 ? (
-            <EmptyState>No agents working right now.</EmptyState>
-          ) : (
-            <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
-              {working.map((t) => (
-                <ColumnRow
-                  key={t.taskId}
-                  top={t.title}
-                  bottom={<>{t.assignedAgent ?? 'unassigned'} · <span className="font-mono">{t.repo}</span> · {timeAgo(t.startedAt)}</>}
-                  right={<ModelBadge model={effectiveModel(t, routing)} />}
-                />
-              ))}
-            </ul>
-          )}
-        </Card>
-
-        <Card
-          accent="purple"
-          title="Needs review"
-          meta={<Link href="/work?tab=review" className="hover:text-emerald-400">{review.length} waiting →</Link>}
-        >
-          {review.length === 0 ? (
-            <EmptyState>Nothing waiting on you. ✨</EmptyState>
-          ) : (
-            <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
-              {review.map((t) => (
-                <ColumnRow
-                  key={t.taskId}
-                  top={t.title}
-                  bottom={<>{(t.notes ?? '').replace(/^RESULT: /, '') || `${t.assignedAgent ?? '—'} · ${t.repo}`}</>}
-                  right={<span className="text-xs text-zinc-600">{timeAgo(t.updatedAt)}</span>}
-                />
-              ))}
-            </ul>
-          )}
-        </Card>
-
-        <Card
-          accent="emerald"
-          title="Up next"
-          meta={<Link href="/work" className="hover:text-emerald-400">{pendingTotal} queued →</Link>}
-        >
-          {pending.length === 0 ? (
-            <EmptyState>Queue empty.</EmptyState>
-          ) : (
-            <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
-              {pending.map((t) => (
-                <ColumnRow
-                  key={t.taskId}
-                  top={t.title}
-                  bottom={<><span className="font-mono">{t.repo}</span> · {t.assignedAgent ?? 'auto-select'}</>}
-                  right={<PriorityBadge priority={t.priority} />}
-                />
-              ))}
-            </ul>
-          )}
-        </Card>
-      </div>
-
-      {/* ── Footer strip ──────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card title="Next scheduled fires" meta={<Link href="/work?tab=schedules" className="hover:text-emerald-400">all schedules →</Link>}>
-          {nextFires.length === 0 ? (
-            <EmptyState>No upcoming runs.</EmptyState>
-          ) : (
-            <ul className="divide-y divide-[rgb(var(--border-subtle))]/50">
-              {nextFires.map((s) => (
-                <li key={s.scheduleId} className="px-4 py-2 flex items-center justify-between gap-3 text-sm">
-                  <span className="text-[rgb(var(--text-primary))] truncate">{s.name}</span>
-                  <span className="text-xs text-[rgb(var(--text-muted))] shrink-0">
-                    {timeUntil(s.nextRun)} · {fmtSydney(s.nextRun)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-
-        <Card title="Fleet health" meta={<Link href="/apps" className="hover:text-emerald-400">{fleet.length} apps →</Link>}>
-          {fleet.length === 0 ? (
-            <EmptyState>No app cards reported yet.</EmptyState>
-          ) : (
-            <div className="p-4 flex flex-wrap gap-x-4 gap-y-2">
-              {fleet.map((c) => (
-                <Link key={c.repoName} href="/apps" className="inline-flex items-center gap-1.5 text-xs text-[rgb(var(--text-secondary))] hover:text-[rgb(var(--text-primary))]">
-                  <LevelDot level={c.lastStatusLevel} className="!w-2 !h-2" />
-                  {c.repoName}
-                </Link>
-              ))}
-            </div>
-          )}
-        </Card>
-
-        <Card title="Last runner activity" meta={<Link href="/system?tab=costs" className="hover:text-emerald-400">costs →</Link>}>
-          <div className="p-4 space-y-2.5 text-sm">
-            {lastRun ? (
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[rgb(var(--text-primary))] truncate">{lastRun.name}</p>
-                  <p className="text-xs text-[rgb(var(--text-muted))] truncate mt-0.5">{lastRun.lastResultSummary ?? '—'}</p>
-                </div>
-                <Badge className={lastRun.lastStatus === 'success' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' : lastRun.lastStatus === 'error' ? 'bg-red-500/15 text-red-400 border-red-500/30' : ''}>
-                  {lastRun.lastStatus} · {timeAgo(lastRun.lastRun)}
-                </Badge>
-              </div>
-            ) : (
-              <p className="text-zinc-600">No schedule has run yet.</p>
-            )}
-            <div className="flex items-center justify-between border-t border-[rgb(var(--border-subtle))]/70 pt-2.5">
-              <span className="text-xs text-[rgb(var(--text-muted))]">Today&apos;s LLM spend (UTC day)</span>
-              <span className={`text-sm font-semibold ${todaySpend > 10 ? 'text-red-400' : todaySpend > 5 ? 'text-yellow-400' : 'text-emerald-400'}`}>
-                {fmtUsd(todaySpend)}
-              </span>
-            </div>
-          </div>
-        </Card>
-      </div>
-        </>
-      )}
     </div>
   );
 }

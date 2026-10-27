@@ -80,11 +80,12 @@ export function Command({
         aria-expanded="true"
         aria-controls={listId}
         aria-autocomplete="list"
+        aria-label={placeholder}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={onKeyDown}
         placeholder={placeholder}
-        className="w-full border-b border-[rgb(var(--border-subtle))] bg-transparent px-4 py-3 text-sm text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none"
+        className="w-full border-b border-[rgb(var(--border-subtle))] bg-transparent px-4 py-3 text-sm text-[rgb(var(--text-primary))] placeholder:text-[rgb(var(--text-muted))] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[rgb(var(--accent))]/50"
       />
       <ul id={listId} role="listbox" className="max-h-80 overflow-y-auto overscroll-contain p-1.5">
         {results.length === 0 ? (

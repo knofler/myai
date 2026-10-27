@@ -56,10 +56,10 @@ export function SkillList({ skills }: { skills: SkillItem[] }) {
             </div>
             <div className="hidden sm:flex flex-wrap justify-end gap-1 shrink-0 max-w-[200px]">
               {s.triggers.slice(0, 3).map(t => (
-                <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-[rgb(var(--text-secondary))] truncate max-w-[110px]">{t}</span>
+                <span key={t} className="text-label font-mono px-1.5 py-0.5 bg-[rgb(var(--bg-hover))] rounded text-[rgb(var(--text-secondary))] truncate max-w-[110px]">{t}</span>
               ))}
               {s.triggers.length > 3 && (
-                <span className="text-[10px] text-zinc-600">+{s.triggers.length - 3}</span>
+                <span className="text-label text-zinc-600">+{s.triggers.length - 3}</span>
               )}
             </div>
           </button>

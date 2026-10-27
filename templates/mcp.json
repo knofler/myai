@@ -2,34 +2,21 @@
   "mcpServers": {
     "myai": {
       "command": "bash",
-      "args": ["-c", "exec \"${CLAUDE_PROJECT_DIR:-$PWD}/AI/scripts/lib/mcp_myai_stdio.sh\""]
+      "args": [
+        "-c",
+        "r=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; m=\"$(myai root 2>/dev/null || echo /nonexistent)\"; for p in \"$r/AI/scripts/lib/mcp_myai_stdio.sh\" \"$r/scripts/lib/mcp_myai_stdio.sh\" \"${MYAI_FRAMEWORK_DIR:-/nonexistent}/scripts/lib/mcp_myai_stdio.sh\" \"${MYAI_HOME:-/nonexistent}/scripts/lib/mcp_myai_stdio.sh\" \"$m/scripts/lib/mcp_myai_stdio.sh\" \"$HOME/.local/lib/node_modules/ai-management/scripts/lib/mcp_myai_stdio.sh\" /opt/homebrew/lib/node_modules/ai-management/scripts/lib/mcp_myai_stdio.sh /usr/local/lib/node_modules/ai-management/scripts/lib/mcp_myai_stdio.sh; do [ -f \"$p\" ] && exec bash \"$p\"; done; echo \"myai: mcp_myai_stdio.sh not found (repo AI/scripts/lib, MYAI_HOME, \\`myai root\\`, or a global ai-management install) - run: npm i -g ai-management\" >&2; exit 1"
+      ],
+      "type": null,
+      "url": null,
+      "headers": null
     },
+    "ai-framework": null,
     "context7": {
       "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"]
-    },
-    "shadcn-ui": {
-      "command": "npx",
-      "args": ["-y", "@jpisnice/shadcn-ui-mcp-server"]
-    },
-    "playwright": {
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp"]
-    },
-    "dropbox": {
-      "type": "http",
-      "url": "https://mcp.dropbox.com/mcp"
-    },
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
-      }
-    },
-    "vercel": {
-      "type": "http",
-      "url": "https://mcp.vercel.com"
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ]
     }
   }
 }

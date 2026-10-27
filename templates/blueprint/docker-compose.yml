@@ -1,4 +1,9 @@
-# Local dev stack — RAM ceiling 2 GB total (CLAUDE.md): app 1g + mongo 512m.
+# Local dev stack — RAM ceiling ~2 GB total (CLAUDE.md): app 1536m + mongo 512m.
+# app was 1g; bumped after the 2026-09-10 Next 16 upgrade — a Next 16.3.4
+# Turbopack `npm run build` genuinely needs more than 1g and gets OOM-killed
+# ("Killed", no error) below ~1.5g. Prefer verifying builds via
+# `./AI/scripts/local-ci.sh` (unconstrained `docker build --target build`,
+# not this container) — see the Dockerfile's top comment for why.
 # container_name uses the project prefix (CLAUDE.md Docker naming rule).
 services:
   app:
@@ -20,13 +25,13 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
-    mem_limit: 1g
+    mem_limit: 1536m
 
   mongo:
     container_name: __PROJECT_NAME__-mongo
     image: mongo:7
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"   # loopback only: dev credentials must never face the LAN
     environment:
       - MONGO_INITDB_ROOT_USERNAME=admin
       - MONGO_INITDB_ROOT_PASSWORD=password

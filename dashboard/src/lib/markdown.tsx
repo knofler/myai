@@ -93,7 +93,7 @@ export function Markdown({ source }: { source: string }) {
       i++; // consume closing fence
       blocks.push(
         <pre key={k('pre')} className="my-4 p-4 rounded-lg bg-zinc-950/80 border border-zinc-800 overflow-x-auto">
-          {lang && <div className="text-[10px] uppercase tracking-wider text-zinc-600 mb-2 font-mono">{lang}</div>}
+          {lang && <div className="text-label uppercase tracking-wider text-zinc-600 mb-2 font-mono">{lang}</div>}
           <code className="text-xs font-mono text-zinc-300 whitespace-pre">{buf.join('\n')}</code>
         </pre>,
       );
@@ -140,7 +140,7 @@ export function Markdown({ source }: { source: string }) {
         <div key={k('tbl')} className="my-4 overflow-x-auto rounded-lg border border-zinc-800">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-zinc-800 bg-zinc-900/60 text-left text-[11px] text-zinc-400 uppercase tracking-wider">
+              <tr className="border-b border-zinc-800 bg-zinc-900/60 text-left text-label text-zinc-400 uppercase tracking-wider">
                 {header.map((c, ci) => <th key={ci} className="px-3 py-2 font-medium">{renderInline(c)}</th>)}
               </tr>
             </thead>

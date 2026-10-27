@@ -57,7 +57,7 @@ import os, re
 src = os.environ["SRC_DIR"]
 # Every collection wired exclusively through scoped-query.ts (ADR-010 §1.1 +
 # the day-2/day-3/day-10 stores + the extended repos/* stores).
-MODELS = r"(TaskModel|ScheduleModel|PlanDayModel|RepoCardModel|VectorModel|GatewaySessionModel|BudgetUsageModel|NotificationModel|FleetRunModel|ArtifactModel|ConnectorModel|HandoffModel|WebhookEndpointModel|WebhookDeliveryModel|RunnerLeaseModel|ActivationEventModel)"
+MODELS = r"(TaskModel|ScheduleModel|PlanDayModel|RepoCardModel|VectorModel|GatewaySessionModel|BudgetUsageModel|NotificationModel|FleetRunModel|ArtifactModel|ConnectorModel|HandoffModel|WebhookEndpointModel|WebhookDeliveryModel|RunnerLeaseModel|KeyedLeaseModel|AccountUsageModel|AccountReadingModel|AccountAssetModel|ActivationEventModel)"
 VERBS  = r"(find|findOne|findOneAndUpdate|updateOne|deleteOne|deleteMany|aggregate|countDocuments)"
 HIT    = re.compile(MODELS + r"\." + VERBS + r"\b")
 EXEMPT = re.compile(

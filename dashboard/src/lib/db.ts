@@ -28,7 +28,11 @@ export async function connectDB(): Promise<typeof mongoose> {
       // pool is 100 per process — with gateway + dashboard + mcp across repos
       // that exhausts the cluster. Cap tight and reap idle connections.
       maxPoolSize: 5,
-      maxIdleTimeMS: 30000,
+      // Keep ONE connection warm. With maxIdleTimeMS 30s and no floor, any
+      // pause > 30 s reaped the whole pool and the next click paid a fresh
+      // TLS + SRV handshake to Atlas (~150 ms measured, speed plan 2026-10-04).
+      minPoolSize: 1,
+      maxIdleTimeMS: 300000,
     });
   }
 
@@ -230,6 +234,11 @@ const taskSchema = new mongoose.Schema({
   // of runtime/src/shared/db.ts ITask.deferCount (task-store.updateTaskImpl
   // is the only writer).
   deferCount: Number,
+  // Consecutive post-claim pacing-defer streak (task-d85ea318) — read-only
+  // mirror of runtime/src/shared/db.ts ITask.pacingDeferCount. Counts claims
+  // released back to pending by a pacing/routing gate before they ever routed;
+  // the signal behind the claims-vs-executions churn ratio on this page.
+  pacingDeferCount: Number,
   createdAt: Date,
   updatedAt: Date,
 }, { collection: 'tasks' });
@@ -348,6 +357,20 @@ const savedViewSchema = new mongoose.Schema({
 }, { collection: 'savedviews' });
 savedViewSchema.index({ tenantId: 1, viewId: 1 }, { unique: true });
 savedViewSchema.index({ tenantId: 1, userId: 1, name: 1 });
+
+// Page-speed samples from the operator's own browser (lib/perf.ts,
+// components/perf-beacon.tsx). Dashboard-owned, not a gateway mirror; kept 14
+// days by a TTL index so it can never grow without bound.
+const perfSampleSchema = new mongoose.Schema({
+  route: String,
+  metric: String,   // TTFB | FCP | LCP | INP | CLS | NAV (soft click→render)
+  value: Number,    // ms (CLS: unitless)
+  device: String,   // phone | tablet | desktop (viewport width)
+  vw: Number,
+  nav: String,      // hard | soft
+  createdAt: { type: Date, default: Date.now },
+}, { collection: 'perf_samples' });
+perfSampleSchema.index({ createdAt: 1 }, { expireAfterSeconds: 14 * 24 * 3600 });
 
 // Field names mirror the gateway's ISchedule (runtime/src/shared/db.ts) —
 // cronExpr/lastStatus, NOT cron/lastRunStatus.
@@ -740,3 +763,4 @@ export const Schedule = mongoose.models.Schedule || mongoose.model('Schedule', s
 export const RecurringTask = mongoose.models.RecurringTask || mongoose.model('RecurringTask', recurringTaskSchema);
 export const Artifact = mongoose.models.Artifact || mongoose.model('Artifact', artifactSchema);
 export const SavedView = mongoose.models.SavedView || mongoose.model('SavedView', savedViewSchema);
+export const PerfSample = mongoose.models.PerfSample || mongoose.model('PerfSample', perfSampleSchema);

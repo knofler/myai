@@ -1,28 +1,55 @@
 @import "tailwindcss";
 
-/* ── Mobile nav type / tap-target scale (DASHBOARD_MOBILE_APP_UX.md P1) ──
-   Touch-surface minimums: labels >=15px, captions/hints >=12px, interactive
-   rows >=44px (Apple HIG) / 48dp (Material). Tailwind v4 CSS-first tokens —
-   consume via `text-nav-*` / `min-h-tap`, never hand-tune a `text-[Npx]`
-   class on a touch surface again. */
+/* ── Type scale (plan/DESIGN_LANGUAGE.md §3) ──────────────────────────────
+   Tailwind v4 CSS-first tokens. The font-size namespace in v4 is `--text-*`
+   (with `--text-<name>--line-height` for the paired leading) — NOT
+   `--font-size-*`, which v4 ignores; the nav tokens below shipped under the
+   dead prefix on 2026-09-04 and generated no utilities until this migration.
+   Guard: src/lib/design-tokens.test.ts.
+
+   Consume via `text-title` / `text-hero` / `text-body` / `text-meta` /
+   `text-label` (+ `text-nav-*`, `min-h-tap`). No hand-tuned `text-[Npx]` on
+   any operator surface — 12px (`text-label`) is the floor.
+
+   Contrast steps (§3): primary content is never below `text-body`; secondary
+   is visibly dimmer AND smaller (`text-meta` + --text-secondary); muted is
+   labels/timestamps only (`text-label` + --text-muted). */
 @theme {
-  --font-size-nav-label: 0.9375rem;   /* 15px */
-  --font-size-nav-label--line-height: 1.25rem;
-  --font-size-nav-group: 0.75rem;     /* 12px — was 11px */
-  --font-size-nav-group--line-height: 1rem;
-  --font-size-nav-hint: 0.75rem;      /* 12px — was 10px */
-  --font-size-nav-hint--line-height: 1rem;
-  --font-size-nav-caption: 0.75rem;   /* 12px — was 10px */
-  --font-size-nav-caption--line-height: 1rem;
-  --font-size-nav-icon: 1.25rem;      /* 20px optical glyph size */
-  --font-size-nav-icon--line-height: 1.25rem;
+  --text-title: 2rem;                 /* 32px — page title, one per screen */
+  --text-title--line-height: 2.375rem; /* 38px */
+  --text-hero: 3rem;                  /* 48px — the single hero number on a screen */
+  --text-hero--line-height: 3.25rem;  /* 52px */
+  --text-body: 1.0625rem;             /* 17px — primary content */
+  --text-body--line-height: 1.5rem;   /* 24px */
+  --text-meta: 0.875rem;              /* 14px — repo, age, counts */
+  --text-meta--line-height: 1.25rem;  /* 20px */
+  --text-label: 0.75rem;              /* 12px — chips, group headers, captions */
+  --text-label--line-height: 1rem;    /* 16px */
+
+  /* Mobile nav type / tap-target scale (DASHBOARD_MOBILE_APP_UX.md P1).
+     Touch-surface minimums: labels >=15px, captions/hints >=12px, interactive
+     rows >=44px (Apple HIG) / 48dp (Material). */
+  --text-nav-label: 0.9375rem;        /* 15px */
+  --text-nav-label--line-height: 1.25rem;
+  --text-nav-group: 0.75rem;          /* 12px — was 11px */
+  --text-nav-group--line-height: 1rem;
+  --text-nav-hint: 0.75rem;           /* 12px — was 10px */
+  --text-nav-hint--line-height: 1rem;
+  --text-nav-caption: 0.75rem;        /* 12px — was 10px */
+  --text-nav-caption--line-height: 1rem;
+  --text-nav-icon: 1.25rem;           /* 20px optical glyph size */
+  --text-nav-icon--line-height: 1.25rem;
   --spacing-tap: 2.75rem;             /* 44px min interactive-row height */
 }
 
 /* ──────────────────────────────────────────────────────────────
-   myAI — dark zinc base + refined BLUE-GREEN accent (teal→emerald).
-   Accents are applied ONLY to interactive surfaces (buttons, active
-   nav, links, focus rings, key badges) — NOT a full-page repaint.
+   myAI — dark zinc base. COLOUR LANGUAGE (plan/DESIGN_LANGUAGE.md §2):
+   three meanings, each EXCLUSIVE — a colour outside its row is a bug.
+     --accent (teal)        = SYSTEM STATE   running · live · healthy · connected · success · active nav
+     --brand-orange (coral) = INTELLIGENCE   the wordmark · Brain surfaces · memory/recall · AI-authored
+     --warn / --err         = PRIORITY       P0–P3 chips · needs-you · blocked · failures
+   Consequences: a page H1 is --text-primary (NOT coral); a link is legible
+   from shape + weight (NOT teal); amber/red are never decorative.
    ────────────────────────────────────────────────────────────── */
 
 :root {
@@ -31,9 +58,10 @@
   --accent-cyan: 6 182 212;      /* cyan-500  */
   --accent-emerald: 16 185 129;  /* emerald-500 */
 
-  /* Claude-orange BRAND token — reserved for the 'myAI' wordmark + every
-     page H1. Interactive accents stay blue-green (above); brand identity
-     is orange. Single source of truth — never hardcode #D97757 elsewhere. */
+  /* Coral BRAND token = INTELLIGENCE (§2): the 'myAI' wordmark, Brain and
+     memory surfaces, AI-authored content. It is NOT the page-H1 colour any
+     more (that was "orange = heading", which said nothing about the system).
+     Single source of truth — never hardcode #D97757 elsewhere. */
   --brand-orange: 217 119 87;    /* #D97757 */
 
   /* ── Theme tokens (dark = default, unchanged from the values this
@@ -62,7 +90,7 @@
   --bg-canvas: 2 6 23;        /* slate-950 — the app canvas */
   --bg-raised: 30 41 59;      /* slate-800 — raised surfaces (menus, popovers) */
   --border-strong: 51 65 85;  /* slate-700 — emphasised 1px borders */
-  --accent: 20 184 166;       /* teal-500 — the single interactive accent */
+  --accent: 20 184 166;       /* teal-500 — SYSTEM STATE (running/live/healthy/active nav), not "clickable" */
   --accent-fg: 4 47 46;       /* teal-950 — text/glyphs on an accent fill */
   --ok: 16 185 129;           /* emerald-500 */
   --warn: 245 158 11;         /* amber-500 */
@@ -94,9 +122,11 @@
   --info: 8 145 178;          /* cyan-600 */
 }
 
-/* Brand identity colour — the myAI wordmark + page H1 headings.
+/* Intelligence colour — the myAI wordmark + Brain/memory/AI-authored surfaces
+   (§2). Never a page H1 (use --text-primary + `text-title`), never a link.
    Bold is applied at the element; this only sets the hue. */
 .text-brand-orange { color: rgb(var(--brand-orange)); }
+.bg-brand-orange { background-color: rgb(var(--brand-orange)); }
 
 /* ── Light-mode status-text overrides ─────────────────────────────
    Per-page content uses Tailwind's bright/mid status shades (red-400,
@@ -317,8 +347,8 @@ html { overscroll-behavior-y: contain; }
   .card-table td[data-label]::before {
     content: attr(data-label);
     flex: 0 0 auto;
-    font-size: 10px;
-    line-height: 1.4;
+    font-size: var(--text-label);           /* 12px floor — never below */
+    line-height: var(--text-label--line-height);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: rgb(var(--text-muted));
@@ -383,3 +413,12 @@ html { overscroll-behavior-y: contain; }
   transition: transform 0.1s ease-out, border-color 0.15s ease-out, background-color 0.15s ease-out;
 }
 .tap-press:active { transform: scale(0.98); }
+
+/* NavProgress (components/nav-progress.tsx): indeterminate top bar sweep. */
+@keyframes nav-progress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-testid='nav-progress'] > div { animation: none; width: 100%; }
+}

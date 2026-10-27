@@ -28,7 +28,7 @@ set +e
 # folder from the Dropbox SERVER as a sync-config change, not a user delete,
 # leaving NO rewind point on Dropbox's side. `xattr -d` only restores local
 # syncing going forward; it cannot bring back a server copy that's already gone.
-# This is what stranded runner-host on 2026-08-27/28: the Mac hadn't
+# This is what stranded the home Mac on 2026-08-27/28: the Mac hadn't
 # synced since early July, another machine had already Dropbox-ignored its
 # repos' .git dirs (2026-08-26 fleet sweep), and when this Mac came online every
 # managed repo's .git was simply gone — no Dropbox restore, no rewind, nothing

@@ -245,6 +245,13 @@ restart)
     ;;
 esac
 
+# ── Docker gate (scripts/lib/docker_gate.sh) — plain words, not a compose trace ──
+if [ "${MYAI_SKIP_DOCKER_GATE:-0}" != 1 ]; then
+    # shellcheck source=scripts/lib/docker_gate.sh
+    . "$SCRIPT_DIR/lib/docker_gate.sh"
+    docker_gate_state | grep -qx ok || { docker_gate_explain >&2; exit 3; }
+fi
+
 # ── up ───────────────────────────────────────────────────────────────────────
 hr
 printf '  betaC up — fusing the surface\n'

@@ -2,15 +2,20 @@ FROM node:24-slim AS builder
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install
+# Install exactly what package-lock.json pins (npm ci), never whatever the
+# semver ranges resolve to on build day (npm install ignored the lockfile:
+# non-reproducible images and a supply-chain risk). Dev deps are needed for tsc
+# and pruned below, so test tooling never ships in the gateway image.
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
 COPY tsconfig.json ./
 COPY src/ ./src/
 COPY bin/ ./bin/
 COPY gateway.config.json ./
 
-RUN npx tsc
+RUN npx tsc \
+    && npm prune --omit=dev --no-audit --no-fund
 
 # ── Production ──────────────────────────────────
 

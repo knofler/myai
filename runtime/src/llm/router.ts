@@ -12,15 +12,21 @@
  *   Ultra               : Opus 4.6 (gated) — tech-lead final PR review
  *   Fable               : Fable 5 — the free Max 20x runner workhorse (see below)
  *   Kimi                : Moonshot Kimi — wired placeholder, DISABLED until a token lands
- *   Gemini              : Gemini API — Class-B free-tier research/bulk lane, wired
- *                          placeholder, DISABLED until a key lands
+ *
+ * Gemini (API tier) was REMOVED (task-5a8c09ca, operator 2026-10-02: "kill
+ * Gemini as an option... AGY will do it for me"). The long-context/research
+ * lane it served is now covered by the Antigravity (agy) external-CLI lane
+ * (scripts/lib/external_cli_agent.sh) at the runner-dispatch layer, which
+ * this HTTP-based tier table does not model — work-type rows that used to
+ * primary/failover through 'gemini' now resolve to 'budget' (DeepSeek) or
+ * collapse to a same-tier no-op; see WORK_TYPE_TIER_MAP rows 7 and 9 below.
  *
  * The router does NOT dispatch LLM calls — it only decides which provider and
  * model to use. Callers feed the `RoutingDecision` into `provider.ts` which
  * handles actual dispatch + resilience + fallback chains.
  *
  * Env overrides:
- *   LLM_TIER_DEFAULT       — force a default tier ('budget' | 'standard' | 'premium' | 'ultra' | 'fable' | 'kimi' | 'gemini')
+ *   LLM_TIER_DEFAULT       — force a default tier ('budget' | 'standard' | 'premium' | 'ultra' | 'fable' | 'kimi')
  *   FABLE_FREE_UNTIL       — ISO timestamp ending the Fable free window (default 2026-06-22T23:59:59Z)
  *   FABLE_WINDOW_DISABLED  — set to '1' to opt out of the Fable free-window override
  *   MOONSHOT_API_KEY       — presence enables the 'kimi' tier; absent -> transparently
@@ -28,8 +34,6 @@
  *   OPENROUTER_API_KEY     — also enables the 'kimi' tier, served by OpenRouter's
  *                            hosted K2 (free `moonshotai/kimi-k2:free` slug) when no
  *                            paid MOONSHOT_API_KEY is present — see llm/moonshot.ts
- *   GEMINI_API_KEY         — presence enables the 'gemini' tier; absent -> transparently
- *                            falls back to 'budget' (deepseek)
  *
  * Fable free window (RETIRED 2026-06-22, verified 2026-07-26 — see
  * plan/jam/multi-lane-distribution.md P1a): while FABLE_FREE_UNTIL was in the
@@ -61,7 +65,7 @@ const log = createChildLogger({ module: 'llm-router' });
 
 // ── Public types ────────────────────────────────────────────
 
-export type RoutingTier = 'budget' | 'standard' | 'premium' | 'ultra' | 'fable' | 'kimi' | 'gemini';
+export type RoutingTier = 'budget' | 'standard' | 'premium' | 'ultra' | 'fable' | 'kimi';
 
 /** Named complexity buckets from plan/jam/multi-lane-distribution.md. */
 export type ComplexityLevel = 'trivial' | 'low' | 'standard' | 'high' | 'critical';
@@ -128,7 +132,7 @@ export interface RoutingContext {
 
 export interface RoutingDecision {
   /** Provider mode identifier matching `LLM_MODE` values in provider.ts. */
-  provider: string; // 'api' | 'deepseek' | 'moonshot' | 'gemini' | 'ollama'
+  provider: string; // 'api' | 'deepseek' | 'moonshot' | 'ollama'
   /** Model identifier to use for the call. */
   model: string;
   /** Ordered fallback chain of provider modes (first entry is the primary). */
@@ -166,9 +170,6 @@ const MODELS = {
   // Moonshot's default model (config.ts `moonshotModel`) — kept in sync so the
   // 'kimi' tier and the failover-injection path never diverge on model id.
   kimi: 'kimi-k2.6',
-  // Gemini's default model (config.ts `geminiModel`) — Class-B free-tier
-  // research/bulk lane (plan/MULTI_PROVIDER_ORCHESTRATION.md §5/§6).
-  gemini: 'gemini-2.0-flash',
 } as const;
 
 // ── Fable free window (retired 2026-06-22 — see docstring above) ──
@@ -253,18 +254,6 @@ const TIER_CONFIGS: Record<RoutingTier, TierConfig> = {
     cacheable: false,
     batchable: true,
   },
-  gemini: {
-    // Class-B free-tier gateway provider — research/bulk lane (Google
-    // grounding, 1M-token context). DISABLED placeholder until a
-    // GEMINI_API_KEY lands — see isGeminiConfigured(). route() transparently
-    // demotes any resolution to 'gemini' back to 'budget' (deepseek) while
-    // unconfigured, same pattern as 'kimi'.
-    provider: 'gemini',
-    model: MODELS.gemini,
-    chain: ['gemini', 'deepseek', 'api'],
-    cacheable: false,
-    batchable: true,
-  },
 };
 
 // ── Work-type → tier mapping (plan/MULTI_PROVIDER_ORCHESTRATION.md §3) ──
@@ -299,7 +288,7 @@ const WORK_TYPE_TIER_MAP: Record<WorkType, WorkTypeConfig> = {
   // Row 1: Claude Opus (Max) primary; Sonnet is the documented first failover
   // hop — same provider ('api'), different model, so it surfaces via escalateTo.
   'agentic-interactive': { row: 1, tier: 'ultra', failover: 'standard' },
-  // Row 2: doc text says `claude-tech` Sonnet-5, but Fable is now the
+  // Row 2: doc text says the shared Claude pool's Sonnet-5, but Fable is now the
   // established runner workhorse for exactly this lane (CHANNEL_TIER_MAP.scheduler,
   // the standing-agent map, router.ts docstring) — reconciled to 'fable' here.
   // First failover hop is Sonnet-4-6 per the doc's chain.
@@ -321,13 +310,18 @@ const WORK_TYPE_TIER_MAP: Record<WorkType, WorkTypeConfig> = {
     modelOverride: MODELS.budget_haiku,
     chainOverride: ['api', 'deepseek'],
   },
-  // Row 7: Gemini primary (grounding/1M ctx); DeepSeek is the tier's own
-  // built-in second hop, matching the doc's "cheap synthesis" failover step.
-  research: { row: 7, tier: 'gemini', failover: 'budget' },
+  // Row 7: Gemini (grounding/1M ctx) REMOVED (task-5a8c09ca) — long-context/
+  // research work now goes to the Antigravity (agy) external-CLI lane
+  // (scripts/lib/external_cli_agent.sh) at the runner-dispatch layer, not
+  // through this HTTP tier table. Primary demoted to DeepSeek (budget), the
+  // doc's own "cheap synthesis" hop; no cross-class hop left to add.
+  research: { row: 7, tier: 'budget', failover: 'budget' },
   // Row 8: DeepSeek/Kimi cheap wide net primary; "premium final gate" failover.
   'code-review': { row: 8, tier: 'budget', failover: 'premium' },
-  // Row 9: Claude premium primary; Gemini independent 2nd opinion / judge panel failover.
-  architecture: { row: 9, tier: 'premium', failover: 'gemini' },
+  // Row 9: Claude premium primary. Gemini's independent 2nd opinion / judge
+  // panel failover REMOVED (task-5a8c09ca) — no cross-class hop left to add
+  // through this HTTP chain, so failover === tier (same pattern as row 11).
+  architecture: { row: 9, tier: 'premium', failover: 'premium' },
   // Row 10: Claude Sonnet (or DeepSeek) primary; Kimi first failover hop ahead of mechanical Qwen.
   database: { row: 10, tier: 'standard', failover: 'kimi' },
   // Row 11: Claude premium primary; doc's Failover column is literally "—"
@@ -545,15 +539,6 @@ export function route(ctx: RoutingContext = {}): RoutingDecision {
     tier = 'budget';
   }
 
-  // Gemini is a wired placeholder (provider: gemini) — DISABLED until a
-  // GEMINI_API_KEY lands. Any path resolving to 'gemini' before a key is
-  // configured falls back to the deepseek-primary budget tier rather than
-  // dispatching through an unconfigured provider.
-  if (tier === 'gemini' && !isGeminiConfigured()) {
-    reason += ' -> gemini disabled (no GEMINI_API_KEY yet), falling back to deepseek';
-    tier = 'budget';
-  }
-
   // Complexity upgrade: budget/standard → premium when complexity >= 0.8
   if (
     typeof ctx.complexity === 'number' &&
@@ -596,8 +581,9 @@ export function route(ctx: RoutingContext = {}): RoutingDecision {
 
   // Work-type first-hop failover (plan/MULTI_PROVIDER_ORCHESTRATION.md §3):
   // skipped when the row has no documented cross-class hop (failover === the
-  // resolved tier, e.g. after a kimi/gemini-unconfigured demotion collapsed
-  // them together) or when chainOverride above already authored the full
+  // resolved tier, e.g. after a kimi-unconfigured demotion collapsed them
+  // together, or a removed Gemini hop collapsed to a same-tier no-op) or
+  // when chainOverride above already authored the full
   // chain. Same provider as primary -> surfaced via escalateTo (chain is
   // provider-level only, so e.g. Opus -> Sonnet can't live in `chain`).
   // Different provider -> spliced into `chain` right after the primary.
@@ -679,8 +665,6 @@ export interface RoutingConfig {
   fableWindow: { active: boolean; until: string; model: string };
   /** Kimi tier status — enabled once MOONSHOT_API_KEY or OPENROUTER_API_KEY is set. */
   kimiTier: { enabled: boolean; provider: string; model: string; backend: 'moonshot' | 'openrouter' | 'none' };
-  /** Gemini tier status — enabled once GEMINI_API_KEY is set. */
-  geminiTier: { enabled: boolean; provider: string; model: string };
 }
 
 /**
@@ -709,17 +693,12 @@ export function getRoutingConfig(): RoutingConfig {
       model: TIER_CONFIGS.kimi.model,
       backend: kimiBackend(),
     },
-    geminiTier: {
-      enabled: isGeminiConfigured(),
-      provider: TIER_CONFIGS.gemini.provider,
-      model: TIER_CONFIGS.gemini.model,
-    },
   };
 }
 
 // ── Helpers ─────────────────────────────────────────────────
 
-const VALID_TIERS = new Set<string>(['budget', 'standard', 'premium', 'ultra', 'fable', 'kimi', 'gemini']);
+const VALID_TIERS = new Set<string>(['budget', 'standard', 'premium', 'ultra', 'fable', 'kimi']);
 
 function isValidTier(value: string): value is RoutingTier {
   return VALID_TIERS.has(value);
@@ -746,10 +725,4 @@ export function kimiBackend(): 'moonshot' | 'openrouter' | 'none' {
   if (process.env.MOONSHOT_API_KEY) return 'moonshot';
   if (process.env.OPENROUTER_API_KEY) return 'openrouter';
   return 'none';
-}
-
-/** True once a Gemini API key is configured — until then the 'gemini' tier
- *  is a wired placeholder that transparently falls back to deepseek. */
-export function isGeminiConfigured(): boolean {
-  return !!process.env.GEMINI_API_KEY;
 }

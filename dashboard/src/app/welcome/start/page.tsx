@@ -475,7 +475,7 @@ function OnboardingWizardInner() {
               <ol className="mt-4 space-y-1.5 text-sm text-[rgb(var(--text-secondary))] list-decimal list-inside">
                 <li>The off-hours runner picks it up on the next free window.</li>
                 <li>It works the task autonomously and lands changes on <code className="text-[rgb(var(--text-primary))]">test</code>.</li>
-                <li>It surfaces in <span className="text-teal-300">Work → Needs Review</span> for your{' '}
+                <li>It surfaces in <span className="text-teal-300">Work → Needs You</span> for your{' '}
                   <code className="text-[rgb(var(--text-primary))]">ship it</code>.</li>
               </ol>
               <div className="flex flex-wrap gap-2 mt-5">

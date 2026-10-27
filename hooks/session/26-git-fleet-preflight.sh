@@ -79,7 +79,7 @@ while IFS= read -r line; do
     *"cannot resolve remote"*)
       if [ -n "$NAME" ]; then
         FINDINGS+=("  · $NAME — no .git, remote unresolved")
-        FINDINGS+=("      → fix: add \"$NAME  knofler/<repo>\" to config/repo_remotes.txt, then: $SCRIPT --apply \"$DIR\"")
+        FINDINGS+=("      → fix: add \"$NAME  <owner>/<repo>\" to config/repo_remotes.txt, then: $SCRIPT --apply \"$DIR\"")
       fi
       NAME="" DIR=""
       ;;

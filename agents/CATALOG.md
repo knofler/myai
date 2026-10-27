@@ -1,6 +1,6 @@
 # Agent Catalog
 
-> 62 specialist agents organized by category. All auto-discovered from `.claude/agents/`.
+> 63 specialist agents organized by category. All auto-discovered from `.claude/agents/`.
 
 ---
 
@@ -130,7 +130,7 @@
 
 ---
 
-## Standing Agents (5) — `standing-` prefix
+## Standing Agents (6) — `standing-` prefix
 
 Autonomous agents designed to run on cron schedules. Each performs a specific maintenance/audit function across all managed repos.
 
@@ -141,6 +141,7 @@ Autonomous agents designed to run on cron schedules. Each performs a specific ma
 | `standing-dep-watcher` | Dependency health monitor — outdated, vulnerable, license issues | Cross-Lane |
 | `standing-security-auditor` | Scheduled security scanner — secrets, OWASP, insecure configs | C (Infra) |
 | `standing-status-reporter` | Cross-repo status reporter — git state, CI, tasks, activity | D (Async) |
+| `standing-release-scout` | Weekly npm-vs-main check → prepares a release (bump + CHANGELOG, test branch) when warranted, never publishes | D (Async) |
 
 ---
 
@@ -163,9 +164,9 @@ Autonomous agents designed to run on cron schedules. Each performs a specific ma
 | Neural | 4 | `neural-` |
 | GitHub | 5 | `github-` |
 | Operations | 5 | `ops-` |
-| Standing | 5 | `standing-` |
+| Standing | 6 | `standing-` |
 | Data | 4 | `data-` |
 | Content | 4 | `content-` |
 | Lifecycle | 3 | (mixed) |
 | Gate | 1 | `external-auditor` |
-| **Total** | **62** | |
+| **Total** | **63** | |

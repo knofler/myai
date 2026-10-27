@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="myAI">
+  <!-- myAI FAVICON — the reduced cut of icon.svg, for the browser tab.
+       WHY A SECOND FILE: icon.svg carries nine output bars and three 17px
+       dots. Measured at 16x16 (the tab, and the most common size this brand
+       is seen at) those collapse into grey mush — the dots smear into one bar
+       and the prompt becomes a smudge. It holds up fine from 32px up.
+       So: same window, same palette, fewer elements — title bar, three larger
+       dots, one big >_ prompt, no output lines, no white pill.
+       icon.svg stays the full-detail master and still feeds the 192/512/apple
+       PNGs; this file is declared FIRST in layout.tsx so the tab gets the cut
+       that survives. Any colour change must be made in BOTH files. -->
+  <defs>
+    <clipPath id="squircle"><rect width="512" height="512" rx="112"/></clipPath>
+  </defs>
+  <g clip-path="url(#squircle)">
+    <!-- window body -->
+    <rect width="512" height="512" fill="#4F6B74"/>
+    <!-- title bar — taller than icon.svg so it still reads as a bar at 16px -->
+    <rect width="512" height="132" fill="#3F7CC0"/>
+    <circle cx="66"  cy="66" r="26" fill="#E9C846"/>
+    <circle cx="142" cy="66" r="26" fill="#F24B5C"/>
+    <circle cx="218" cy="66" r="26" fill="#56D2A0"/>
+    <!-- prompt: >_ , sized to stay legible on a 16px grid -->
+    <g fill="none" stroke="#F2C230" stroke-width="44" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M138 212 246 288 138 364"/>
+      <path d="M292 366h96"/>
+    </g>
+  </g>
+</svg>

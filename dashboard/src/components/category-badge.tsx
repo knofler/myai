@@ -20,7 +20,7 @@ const COLORS: Record<string, string> = {
 export function CategoryBadge({ category }: { category: string }) {
   const color = COLORS[category] || COLORS.core;
   return (
-    <span className={`inline-block px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider rounded border ${color}`}>
+    <span className={`inline-block px-2 py-0.5 text-label font-mono uppercase tracking-wider rounded border ${color}`}>
       {category}
     </span>
   );

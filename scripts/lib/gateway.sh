@@ -18,7 +18,8 @@
 #
 # The token must MATCH the gateway's GATEWAY_LOCAL_TOKEN (docker-compose.yml /.env).
 # Resolution order: existing env → $MYAI_ENV_FILE → repo .env (GATEWAY_LOCAL_TOKEN=)
-#                 → ~/.myai/.env (kernel-only repos) → compose default.
+#                 → ~/.myai/.env (kernel-only repos) → the greenfield stack's
+#                 ~/.myai/standalone/.env (what `myai up` writes) → compose default.
 # For a hosted deployment, set a strong GATEWAY_LOCAL_TOKEN in .env on BOTH the
 # gateway and wherever these scripts run.
 
@@ -36,7 +37,11 @@ if [ -z "${GATEWAY_LOCAL_TOKEN:-}" ]; then
   #                      placeholder below, the gateway 401'd the MCP handshake, and
   #                      every myai tool silently vanished from the session - the
   #                      exact failure seen in the DXP repo on 2026-08-31.
-  for _gw_envf in "${MYAI_ENV_FILE:-}" "$_gw_lib_dir/../../.env" "$HOME/.myai/.env"; do
+  #   ~/.myai/standalone/.env  the greenfield stack `myai up` runs ($MYAI_STANDALONE_DIR):
+  #                      it generates the gateway's token THERE. Without this
+  #                      candidate a fresh install's CLI, `myai plug proof` and the
+  #                      stdio MCP bridge all 401'd on initialize (v1 G2, 2026-10-22).
+  for _gw_envf in "${MYAI_ENV_FILE:-}" "$_gw_lib_dir/../../.env" "$HOME/.myai/.env" "${MYAI_STANDALONE_DIR:-$HOME/.myai/standalone}/.env"; do
     [ -n "$_gw_envf" ] && [ -f "$_gw_envf" ] || continue
     _gw_t="$(grep -E '^GATEWAY_LOCAL_TOKEN=' "$_gw_envf" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'\''' | xargs 2>/dev/null)"
     if [ -n "$_gw_t" ]; then GATEWAY_LOCAL_TOKEN="$_gw_t"; break; fi
@@ -149,6 +154,69 @@ try:
     t = json.load(sys.stdin)["result"]["content"][0]["text"]
     d = json.loads(t)
     sys.exit(0 if "consumed" in d else 1)
+except Exception:
+    sys.exit(1)
+' 2>/dev/null
+}
+
+# ─────────────────────────────────────────────────────────────────────────
+# RUNNER BACKLOG CONSUMED-TITLES LEDGER (task-aa331af6) — durable, unlike a
+# tasks_list(limit:2000) lookup: once a title is confirmed here it stays
+# confirmed forever, regardless of how large the fleet-wide task table grows.
+# Used by scripts/queue_topup.sh's self-heal as a floor the corrected cursor
+# may never rewind past.
+# ─────────────────────────────────────────────────────────────────────────
+
+# gw_backlog_ledger_get [timeout-seconds] → writes confirmed titles to stdout,
+# one per line. Prints nothing and returns 1 on any failure (gateway down,
+# auth fail, malformed response) — callers must treat that as "unknown", not
+# "empty ledger".
+gw_backlog_ledger_get() {
+  local raw
+  raw=$(curl -sf -m "${1:-15}" -X POST http://localhost:3100/mcp \
+    -H 'content-type: application/json' \
+    -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
+    -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"backlog_ledger_get","arguments":{}},"id":1}' 2>/dev/null)
+  [ -z "$raw" ] && return 1
+  printf '%s' "$raw" | /usr/bin/python3 -c 'import sys, json
+try:
+    t = json.load(sys.stdin)["result"]["content"][0]["text"]
+    d = json.loads(t)
+    titles = d["titles"]
+except Exception:
+    sys.exit(1)
+for x in titles:
+    sys.stdout.write(x.replace("\n", " ").replace("\r", " ") + "\n")
+' 2>/dev/null
+}
+
+# gw_backlog_ledger_add <titles-file> [timeout-seconds] → add every non-blank
+# line in titles-file to the ledger (idempotent, set semantics). Best-effort;
+# returns 0 iff the gateway confirmed the write, 1 on any failure (including
+# an empty/missing titles-file, treated as a no-op success).
+gw_backlog_ledger_add() {
+  local titles_file="$1" raw payload
+  [ -s "$titles_file" ] || return 0
+  payload=$(TITLES_FILE="$titles_file" /usr/bin/python3 -c 'import os, json
+titles = []
+with open(os.environ["TITLES_FILE"]) as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if line:
+            titles.append(line)
+print(json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "backlog_ledger_add", "arguments": {"titles": titles}}, "id": 1}, separators=(",", ":")))
+' 2>/dev/null)
+  [ -z "$payload" ] && return 1
+  raw=$(curl -sf -m "${2:-15}" -X POST http://localhost:3100/mcp \
+    -H 'content-type: application/json' \
+    -H "x-gateway-local-token: ${GATEWAY_LOCAL_TOKEN:-}" \
+    -d "$payload" 2>/dev/null)
+  [ -z "$raw" ] && return 1
+  printf '%s' "$raw" | /usr/bin/python3 -c 'import sys, json
+try:
+    t = json.load(sys.stdin)["result"]["content"][0]["text"]
+    d = json.loads(t)
+    sys.exit(0 if "titles" in d else 1)
 except Exception:
     sys.exit(1)
 ' 2>/dev/null

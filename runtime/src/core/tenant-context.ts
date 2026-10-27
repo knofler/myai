@@ -81,6 +81,13 @@ export interface ToolContext {
   /** True when resolved via the loopback / GATEWAY_LOCAL_TOKEN local-trust path. */
   local?: boolean;
   /**
+   * Which of THIS tenant's projects the caller works in — the `x-myai-repo`
+   * header the stdio MCP bridge sends (its checkout's brain namespace). A
+   * SELECTION hint for context_boot / the initialize auto-boot only; never used
+   * for authorization or tenant scoping. Sanitized to [A-Za-z0-9._-]{1,100}.
+   */
+  callerRepo?: string;
+  /**
    * RBAC v1 (ADR-013 §2) — server-derived, never from caller args.
    * Absent → treated as 'member' by the rbac layer (pre-RBAC caller).
    */

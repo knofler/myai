@@ -30,7 +30,7 @@ export function invoiceBrandName(): string {
 }
 
 /** Optional seller address block under the brand name — `|`-separated lines,
- *  e.g. "Powerhouse Pty Ltd|123 Example St|Sydney NSW 2000|ABN 12 345 678 901". */
+ *  e.g. "Acme Pty Ltd|123 Example St|Sydney NSW 2000|ABN 12 345 678 901". */
 export function invoiceBrandLines(): string[] {
   return (process.env.INVOICE_BRAND_ADDRESS || '')
     .split('|')

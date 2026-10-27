@@ -12,9 +12,14 @@ export const dynamic = 'force-dynamic';
 export default function RunsPage() {
   return (
     <div className="max-w-6xl mx-auto">
+      {/* §5.1: the answer first. This shell loads nothing (RunsSearch fetches
+          client-side through /api/runs), so the sentence says what the page is
+          FOR instead of quoting a count the server does not have. */}
       <PageHeader
+        icon="runs"
         title="Run History"
-        subtitle="Every past runner fire for your tenant — search by repo, task id, outcome, or an error substring across RESULT lines and failure excerpts. Secrets are redacted before storage; raw logs stay on the runner host under its rotation policy."
+        summary="Every runner fire for your tenant, newest first. Search by repo, task id, outcome, or an error substring across RESULT lines and failure excerpts."
+        subtitle="Secrets are redacted before storage. Raw logs stay on the runner host under its rotation policy."
       />
       <div className="mt-6">
         <RunsSearch />

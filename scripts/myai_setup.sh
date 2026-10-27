@@ -254,18 +254,115 @@ _setup_provision_new() {
   fi
 }
 
+# ── Docker gate (after the brain, before "you're done") ──────────────────────
+# The brain is only half of first run: the gateway, Mongo RAG, runner and local
+# CI all run in Docker. A colleague once finished this wizard with no Docker
+# installed and never got a gateway — nothing told them. So the wizard now ends
+# by checking Docker and, when it isn't ready, says what it is, why myAI needs
+# it and the exact step for this OS. Interactive: offer to wait, then resume
+# straight into `myai up`. Headless/--json: explain on stderr, leave a pending
+# marker (bin/myai.cjs re-offers on the next command) and still exit 0 — the
+# brain half succeeded. Never installs anything. MYAI_SKIP_DOCKER_GATE=1 skips.
+# shellcheck source=scripts/lib/docker_gate.sh
+. "$HERE/lib/docker_gate.sh"
+
+_setup_start_stack() {
+  # Auto-triggered from `myai up` itself → the parent command starts the stack.
+  if [ "${MYAI_SETUP_PARENT:-}" = up ]; then
+    echo "  continuing with 'myai up'…"
+    return 0
+  fi
+  # MYAI_SETUP_UP_CMD: test seam (scripts/tests/test_docker_gate.sh) — the
+  # command that brings the stack up; defaults to the real `myai up`.
+  local up_rc=0
+  if [ -n "${MYAI_SETUP_UP_CMD:-}" ]; then bash -c "$MYAI_SETUP_UP_CMD" || up_rc=$?
+  else bash "$HERE/myai_up.sh" || up_rc=$?; fi
+  if [ "$up_rc" = 0 ]; then
+    echo ""
+    echo "  ✓ Your myAI stack is running — gateway: http://localhost:${MYAI_MCP_PORT:-3100}/mcp · dashboard: http://localhost:${MYAI_DASHBOARD_PORT:-3210}"
+  else
+    echo "myai setup: Docker is up but 'myai up' failed — see the output above, then run 'myai up' again." >&2
+  fi
+}
+
+_setup_docker_gate() {
+  [ "${MYAI_SKIP_DOCKER_GATE:-0}" = 1 ] && return 0
+  local state; state="$(docker_gate_state)"
+  if [ "$state" = ok ]; then
+    docker_gate_clear_pending
+    [ "$as_json" = 1 ] || echo "myai: Docker is ready — next: 'myai up' starts your local stack."
+    return 0
+  fi
+  if [ "$as_json" = 1 ] || ! _myai_interactive; then
+    docker_gate_explain "$state" >&2
+    docker_gate_mark_pending
+    echo "myai setup: your brain is ready; the local stack is waiting on Docker. Once Docker is running, run 'myai up'." >&2
+    return 0
+  fi
+  docker_gate_explain "$state"
+  if [ "$state" = not-running ] && docker_gate_try_start; then
+    echo "  Starting Docker Desktop for you…"
+  fi
+  printf '\n  Press Enter and I will wait here and carry on the moment Docker is up (or type s to skip): '
+  local ans=""; read -r ans || ans=s
+  case "$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')" in
+    s|skip|n|no)
+      docker_gate_mark_pending
+      echo "  Skipped — your brain is ready. Install/start Docker, then run 'myai up'."
+      return 0 ;;
+  esac
+  printf '  waiting for Docker (Ctrl-C to stop; resume later with myai up)'
+  docker_gate_mark_pending   # survives a Ctrl-C mid-wait
+  if docker_gate_wait; then
+    docker_gate_clear_pending
+    echo "  Docker is up — starting your myAI stack now…"
+    _setup_start_stack
+  else
+    echo "  Still no Docker after ${MYAI_DOCKER_WAIT_TIMEOUT:-900}s — your brain is ready; run 'myai up' once Docker is running."
+  fi
+  return 0
+}
+
+# _setup_finish <rc> — every brain path ends here: on success, run the Docker
+# gate; the exit code is always the brain path's own.
+# ── swarm master (operator rule 2026-10-22) — every device has exactly one,
+# chosen at install. Interactive: ask now (scripts/swarm_master_set.sh lists
+# the agents/profiles detected here). Otherwise: a one-line hint. Never fails
+# setup — boot and `myai doctor` show RED until it is chosen.
+_setup_swarm_master() {
+  local sms="$HERE/swarm_master_set.sh"
+  [ -f "$sms" ] || return 0
+  export SWARM_DIR="${SWARM_DIR:-${MYAI_HOME:-$HOME/.myai}/swarm}"
+  bash "$sms" show >/dev/null 2>&1 && return 0
+  if [ "$assume_yes" != 1 ] && _myai_interactive; then
+    echo ""
+    echo "  Every device has exactly one swarm master — the agent that coordinates the others here."
+    bash "$sms" set || echo "  (skipped — choose later with: myai swarm master set)"
+  else
+    echo "myai setup: no swarm master on this device yet — choose one with: myai swarm master set" >&2
+  fi
+  return 0
+}
+
+_setup_finish() {
+  local rc="$1"
+  [ "$rc" = 0 ] && _setup_docker_gate
+  [ "$rc" = 0 ] && _setup_swarm_master
+  exit "$rc"
+}
+
 # ── dispatch ──────────────────────────────────────────────────────────────────
 
 # An explicit URL (flag or env) always wins, interactive or not — no prompt.
 if [ -n "$brain_url" ]; then
   _setup_connect_existing "$brain_url"
-  exit $?
+  _setup_finish $?
 fi
 
 # --yes with no URL: explicit non-interactive consent → provision new, local-only.
 if [ "$assume_yes" = 1 ]; then
   _setup_provision_new "" 0
-  exit $?
+  _setup_finish $?
 fi
 
 if _myai_interactive; then
@@ -281,14 +378,14 @@ if _myai_interactive; then
       if [ -z "$url" ]; then
         echo "myai setup: no URL given — provisioning a new brain instead" >&2
         _setup_provision_new "" 1
-        exit $?
+        _setup_finish $?
       fi
       _setup_connect_existing "$url"
-      exit $?
+      _setup_finish $?
       ;;
     *)
       _setup_provision_new "" 1
-      exit $?
+      _setup_finish $?
       ;;
   esac
 fi
@@ -298,3 +395,4 @@ fi
 # same convention as myai_brain_bootstrap's CI fallback.
 echo "myai setup: non-interactive session — provisioning a local-only brain (implied consent). Re-run 'myai setup' interactively to review the data-locality statement, or pass --brain <url> to connect an existing one." >&2
 _setup_provision_new "" 0
+_setup_finish $?

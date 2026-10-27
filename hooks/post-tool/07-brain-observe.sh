@@ -94,7 +94,16 @@ EXIT_STATUS="$(printf '%s' "$INPUT" | jq -r '
   end' 2>/dev/null)"
 case "$EXIT_STATUS" in ok|error) ;; *) EXIT_STATUS="unknown" ;; esac
 
-REPO="$(basename "$ROOT" 2>/dev/null)"
+# brain_repo_name, NOT basename: $ROOT is a per-task worktree
+# (<repo>-task-<uuid>) when the fleet runner is driving, and a raw basename
+# mints a throwaway scratch namespace per task that the atom store (which
+# uses brain_repo_name/slugify — see writeAtom/brain_atom_write) never
+# writes to. That mismatch is exactly what made brain_health's captureCoverage
+# (runtime/src/core/brain-health.ts computeCaptureCoverage) correlate almost
+# every worktree session as "not captured" even when wrap up's brain_commit
+# landed the atom fine under the canonical namespace — the same landmine
+# hooks/stop/05-brain-autoatom.sh already avoids for its own REPO derivation.
+REPO="$(brain_repo_name "$ROOT" 2>/dev/null)"
 [ -n "$REPO" ] || REPO="unknown-repo"
 
 # Session key: prefer the hook-supplied session_id; fall back to an

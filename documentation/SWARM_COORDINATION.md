@@ -1,5 +1,16 @@
 # Swarm Coordination System
 
+> ⚠️ **REALITY BANNER (verified 2026-09-30, task-e6126564).** This document describes a
+> **manual protocol an LLM follows by hand in `agent mode`, NOT an automated engine.** There is
+> no orchestration code: the 7 swarm agents are persona prompt `.md` files (never invoked
+> programmatically), the 8 swarm skills are `SKILL.md` playbooks, and the `/swarm` dashboard is a
+> **hermetic mock** (hardcoded demo data on a `setInterval` timer, no backend — `dashboard/src/lib/swarm.ts:6-7`).
+> grep across all code for `task-tree`/`driftScore`/`dispatchAgent`/`topologySelect`/`mergeOutputs` → 0 hits.
+> Everything below — decompose, dispatch, drift scoring, topology selection, consensus, merge — is
+> instructions for the model to execute manually. Building a *real* engine on the shared Atlas
+> queue (swarm = grouped tasks with `swarmId`/`parentTaskId`/`dependsOn`) is scoped in
+> `plan/SWARM_MESSAGING_ARCHITECTURE.md` (§5, phases P2–P3, visual-plan-gated).
+
 > Multi-agent orchestration layer that sits ABOVE the existing 4-lane parallel dispatch system. Decomposes complex tasks, selects optimal topology, dispatches to specialists, and merges outputs.
 
 ## Architecture

@@ -1,14 +1,26 @@
 #!/bin/bash
 set +e
-# Hook: 2 GB RAM Ceiling Guard
+# Hook: app-stack RAM Ceiling Guard (2 GB default, per-host via config/stack_limits.txt)
 # Event: SessionStart (runs on every `agent mode` kickoff)
 #
-# Sums Docker container RAM across this project's stack. Warns if total
-# exceeds 2 GB. Non-blocking — issues a recommendation, never aborts.
+# Sums Docker container RAM across this project's stack. Warns if total exceeds
+# this host's ceiling (default 2048 MB; a bigger Mac can lift it in
+# config/stack_limits.txt). Non-blocking — issues a recommendation, never aborts.
 #
 # Exempt a heavy-model repo by creating `.ram-exempt` at repo root.
 
+# Per-host ceiling (config/stack_limits.txt, keyed by `hostname -s`; default
+# 2048 MB). The resolver lives in scripts/lib/stack_limits.sh — the SAME map
+# that sizes the gateway's mem cap — so a host that gives the gateway more
+# headroom lifts this ceiling in lockstep. Falls back to 2048 when the lib or
+# map is absent. STACK_LIMITS_FILE / STACK_LIMITS_HOST: tests only.
 LIMIT_MB=2048
+_LIB="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../../scripts/lib/stack_limits.sh"
+if [ -f "$_LIB" ]; then
+  # shellcheck source=scripts/lib/stack_limits.sh
+  . "$_LIB"
+  LIMIT_MB="$(resolve_stack_ceiling_mb "${STACK_LIMITS_FILE:-}" "${STACK_LIMITS_HOST:-}")"
+fi
 
 # Docker daemon must be up — borrow the check from 03-docker-health
 if ! docker info &>/dev/null; then
@@ -124,7 +136,7 @@ if [ "$TOTAL_MB" -eq 0 ]; then
 fi
 
 if [ "$TOTAL_MB" -gt "$LIMIT_MB" ]; then
-  echo "⚠️  RAM Guard: ${TOTAL_MB} MB used — OVER 2 GB ceiling"
+  echo "⚠️  RAM Guard: ${TOTAL_MB} MB used — OVER ${LIMIT_MB} MB ceiling"
   echo "$DETAIL" | head -10
   echo "  Fix: add mem_limit (e.g. 1g / 512m) to services in docker-compose.yml"
   echo "  Or:  touch .ram-exempt   # if heavy-model repo (Ollama, etc.)"

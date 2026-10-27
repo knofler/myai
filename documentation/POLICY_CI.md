@@ -42,7 +42,7 @@ Use that form in any repo where `./scripts/local-ci.sh` and `./AI/scripts/local-
 
 **The three levers (all rolled out via `scripts/rollout_ci_thrift.sh`):**
 
-1. **GitHub Actions — CI runs ONCE, at PR-to-`main` only.** `ci.yml` triggers on `pull_request: [main]` + `workflow_dispatch` only — the `push` trigger is removed, so pushes to `test` (or any branch) trigger **zero** CI runs. `concurrency: cancel-in-progress` cancels superseded runs. `templates/ci.yml` carries this for all future scaffolds.
+1. **GitHub Actions — CI runs at PR time only, never per push.** `ci.yml` triggers on `pull_request: [main, test]` + `workflow_dispatch` only — the `push` trigger is removed, so pushes to `test` (or any branch) trigger **zero** CI runs. `test` MUST stay in the PR trigger where the `test` branch has required status checks: a `[main]`-only trigger makes those checks phantom — no workflow can ever produce them for a base=`test` PR, so every non-admin PR into `test` blocks forever (AI_RULES §20, fixed 2026-09-09). Base=`test` PRs are rare (normal flow is direct push to `test`), so the credit cost is ~zero. `concurrency: cancel-in-progress` cancels superseded runs. `templates/ci.yml` carries this for all future scaffolds.
 2. **Vercel — production deploys only.** `vercel.json` → `"git": {"deploymentEnabled": {"main": true, "test": false}}`. No preview build on every test-branch push. `templates/vercel.json` is the scaffold default.
 3. **Pre-push Docker gate.** A `.git/hooks/pre-push` hook runs `local-ci.sh` (Docker tsc + tests + build) before any push, so broken code never reaches the remote and wastes a run. Skippable with `git push --no-verify`; auto-skips `chore: update state` commits.
 

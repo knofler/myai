@@ -5,8 +5,14 @@
 #     AI/plan/schedule.json and merges to main.
 #   • A CLI `agent mode -a` on any Mac runs this to register that schedule with
 #     the gateway: plan_set (→ dashboard /plan) + schedule_task for each task.
-# Idempotent: records the ingested artifact's git blob hash in
-# AI/state/.schedule-ingested and skips if unchanged.
+# Idempotent on two levels:
+#   • whole-file fast-path — records the artifact's git blob hash in
+#     AI/state/.schedule-ingested and skips entirely if unchanged.
+#   • per-task dedup — when the file HAS changed, schedule_ingest.py skips any
+#     task whose title already exists in the gateway for this repo (ANY status,
+#     done included) so appending a few tasks never re-queues the already-done
+#     ones. (Whole-file-hash-only re-queued 19 done tasks in one managed repo on
+#     2026-10-02; `schedule plan` is wrap-up step 0, so that fired every wrap-up.)
 #
 # Artifact format — AI/plan/schedule.json (master: plan/schedule.json):
 #   { "repo":"name", "startDate":"YYYY-MM-DD",
@@ -95,42 +101,18 @@ if [ "${SCHEDULE_CONSENT:-0}" != "1" ] && [ -f "$IGNORE_FILE" ] && [ -n "$ART_RE
   exit 0
 fi
 
+# plan_set + per-task schedule_task fan-out, deduped against the gateway, lives
+# in schedule_ingest.py (unit-tested in scripts/tests/test_schedule_ingest.sh).
+# It exits non-zero if any task failed to schedule — under `set -e` that aborts
+# before the sentinel below is written, so a partial ingest is never recorded as
+# complete.
 SCHED_SCRIPT="$(dirname "$0")/schedule_task.sh"
-GATEWAY_MCP="$GATEWAY_MCP" ART="$ART" SCHED="$SCHED_SCRIPT" GW_TOKEN="$GATEWAY_LOCAL_TOKEN" /usr/bin/python3 - <<'PY'
-import json, os, subprocess, urllib.request
-MCP=os.environ["GATEWAY_MCP"]; art=os.environ["ART"]; sched=os.environ["SCHED"]; GW_TOKEN=os.environ.get("GW_TOKEN","")
-d=json.load(open(art))
-repo=d["repo"]
-def call(n,a):
-    b=json.dumps({"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":n,"arguments":a}}).encode()
-    return urllib.request.urlopen(urllib.request.Request(MCP,data=b,headers={"content-type":"application/json","x-gateway-local-token":GW_TOKEN}),timeout=30).read()
-# 1) plan_set (dashboard /plan view)
-if d.get("days"):
-    call("plan_set",{"repo":repo,"startDate":d.get("startDate"),"replace":True,"days":d["days"]})
-    print(f"  plan_set: {len(d['days'])} days for {repo}")
-# 2) schedule_task each work item (the runner queue). check=False on purpose
-# (one bad task shouldn't abort the rest) but the result is NOT discarded —
-# a swallowed failure here is exactly the class of bug this task exists to
-# close, so every non-zero exit is reported and turns into a hard exit code.
-n=0
-failed=0
-for t in d.get("tasks",[]):
-    cmd=[sched,"--repo",repo,"--title",t["title"],"--priority",t.get("priority","P2"),
-         "--model",t.get("model","claude-fable-5")]
-    if t.get("agent"): cmd+=["--agent",t["agent"]]
-    notes=f"[{t.get('category','')}] day {t.get('day','?')} | from schedule.json"
-    if t.get("desc"): cmd+=["--desc",t["desc"]]
-    cmd+=["--notes",notes]
-    r=subprocess.run(cmd,check=False,capture_output=True,text=True)
-    if r.returncode != 0:
-        failed+=1
-        print(f"  ✗ failed to schedule '{t['title']}' (exit {r.returncode}): {(r.stderr or r.stdout).strip()}")
-    else:
-        n+=1
-print(f"  scheduled {n} tasks for {repo}" + (f" — {failed} FAILED" if failed else ""))
-if failed:
-    raise SystemExit(1)
-PY
+INGEST="$(dirname "$0")/schedule_ingest.py"
+/usr/bin/python3 "$INGEST" \
+    --artifact "$ART" \
+    --gateway "$GATEWAY_MCP" \
+    --sched "$SCHED_SCRIPT" \
+    --token "$GATEWAY_LOCAL_TOKEN"
 
 mkdir -p "$(dirname "$SENTINEL")"
 echo "$HASH  $(date -u +%FT%TZ)" > "$SENTINEL"

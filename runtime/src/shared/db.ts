@@ -289,6 +289,13 @@ export interface ITask extends Document {
   status: TaskStatus;
   assignedAgent?: string;
   recommendedModel?: string;
+  /** Preference, not a pin (task-972913b7): true when recommendedModel was
+   *  stamped automatically by backlog/queue_topup seeding rather than an
+   *  operator's own deliberate choice — the runner's policy MAY demote it to
+   *  the free local tier for genuinely mechanical (docs/summarize/triage) work.
+   *  Absent/false preserves today's behavior: recommendedModel is an absolute
+   *  pin the runner always honors. */
+  recommendedModelPreference?: boolean;
   source: TaskSource;
   sourceId?: string;
   prUrl?: string;
@@ -328,6 +335,13 @@ export interface ITask extends Document {
   leaseUntil?: Date;
   startedAt?: Date;
   completedAt?: Date;
+  // Stamped once on the pending/working → 'review' transition (task-store.ts
+  // updateTaskImpl) — review-held executions (worker-lane-status.ts) count at
+  // this instead of updatedAt, which the reconciler bumps on every pass it
+  // touches a review task, re-counting the same execution in executions24h
+  // every day it sits there (PR #479 follow-up). Backfilled from updatedAt for
+  // rows already in review before this field existed (migration 006).
+  reviewEnteredAt?: Date;
   // Priority preemption (ADR-011 follow-on) — set when a P0/P1 task arrives
   // and every runner-lease slot is busy on lower-priority work: the lowest-
   // priority in-flight task is paused (status → 'paused') in its favour and
@@ -357,6 +371,27 @@ export interface ITask extends Document {
   // task-store.ts's updateTaskImpl on every routeExhausted:true defer; reset
   // to 0 the next time the task re-stamps `working` with a real routed model.
   deferCount?: number;
+  // RUNNER: repeat-dispatch WARN — consecutive docs/state-only dispatch
+  // streak (monitoring/task-noop-dispatch-alerter.ts's in-process counter,
+  // mirrored onto the doc so it's queryable — same pattern as deferCount
+  // above). Stamped by task-store.ts's updateTaskImpl on every
+  // noopDispatch:true review-flip (the runner determined this fire's pushed
+  // commits touched only docs/state paths); reset to 0 the next time a flip
+  // carries noopDispatch:false (a real code change landed).
+  noopDispatchCount?: number;
+  // Consecutive pacing-defer streak (task-d85ea318, "runner churn" — 24:1
+  // claims-vs-executions). The runner claims a task atomically (claimedAt
+  // stamped, status→working), then a POST-CLAIM pacing/routing gate releases it
+  // straight back to 'pending' BEFORE it ever routes — reserve-floor restriction
+  // (non-trivial pick during interactive hours), predictive budget gate, or
+  // route-exhaustion demotion-declined. Each such release left claimedAt set but
+  // no routedProfile/routedModel, so it was invisible except as a "claimed, never
+  // routed" doc — 14,134 of 14,746 claims in a 30d window. Mirrored onto the doc
+  // the same way deferCount/noopDispatchCount are so the churn is queryable, and
+  // every pacingDefer release ALSO carries a nextRetryAt backoff (deferSeconds)
+  // so the same head-of-queue task is NOT re-claimed on the very next fire. Reset
+  // to 0 the next time the task re-stamps 'working' with a real routed model.
+  pacingDeferCount?: number;
   // Team-tier per-member budget scoping (task-82854b12) — the tenant member
   // (User.userId) this task is attributed to, when created on behalf of a
   // signed-in member (dashboard). Absent on system/CLI/scheduler-created
@@ -371,6 +406,18 @@ export interface ITask extends Document {
   // exist (tenant-scoped) and that an edit never introduces a cycle. Absent /
   // empty = independent task, exactly the pre-existing flat-queue behaviour.
   dependsOn?: string[];
+  // Swarm task model (SWARM_MESSAGING P2) — the swarm (swarms collection) this
+  // task is a child of, and an optional coordinator/parent task. Absent on
+  // every non-swarm task, so nothing pre-existing needs a migration.
+  swarmId?: string;
+  parentTaskId?: string;
+  // Swarm token-budget guardrail (SWARM_MESSAGING P5 follow-up) — actual
+  // output tokens this task spent, as reported by the runner (cli_task_runner.sh's
+  // SESS_TOK/AC_TOK session-token delta) on each terminal tasks_update call.
+  // Accumulates across retries (a task can fire more than once). Absent on
+  // every task the runner hasn't closed off yet, and on non-runner-claimed
+  // (gateway-inline) tasks, which never carry a session-token delta.
+  outputTokens?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -385,6 +432,7 @@ const taskSchema = new Schema<ITask>({
   status: { type: String, required: true, enum: ['pending', 'working', 'review', 'done', 'blocked', 'paused', 'dead_letter'], default: 'pending', index: true },
   assignedAgent: { type: String },
   recommendedModel: { type: String },
+  recommendedModelPreference: { type: Boolean },
   source: { type: String, required: true, enum: ['manual', 'connect-hub', 'auto-detected', 'scheduler', 'telegram', 'github'], default: 'manual' },
   sourceId: { type: String },
   prUrl: { type: String },
@@ -403,6 +451,7 @@ const taskSchema = new Schema<ITask>({
   leaseUntil: { type: Date },
   startedAt: { type: Date },
   completedAt: { type: Date },
+  reviewEnteredAt: { type: Date },
   preemptedBy: { type: String },
   preemptedAt: { type: Date },
   supersededBy: { type: String },
@@ -412,11 +461,16 @@ const taskSchema = new Schema<ITask>({
   deadLetteredAt: { type: Date },
   lastError: { type: String },
   deferCount: { type: Number, default: 0 },
+  noopDispatchCount: { type: Number, default: 0 },
+  pacingDeferCount: { type: Number, default: 0 },
   requestedByUserId: { type: String },
   // default undefined (not []) so dependency-free docs — including every
   // pre-existing task — carry no field at all and claimTask()'s
   // {$exists:false} fast path matches them without a migration.
   dependsOn: { type: [String], default: undefined },
+  swarmId: { type: String },
+  parentTaskId: { type: String },
+  outputTokens: { type: Number },
 }, { timestamps: true });
 
 // ── Task index strategy (hot path — polled every runner fire) ───────────
@@ -441,6 +495,17 @@ taskSchema.index({ tenantId: 1, repo: 1, status: 1 });
 // admin/migration queries; drop via migration once nothing unscoped remains.
 taskSchema.index({ repo: 1, status: 1, priority: 1 });
 taskSchema.index({ status: 1, priority: 1, createdAt: 1 });
+// Dashboard /velocity (task-2c4d6324) — buildVelocityPipeline's $match is
+// {tenantId, status:'done', completedAt:{$gte:since}}. None of the indexes
+// above carry completedAt, so that query only got the (tenantId, status)
+// equality prefix from the 4-key pickup index and then FETCHed every done
+// task ever (across all repos) to filter completedAt in memory — unbounded
+// by the 8-week window. This index gives it a leading equality pair plus a
+// range bound on completedAt in one pass, cutting the scan to the window.
+taskSchema.index({ tenantId: 1, status: 1, completedAt: 1 });
+// Swarm children (SWARM_MESSAGING P2) — listSwarmChildren + /swarm (P3).
+// Sparse: only swarm children carry swarmId.
+taskSchema.index({ tenantId: 1, swarmId: 1 }, { sparse: true });
 
 // ── RunnerLease (ADR-011 slice 3 — fleet-wide runner concurrency) ──
 // One document per slot per tenant. The N slots (N = active Claude accounts,
@@ -454,7 +519,7 @@ export interface IRunnerLease extends Document {
   holder: string;
   /** Hostname, for fleet visibility (holder already embeds it by convention). */
   machine?: string;
-  /** Claude account/profile bound to this slot, e.g. "claude-tech" (slice 6). */
+  /** Claude account/profile bound to this slot, e.g. "claude-work" (slice 6). */
   account?: string;
   /** Task being worked under this lease, for dashboard visibility. */
   taskId?: string;
@@ -487,6 +552,143 @@ runnerLeaseSchema.index({ tenantId: 1, slot: 1 }, { unique: true });
 // collection stays tiny. Mongo's TTL monitor lags up to 60s — never rely on it
 // for correctness.
 runnerLeaseSchema.index({ leaseUntil: 1 }, { expireAfterSeconds: 3600 });
+
+// ── KeyedLease (SWARM_COORDINATOR_PLAN phase 1 — keyed, named leases) ──
+// One document per (tenant, key). Unlike RunnerLease above (a FIXED N-slot pool
+// that caps runner concurrency), these are arbitrary named leases: coordinator
+// election ("swarm-coordinator:<host>") and per-resource claims
+// ("claim:<repo>:<path>"). Kept in a separate collection so coordinator/claim
+// leases can never starve the runner's slot pool.
+
+export interface IKeyedLease extends Document {
+  tenantId: string;
+  /** Lease name, 1..200 chars, no whitespace, e.g. "swarm-coordinator:host-a". */
+  key: string;
+  /** Identity holding the lease, e.g. "lead/host-a/4242". */
+  holder: string;
+  leaseUntil: Date;
+  acquiredAt: Date;
+  heartbeatAt: Date;
+  /** Small caller metadata (lane, pid, host, note) — visibility only. */
+  meta?: Record<string, unknown>;
+  /** Fencing token: 1 on insert, +1 on every takeover, unchanged on extend/heartbeat. */
+  epoch: number;
+  /** Holder this lease was last taken over from (set by the takeover path). */
+  previousHolder?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const keyedLeaseSchema = new Schema<IKeyedLease>({
+  tenantId: tenantField,
+  key: { type: String, required: true },
+  holder: { type: String, required: true },
+  leaseUntil: { type: Date, required: true },
+  acquiredAt: { type: Date, required: true },
+  heartbeatAt: { type: Date, required: true },
+  meta: { type: Schema.Types.Mixed },
+  epoch: { type: Number, required: true, default: 1 },
+  previousHolder: { type: String },
+}, { timestamps: true, collection: 'keyed_leases' });
+
+// acquireKeyedLease() relies on this unique index: two holders racing to insert
+// the same free key → exactly one wins, the loser gets E11000 and reports heldBy.
+keyedLeaseSchema.index({ tenantId: 1, key: 1 }, { unique: true });
+// TTL GC only (same posture as runner_leases): stale takeover is atomic inside
+// acquireKeyedLease; this sweeps leftovers ~1h after expiry. All expiry writes
+// and checks use Mongo server time ($$NOW), so gateways on several Macs with
+// skewed clocks agree on who holds a lease.
+keyedLeaseSchema.index({ leaseUntil: 1 }, { expireAfterSeconds: 3600 });
+
+// ── Account usage ledger (multi-Mac phase 2, plan/MULTI_MAC_SWARM_BRIEF.md) ──
+// Per-ACCOUNT Claude/agy usage shared across Macs (both gateways use this one
+// Atlas DB). Three collections:
+//   account_usage    — hourly token buckets per account × host × model, written
+//                      by each Mac's scripts/usage_push.sh from its OWN
+//                      transcripts (deduped by message.id). Recomputed and SET
+//                      (not incremented) on every push → idempotent, no drift.
+//   account_readings — REAL quota percentages: Claude Code's statusLine
+//                      rate_limits (five_hour / seven_day), agy's quota file,
+//                      and operator /usage readings (incl. per-model rows).
+//   account_assets   — banked full reset, cloud-session credit, spend flags.
+export interface IAccountUsage extends Document {
+  tenantId: string;
+  account: string;
+  host: string;
+  hour: Date;
+  /** The LLM model id (`model` collides with mongoose Document#model). */
+  modelId: string;
+  output: number;
+  input: number;
+  cacheCreate: number;
+  cacheRead: number;
+}
+const accountUsageSchema = new Schema<IAccountUsage>({
+  tenantId: tenantField,
+  account: { type: String, required: true },
+  host: { type: String, required: true },
+  hour: { type: Date, required: true },
+  modelId: { type: String, required: true },
+  output: { type: Number, default: 0 },
+  input: { type: Number, default: 0 },
+  cacheCreate: { type: Number, default: 0 },
+  cacheRead: { type: Number, default: 0 },
+}, { timestamps: true, collection: 'account_usage' });
+accountUsageSchema.index({ tenantId: 1, account: 1, host: 1, hour: 1, modelId: 1 }, { unique: true });
+accountUsageSchema.index({ tenantId: 1, account: 1, hour: 1 });
+accountUsageSchema.index({ hour: 1 }, { expireAfterSeconds: 60 * 86_400 });
+
+export interface IAccountReading extends Document {
+  tenantId: string;
+  account: string;
+  host: string;
+  source: 'statusline' | 'agy' | 'operator';
+  at: Date;
+  fiveHourPct?: number;
+  fiveHourResetsAt?: Date;
+  sevenDayPct?: number;
+  sevenDayResetsAt?: Date;
+  fablePct?: number;
+  opusPct?: number;
+  note?: string;
+}
+const accountReadingSchema = new Schema<IAccountReading>({
+  tenantId: tenantField,
+  account: { type: String, required: true },
+  host: { type: String, required: true },
+  source: { type: String, enum: ['statusline', 'agy', 'operator'], required: true },
+  at: { type: Date, required: true },
+  fiveHourPct: { type: Number },
+  fiveHourResetsAt: { type: Date },
+  sevenDayPct: { type: Number },
+  sevenDayResetsAt: { type: Date },
+  fablePct: { type: Number },
+  opusPct: { type: Number },
+  note: { type: String },
+}, { timestamps: true, collection: 'account_readings' });
+accountReadingSchema.index({ tenantId: 1, account: 1, host: 1, source: 1, at: 1 }, { unique: true });
+accountReadingSchema.index({ tenantId: 1, account: 1, at: -1 });
+accountReadingSchema.index({ at: 1 }, { expireAfterSeconds: 120 * 86_400 });
+
+export interface IAccountAsset extends Document {
+  tenantId: string;
+  account: string;
+  kind: 'full_reset' | 'cloud_credit' | 'spend_flag';
+  usd?: number;
+  expires?: Date;
+  active: boolean;
+  note?: string;
+}
+const accountAssetSchema = new Schema<IAccountAsset>({
+  tenantId: tenantField,
+  account: { type: String, required: true },
+  kind: { type: String, enum: ['full_reset', 'cloud_credit', 'spend_flag'], required: true },
+  usd: { type: Number },
+  expires: { type: Date },
+  active: { type: Boolean, default: true },
+  note: { type: String },
+}, { timestamps: true, collection: 'account_assets' });
+accountAssetSchema.index({ tenantId: 1, account: 1, kind: 1 }, { unique: true });
 
 // ── RunnerLeaseHistory (ADR-011 slice 7 — runs log) ──
 // RunnerLease only exists while a slot is HELD — release deletes the doc, so
@@ -546,6 +748,19 @@ runnerLeaseHistorySchema.index({ releasedAt: 1 }, { expireAfterSeconds: 60 * 24 
 export interface IRunnerBacklogCursor extends Document {
   tenantId: string;
   consumed: number;
+  /**
+   * Durable consumed-titles ledger (task-aa331af6): every backlog line title
+   * ever positively confirmed to have a matching gateway task. `consumed` is
+   * a position that can be silently corrected by queue_topup.sh's self-heal
+   * (task-08dbc72f) using tasks_list, which is hard-capped at limit:2000 — as
+   * the fleet-wide task table grows, older titles fall out of that window
+   * even though the underlying task still exists, so a window-derived
+   * confirmation can wrongly read as "never consumed". Ledger membership is
+   * monotonic (only grows, checked once and true forever) and independent of
+   * that window, so it is the one number self-heal can trust as a floor the
+   * corrected cursor may never go below.
+   */
+  confirmedTitles: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -553,6 +768,7 @@ export interface IRunnerBacklogCursor extends Document {
 const runnerBacklogCursorSchema = new Schema<IRunnerBacklogCursor>({
   tenantId: tenantField,
   consumed: { type: Number, required: true, default: 0 },
+  confirmedTitles: { type: [String], required: true, default: [] },
 }, { timestamps: true, collection: 'runner_backlog_cursor' });
 
 // One cursor doc per tenant — upserted in place, never duplicated.
@@ -573,6 +789,15 @@ export interface IRunnerHeartbeat extends Document {
   /** Runner identity for this fire, e.g. "runner-host/12345". */
   holder: string;
   lastHeartbeatAt: Date;
+  /** AGENT_MESSAGING_DISPATCH — the mailbox address this runner answers to
+   *  (e.g. "host-a", "home-mbp/my-repo", or a role like "codex"), for
+   *  non-Claude CLI lanes (agy, codex, local Ollama) that have no other
+   *  identity record. Optional — undeclared callers are unaddressed. */
+  address?: string;
+  /** Free-form capability tags this runner can act on (e.g. "codex",
+   *  "ollama", "qwen3-coder:30b", "review", "summarize") — what dispatch_delegate
+   *  routes by. */
+  capabilities?: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -582,6 +807,8 @@ const runnerHeartbeatSchema = new Schema<IRunnerHeartbeat>({
   machine: { type: String, required: true },
   holder: { type: String, required: true },
   lastHeartbeatAt: { type: Date, required: true },
+  address: { type: String },
+  capabilities: { type: [String], default: undefined },
 }, { timestamps: true, collection: 'runner_heartbeats' });
 
 // One doc per machine per tenant — each fire upserts its own machine's pulse.
@@ -850,6 +1077,125 @@ const notificationPrefsSchema = new Schema<INotificationPrefs>({
   quietStart: { type: String },
   quietEnd: { type: String },
 }, { timestamps: true, minimize: false });
+
+// ── Mailbox (SWARM_MESSAGING P1 — durable, addressed, acked messages) ──────
+// The durable path that never loses anything when the recipient (a Mac, a
+// repo's session, or a role) is asleep — where live SendMessage/SSE would drop
+// it. ADDITIVE to the realtime notifications event-bus: sendMail() emits a
+// `message.received` event onto notifyBus (SSE + history) as well as persisting
+// here; it does NOT fork the bus (guardrail §3). Addresses are free strings
+// resolved by convention — `host` | `host/repo` | `repo` | `role` (e.g.
+// "HOST-A", "HOST-A/my-repo", "my-repo", "reviewer") — lowercase-
+// normalised at write AND read so a hostname's casing can never strand mail.
+// See runtime/src/notifications/mailbox-store.ts + plan/SWARM_MESSAGING_ARCHITECTURE.md §2.
+export interface IMailboxMessage extends Document {
+  tenantId: string;
+  /** Stable id, "mail-<uuid>". */
+  messageId: string;
+  /** Recipient address (normalised): host | host/repo | repo | role. */
+  to: string;
+  /** Sender address (normalised) — same address forms as `to`. */
+  from: string;
+  /** Free label, e.g. note | request | live-note | swarm. Defaults to "note". */
+  kind: string;
+  subject: string;
+  body: string;
+  /** messageId of the message this replies to (threading). */
+  replyTo?: string;
+  /** Groups mail exchanged inside one swarm (P2 consumes this). */
+  swarmId?: string;
+  /** False until a recipient acks — the "unread" flag the inbox reads. */
+  acked: boolean;
+  ackedAt?: Date;
+  ackedBy?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const mailboxMessageSchema = new Schema<IMailboxMessage>({
+  tenantId: tenantField,
+  messageId: { type: String, required: true, unique: true, index: true },
+  to: { type: String, required: true, index: true },
+  from: { type: String, required: true },
+  kind: { type: String, required: true, default: 'note' },
+  subject: { type: String, required: true },
+  body: { type: String, default: '' },
+  replyTo: { type: String },
+  swarmId: { type: String },
+  acked: { type: Boolean, required: true, default: false, index: true },
+  ackedAt: { type: Date },
+  ackedBy: { type: String },
+}, { timestamps: true, collection: 'mailbox_messages' });
+
+// Inbox hot path (session-start banner + mail_inbox): unacked mail for an
+// address set, newest first — {tenantId, to:{$in}, acked:false} sorted
+// {createdAt:-1} served filter+sort in one pass.
+mailboxMessageSchema.index({ tenantId: 1, to: 1, acked: 1, createdAt: -1 });
+// Swarm grouping (P2 consumes it) — sparse; only swarm mail carries swarmId.
+mailboxMessageSchema.index({ tenantId: 1, swarmId: 1, createdAt: -1 }, { sparse: true });
+
+// ── Swarms (SWARM_MESSAGING P2 — grouped tasks behind one approval) ─────────
+// One authoritative row per swarm so approve / stop / budget have something to
+// flip and /swarm (P3) has something to list. The children are ordinary tasks
+// stamped with swarmId, created `paused`, so the existing runner + claimTask()
+// dependsOn gate run them — nothing here changes how a task is claimed.
+// Lifecycle: planning → paused → active → (done | stopped); stopped → active
+// on a re-approve. See runtime/src/tasks/swarm-store.ts +
+// plan/SWARM_P2_TASK_MODEL_PLAN.md.
+export type SwarmStatus = 'planning' | 'paused' | 'active' | 'stopped' | 'done';
+
+export interface ISwarm extends Document {
+  tenantId: string;
+  /** Stable id, "swarm-<uuid>". */
+  swarmId: string;
+  repo: string;
+  goal: string;
+  status: SwarmStatus;
+  /** Max children this swarm may hold (guardrail, default 5). */
+  childCap: number;
+  childCount: number;
+  /** Who planned it — also mailed on stop. */
+  createdBy: string;
+  /** Output-token budget (P5 guardrail); enforcement needs per-task spend. */
+  tokenBudget?: number;
+  /** Cumulative output-token spend across every child (P5 enforcement) —
+   *  incremented atomically by swarm-store.ts's recordSwarmChildTokens() as
+   *  each child reports its own fire's spend via tasks_update{outputTokens}. */
+  tokenSpent?: number;
+  /** Optional coordinator task the children hang off. */
+  parentTaskId?: string;
+  notes?: string;
+  approvedAt?: Date;
+  approvedBy?: string;
+  stoppedAt?: Date;
+  stoppedBy?: string;
+  completedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const swarmSchema = new Schema<ISwarm>({
+  tenantId: tenantField,
+  swarmId: { type: String, required: true, unique: true, index: true },
+  repo: { type: String, required: true },
+  goal: { type: String, required: true },
+  status: { type: String, required: true, enum: ['planning', 'paused', 'active', 'stopped', 'done'], default: 'planning' },
+  childCap: { type: Number, required: true, default: 5 },
+  childCount: { type: Number, required: true, default: 0 },
+  createdBy: { type: String, required: true },
+  tokenBudget: { type: Number },
+  tokenSpent: { type: Number, default: 0 },
+  parentTaskId: { type: String },
+  notes: { type: String },
+  approvedAt: { type: Date },
+  approvedBy: { type: String },
+  stoppedAt: { type: Date },
+  stoppedBy: { type: String },
+  completedAt: { type: Date },
+}, { timestamps: true, collection: 'swarms' });
+
+// /swarm list (P3): a tenant's swarms by status, newest first.
+swarmSchema.index({ tenantId: 1, status: 1, createdAt: -1 });
 
 // ── Budget Usage (Phase 5b spend audit log) ──────────────
 
@@ -3129,6 +3475,10 @@ export let VectorModel: Model<IVector>;
 export let TaskModel: Model<ITask>;
 export let RunnerLeaseModel: Model<IRunnerLease>;
 export let RunnerLeaseHistoryModel: Model<IRunnerLeaseHistory>;
+export let KeyedLeaseModel: Model<IKeyedLease>;
+export let AccountUsageModel: Model<IAccountUsage>;
+export let AccountReadingModel: Model<IAccountReading>;
+export let AccountAssetModel: Model<IAccountAsset>;
 export let RunnerBacklogCursorModel: Model<IRunnerBacklogCursor>;
 export let RunnerHeartbeatModel: Model<IRunnerHeartbeat>;
 export let FleetMaintenanceModel: Model<IFleetMaintenance>;
@@ -3143,6 +3493,8 @@ export let UsageEventModel: Model<IUsageEvent>;
 export let NotificationModel: Model<INotification>;
 export let PushSubscriptionModel: Model<IPushSubscription>;
 export let NotificationPrefsModel: Model<INotificationPrefs>;
+export let MailboxMessageModel: Model<IMailboxMessage>;
+export let SwarmModel: Model<ISwarm>;
 export let RepoCardModel: Model<IRepoCard>;
 export let RepoModel: Model<IRepo>;
 export let PlanDayModel: Model<IPlanDay>;
@@ -3294,6 +3646,10 @@ export async function connectDB(): Promise<typeof mongoose> {
     TaskModel = mongoose.model<ITask>('Task', taskSchema);
     RunnerLeaseModel = mongoose.model<IRunnerLease>('RunnerLease', runnerLeaseSchema);
     RunnerLeaseHistoryModel = mongoose.model<IRunnerLeaseHistory>('RunnerLeaseHistory', runnerLeaseHistorySchema);
+    KeyedLeaseModel = mongoose.model<IKeyedLease>('KeyedLease', keyedLeaseSchema);
+    AccountUsageModel = mongoose.model<IAccountUsage>('AccountUsage', accountUsageSchema);
+    AccountReadingModel = mongoose.model<IAccountReading>('AccountReading', accountReadingSchema);
+    AccountAssetModel = mongoose.model<IAccountAsset>('AccountAsset', accountAssetSchema);
     RunnerBacklogCursorModel = mongoose.model<IRunnerBacklogCursor>('RunnerBacklogCursor', runnerBacklogCursorSchema);
     RunnerHeartbeatModel = mongoose.model<IRunnerHeartbeat>('RunnerHeartbeat', runnerHeartbeatSchema);
     FleetMaintenanceModel = mongoose.model<IFleetMaintenance>('FleetMaintenance', fleetMaintenanceSchema);
@@ -3308,6 +3664,8 @@ export async function connectDB(): Promise<typeof mongoose> {
     NotificationModel = mongoose.model<INotification>('Notification', notificationSchema);
     PushSubscriptionModel = mongoose.model<IPushSubscription>('PushSubscription', pushSubscriptionSchema);
     NotificationPrefsModel = mongoose.model<INotificationPrefs>('NotificationPrefs', notificationPrefsSchema);
+    MailboxMessageModel = mongoose.model<IMailboxMessage>('MailboxMessage', mailboxMessageSchema);
+    SwarmModel = mongoose.model<ISwarm>('Swarm', swarmSchema);
     RepoCardModel = mongoose.model<IRepoCard>('RepoCard', repoCardSchema);
     RepoModel = mongoose.model<IRepo>('Repo', repoSchema);
     PlanDayModel = mongoose.model<IPlanDay>('PlanDay', planDaySchema);
@@ -3388,6 +3746,11 @@ export function recordMongoBootFailure(err: Error, uri: string): void {
 
 export function getMongoBootFailure(): MongoBootFailure | null {
   return bootFailure;
+}
+
+/** The background reconnect (core/db-reconnect.ts) clears this once connected. */
+export function clearMongoBootFailure(): void {
+  bootFailure = null;
 }
 
 export async function disconnectDB(): Promise<void> {

@@ -8,11 +8,15 @@
 
 name: CI
 
-# CI-THRIFT POLICY (fleet-wide, 2026-06-12): CI runs ONCE, at PR-to-main only.
-# Pushes to `test` (or any branch) do NOT trigger CI — verify locally first with
-# `./AI/scripts/local-ci.sh` (Docker tsc + tests + build). This stops the
-# every-push double/triple CI runs that burn Actions credits. Manual runs via
-# the Actions tab (workflow_dispatch). See CLAUDE.md "CI/Vercel Thrift Policy".
+# CI-THRIFT POLICY (fleet-wide, 2026-06-12; trigger fixed 2026-09-09): CI runs
+# at PR time only. Pushes to `test` (or any branch) do NOT trigger CI — verify
+# locally first with `./AI/scripts/local-ci.sh` (Docker tsc + tests + build).
+# This stops the every-push double/triple CI runs that burn Actions credits.
+# Manual runs via the Actions tab (workflow_dispatch). See CLAUDE.md "CI/Vercel
+# Thrift Policy". `test` MUST stay in the pull_request trigger: the test
+# branch's protection requires Lint/Type-check/Test, and a required check no
+# workflow can produce for base=test is a phantom that blocks every non-admin
+# PR into test forever (AI_RULES §20). Base=test PRs are rare, so ~zero cost.
 #
 # CI-THRIFT v2 (2026-07-05): AI/docs-only changes must not rebuild the stack.
 # The `changes` job computes whether anything OUTSIDE the AI/docs set changed;
@@ -23,7 +27,7 @@ name: CI
 # would make a required check hang forever, never posting a conclusion).
 on:
   pull_request:
-    branches: [main]
+    branches: [main, test]
   workflow_dispatch: {}
 
 concurrency:

@@ -86,16 +86,17 @@ export function MarketplaceReviewsPanel({
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             placeholder="What did you think?"
+            aria-label="Review comment"
             maxLength={2000}
             rows={2}
-            className="w-full text-sm bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-md px-2.5 py-2 text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
+            className="w-full text-sm bg-[rgb(var(--bg-surface))]/70 border border-[rgb(var(--border-subtle))] rounded-md px-2.5 py-2 text-[rgb(var(--text-primary))] placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 focus-visible:ring-2 focus-visible:ring-zinc-500/50"
           />
           <div>
             <button className={BTN_PRIMARY} disabled={busy} onClick={submit}>
               {busy ? 'Saving…' : myReview ? 'Update review' : 'Submit review'}
             </button>
           </div>
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
         </div>
       ) : (
         <p className="text-xs text-zinc-600 pb-4 border-b border-[rgb(var(--border-subtle))]/60">{reviewGate.reason}</p>
@@ -109,8 +110,8 @@ export function MarketplaceReviewsPanel({
             <li key={r.reviewId} className="text-sm">
               <div className="flex items-center gap-2">
                 <Stars rating={r.rating} />
-                <span className="text-[11px] text-[rgb(var(--text-muted))]">{r.installerTenantId}</span>
-                <span className="text-[11px] text-zinc-600">{new Date(r.createdAt).toLocaleDateString()}</span>
+                <span className="text-label text-[rgb(var(--text-muted))]">{r.installerTenantId}</span>
+                <span className="text-label text-zinc-600">{new Date(r.createdAt).toLocaleDateString()}</span>
               </div>
               {r.comment && <p className="text-[rgb(var(--text-secondary))] mt-1">{r.comment}</p>}
             </li>

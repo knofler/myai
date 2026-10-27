@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createChildLogger } from '../shared/logger.js';
+import { DEFAULT_CLAUDE_MODEL } from './claude-models.js';
 import type { AnthropicToolSpec, ToolUseBlock } from '../tools/chat-tools.js';
 
 const log = createChildLogger({ module: 'llm-anthropic' });
@@ -119,7 +120,7 @@ export async function callAnthropic(
     throw new Error('Anthropic client not initialized — set ANTHROPIC_API_KEY');
   }
 
-  const model = req.model || 'claude-sonnet-4-20250514';
+  const model = req.model || DEFAULT_CLAUDE_MODEL;
   const maxTokens = req.maxTokens || 4096;
   const maxIterations = toolOpts?.maxIterations ?? 5;
 

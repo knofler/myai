@@ -57,7 +57,7 @@ export function fmtDurationSec(secs?: number): string {
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="bg-[rgb(var(--bg-page))] border border-[rgb(var(--border-subtle))] rounded-md px-3 py-2.5">
-      <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider">{label}</p>
+      <p className="text-label text-[rgb(var(--text-muted))] uppercase tracking-wider">{label}</p>
       <p className="text-lg font-semibold text-[rgb(var(--text-primary))] mt-0.5">{value}</p>
       {sub && <p className="text-xs text-[rgb(var(--text-muted))] mt-0.5">{sub}</p>}
     </div>
@@ -95,7 +95,7 @@ export function TaskCostDetails({ data }: { data: TaskCostData }) {
       </div>
 
       <div>
-        <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Model</p>
+        <p className="text-label text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Model</p>
         {model && (
           <p className="text-sm text-[rgb(var(--text-primary))] font-mono">
             {model}
@@ -123,7 +123,7 @@ export function TaskCostDetails({ data }: { data: TaskCostData }) {
       </div>
 
       <div>
-        <p className="text-[11px] text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Metering</p>
+        <p className="text-label text-[rgb(var(--text-muted))] uppercase tracking-wider mb-2">Metering</p>
         <dl className="text-xs space-y-1.5">
           <div className="flex justify-between gap-3">
             <dt className="text-[rgb(var(--text-muted))]">Billable unit</dt>
@@ -146,7 +146,7 @@ export function TaskCostDetails({ data }: { data: TaskCostData }) {
             <dd className="text-[rgb(var(--text-primary))]">{run.meterEvents}</dd>
           </div>
         </dl>
-        <p className="text-[11px] text-[rgb(var(--text-muted))] mt-3 leading-relaxed">
+        <p className="text-label text-[rgb(var(--text-muted))] mt-3 leading-relaxed">
           {spend.attribution === 'repo-window'
             ? <>Token spend is attributed by repo + run window (metered gateway calls on <span className="font-mono">{task.repo}</span> during this run) — the runner&apos;s own subscription-billed session tokens are not metered per call.</>
             : 'No run window recorded (task never started) — token spend cannot be attributed.'}

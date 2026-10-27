@@ -254,7 +254,16 @@ export interface BrainStatus {
     ahead: number;
     behind: number;
     diverged: boolean;
-    /** Present only when local main is stale and worth flagging to the user. */
+    /**
+     * False when origin could not be reached this call, so `ahead`/`behind` are
+     * vs the last-known remote-tracking ref rather than a fresh fetch. A caller
+     * rendering "in sync" MUST check this — `{ahead:0,behind:0,verified:false}`
+     * means "no idea", not "replicated".
+     */
+    verified: boolean;
+    /** Why the sync didn't happen — absent when genuinely synced. */
+    reason?: BrainSyncResult['reason'];
+    /** Present only when local main is stale/unpushed and worth flagging. */
     warning?: string;
   };
 }
@@ -346,11 +355,22 @@ export interface BrainSyncResult {
   reason?: 'no-brain' | 'no-remote' | 'offline' | 'dirty' | 'diverged';
   /**
    * Commits local main has that origin/main doesn't, and vice versa — computed
-   * from the just-fetched refs (local git op, no extra network). Present only
-   * when the fetch itself succeeded (absent on 'no-brain'/'no-remote'/'offline').
+   * from the refs on disk (local git op, no extra network). Present whenever a
+   * remote-tracking ref exists to compare against, INCLUDING on 'offline':
+   * absent only for 'no-brain'/'no-remote'.
    * A clone that is simultaneously ahead and behind is DIVERGED: ff-only can
    * never reconcile it (task-1195b1a7 — this is what let a 7-week-stale clone
    * silently keep serving brain_delta with zero warning).
+   *
+   * WHY 'offline' CARRIES COUNTS (2026-09-09). It used to return a bare
+   * `{synced:false, reason:'offline'}`, and `brainStatus` coerced the missing
+   * counts with `?? 0` — so an unreachable origin rendered as
+   * `sync: {ahead:0, behind:0, diverged:false}`: a clean bill of health over a
+   * store that was 3 commits ahead and replicated NOWHERE. The gateway
+   * container has no `ssh` binary, so its fetch/push ALWAYS fails and every
+   * `brain_merge` reports `pushSkipped: 'offline'` — meaning that false 0/0 was
+   * the steady state, not an edge case. Unknown must never render as zero: the
+   * counts vs the last-known origin ref are still true and still actionable.
    */
   ahead?: number;
   behind?: number;
@@ -375,10 +395,28 @@ function aheadBehind(dir: string, local: string, remote: string): { ahead: numbe
  */
 export function brainSyncWarning(sync: BrainSyncResult): string | undefined {
   if (sync.synced) return undefined;
-  if (sync.reason !== 'diverged' && sync.reason !== 'dirty') return undefined;
+  // A brain with no store or no remote is a legitimate configuration, not drift.
+  if (sync.reason === 'no-brain' || sync.reason === 'no-remote') return undefined;
   const behind = sync.behind ?? 0;
-  if (behind <= 0) return undefined;
-  const aheadPart = sync.ahead ? `, ahead ${sync.ahead}` : '';
+  const ahead = sync.ahead ?? 0;
+  if (behind <= 0 && ahead <= 0) return undefined;
+  // Unreachable origin with a nonzero local delta: the counts are stale but the
+  // UNPUSHED work is real, and nothing replicates it until a host-side push runs
+  // (the gateway container has no ssh, so its own push can never succeed).
+  if (sync.reason === 'offline') {
+    const behindPart = behind > 0 ? `, ${behind} behind as of the last fetch` : '';
+    return `brain: origin unreachable (offline) — ${ahead} commit(s) UNPUSHED${behindPart}. ` +
+      `This work exists on THIS MACHINE ONLY; counts are vs the last-known origin/main, not a fresh ` +
+      `fetch. Run 'scripts/boot_sync.sh --no-gateway' from the host to replicate.`;
+  }
+  // Ahead-only under diverged/dirty was silent before 2026-09-09 (the guard read
+  // `behind <= 0 → undefined`), so unpushed-but-current work never warned at all.
+  if (behind <= 0) {
+    return `brain: local main is ${ahead} commit(s) AHEAD of origin/main (${sync.reason}) and unpushed — ` +
+      `this work exists on this machine only. Run 'myai brain merge' (or resolve the ${sync.reason} ` +
+      `state by hand), then push.`;
+  }
+  const aheadPart = ahead ? `, ahead ${ahead}` : '';
   return `brain: local main is ${behind} commit(s) BEHIND origin/main${aheadPart} (${sync.reason}) — ` +
     `pull-on-boot could not fast-forward. This boot may be missing recent sessions from other ` +
     `machines. Run 'myai brain merge' (or resolve the ${sync.reason} state by hand) to reconcile.`;
@@ -405,7 +443,12 @@ export function brainSyncPull(env: NodeJS.ProcessEnv = process.env): BrainSyncRe
   const dir = resolveBrainDir(env);
   if (!isBrainRepo(dir)) return { synced: false, reason: 'no-brain' };
   if (!brainRemoteUrl(dir)) return { synced: false, reason: 'no-remote' };
-  if (!netGitOk(dir, 'fetch', '-q', 'origin', 'main')) return { synced: false, reason: 'offline' };
+  if (!netGitOk(dir, 'fetch', '-q', 'origin', 'main')) {
+    // Offline still reports counts, vs the LAST-KNOWN origin/main ref — a local
+    // rev-list needing no network. See BrainSyncResult.ahead for why a bare
+    // 'offline' was a silent-health bug rather than a harmless omission.
+    return { synced: false, reason: 'offline', ...aheadBehind(dir, 'main', 'origin/main') };
+  }
   const { ahead, behind } = aheadBehind(dir, 'main', 'origin/main');
   if (git(dir, 'rev-parse', '--abbrev-ref', 'HEAD') === 'main') {
     if (git(dir, 'status', '--porcelain') !== '') return { synced: false, reason: 'dirty', ahead, behind };
@@ -853,6 +896,8 @@ export function brainStatus(env: NodeJS.ProcessEnv = process.env): BrainStatus {
         ahead: pull.ahead ?? 0,
         behind: pull.behind ?? 0,
         diverged: pull.reason === 'diverged',
+        verified: pull.reason !== 'offline',
+        ...(pull.reason ? { reason: pull.reason } : {}),
         warning: brainSyncWarning(pull),
       },
     } : {}),

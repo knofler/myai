@@ -1,0 +1,59 @@
+# LLM-from-scratch blueprint — the whole pipeline, containerised.
+#
+# Docker-only by framework rule: never `pip install` or `python` on the host.
+# Deliberately CPU-default so this runs on any laptop; the model is small
+# enough that it is the right call, and a GPU is an opt-in override rather
+# than a prerequisite for learning.
+#
+# container_name uses the ${PROJECT_NAME} prefix so it matches the folder name,
+# per the framework's Docker naming rule.
+services:
+  train:
+    build: ./train
+    container_name: ${PROJECT_NAME:-llmscratch}-train
+    volumes:
+      - ./train:/app
+      - ./data:/data
+      - ./checkpoints:/checkpoints
+    environment:
+      DATA_DIR: /data
+      CHECKPOINT_DIR: /checkpoints
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    # No long-running process: this container is a workbench you exec into
+    # (./dev train, ./dev test, ./dev shell). Sleeping keeps it available
+    # without pretending to be a service with a health check.
+    command: ["sleep", "infinity"]
+    mem_limit: 2g
+
+  serve:
+    build: ./serve
+    container_name: ${PROJECT_NAME:-llmscratch}-serve
+    ports:
+      - "${SERVE_PORT:-8000}:8000"
+    volumes:
+      - ./serve:/app
+      - ./train/llm:/app/llm:ro      # the model code IS the training code
+      - ./checkpoints:/checkpoints:ro
+    environment:
+      CHECKPOINT_DIR: /checkpoints
+      PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 1g
+
+  ui:
+    image: nginx:alpine
+    container_name: ${PROJECT_NAME:-llmscratch}-ui
+    ports:
+      - "${UI_PORT:-8080}:80"
+    volumes:
+      - ./ui:/usr/share/nginx/html:ro
+    depends_on:
+      serve:
+        condition: service_healthy
+    mem_limit: 128m

@@ -30,7 +30,7 @@ export function TaskDeferPanel({ tasks }: { tasks: TaskDeferRow[] }) {
     >
       <table className="card-table w-full text-sm">
         <thead>
-          <tr className="text-left text-[11px] text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
+          <tr className="text-left text-label text-[rgb(var(--text-muted))] border-b border-[rgb(var(--border-subtle))] uppercase tracking-wider">
             <th className="px-4 py-2.5 font-medium">Repo</th>
             <th className="px-4 py-2.5 font-medium">Task</th>
             <th className="px-4 py-2.5 font-medium">Consecutive defers</th>
