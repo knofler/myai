@@ -136,6 +136,10 @@ if [ "$DO_CODE" = 1 ]; then
         if git -C "$ROOT" cat-file -e "origin/$BR:$f" 2>/dev/null \
            && git -C "$ROOT" diff --quiet "origin/$BR" -- "$f" 2>/dev/null; then
           ECHOES="$ECHOES$f"$'\n'          # tracked, already identical to origin
+        elif [ ! -e "$ROOT/$f" ] && ! git -C "$ROOT" cat-file -e "origin/$BR:$f" 2>/dev/null; then
+          # deleted here AND gone upstream (a rename/removal Dropbox echoed in
+          # ahead of git, 2026-10-27): HEAD still holds it, the ff removes it.
+          ECHOES="$ECHOES$f"$'\n'
         elif is_regenerable "$f"; then
           DISPOSABLE="$DISPOSABLE$f"$'\n'  # tracked on purpose, but regenerated
         else

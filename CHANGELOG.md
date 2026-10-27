@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-10-27
+
+Patch for the upgrade-path bugs found right after 0.10.0, a doctor false
+alarm, and a resync fix.
+
+### Fixed
+- **`myai upgrade` no longer downgrades on Node 22.** 0.10.0 declared
+  `engines.node >=24`, and `npm update -g` picks the newest release whose
+  engines fit the running Node, so a 0.10.0 install on Node 22 LTS was
+  "updated" down to 0.8.0 while printing "CLI up to date". The upgrade now
+  compares the installed version to `npm view ai-management version`, installs
+  `ai-management@<latest>` by exact version, never downgrades, and when it
+  can't reach latest says why (registry unreachable, or the engines that
+  release needs vs. this Node, with npm's own error line).
+- **`engines.node` is back to `>=20`**, the real minimum of the host-side CLI
+  (verified: version, help and `myai doctor --json` run clean on Node 20 and
+  22, and the package installs with no `EBADENGINE`). The gateway and dashboard
+  still run on Node 24 inside their containers.
+- **Upgrade never writes user state into the framework repo.** With
+  `MYAI_HOME` set to the framework checkout (its old meaning), the schema
+  migrator replaced the repo's `config/` directory with a config file
+  (`IsADirectoryError`, a stray `config.tmp` left behind). The migrator now
+  sends a framework-checkout home to `${MYAI_USER_DIR:-~/.myai}`, refuses
+  outright when `<home>/config` is a directory, and never leaves its temp file
+  behind. The upgrade script's fallback resolver got the same guard, and
+  `myai init` no longer tells you to set `MYAI_HOME` (use `MYAI_FRAMEWORK_DIR`,
+  only if auto-detect misses).
+- **`myai doctor` no longer warns about ports held by its own stack.** A busy
+  stack port (3100/3200/3201/3210/27200) held by one of this stack's containers
+  (`<MYAI_PROJECT_NAME|myai>-*`) is reported OK ("in use by this stack"); any
+  other holder still WARNs and is now named.
+- **`resync` treats an echoed deletion as an echo.** A file deleted locally that
+  is also gone upstream (for example the old path of a rename that Dropbox
+  synced ahead of git) no longer counts as genuine local work, so resync
+  fast-forwards instead of stopping for the operator. A local deletion of a file
+  that still exists upstream still refuses, as before.
+
 ## [0.10.0] — 2026-10-27
 
 ### Highlights

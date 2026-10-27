@@ -10,8 +10,8 @@
 #          exact old HEAD and exit 4. A brain.path pointer naming a missing
 #          directory stops the upgrade (exit 3) instead of silently skipping it.
 #       Then two phases, in order:
-#         1. self-update  — `npm update -g ai-management` so the globally
-#                           installed CLI matches the latest published version.
+#         1. self-update  — `npm install -g ai-management@<npm latest>` when the
+#                           global CLI is older; never downgrades, says why if not.
 #         2. migrate      — bring on-disk state up to the framework's current
 #                           schema (idempotent): the $MYAI_HOME/config file and
 #                           the git-versioned brain layout. Safe to run repeatedly.
@@ -48,7 +48,12 @@ MIGRATOR="${MYAI_MIGRATOR:-$HERE/lib/myai_migrate.py}"   # MYAI_MIGRATOR: test s
 # defaults if the lib is missing (keeps upgrade working from a partial checkout).
 # shellcheck source=lib/brain.sh
 if ! . "$HERE/lib/brain.sh" 2>/dev/null; then
-  brain_home() { printf '%s\n' "${MYAI_HOME:-$HOME/.myai}"; }
+  # Same guard as brain.sh: a MYAI_HOME that is a framework checkout is ignored.
+  brain_home() {
+    local h="${MYAI_HOME:-}"
+    if [ -n "$h" ] && [ -f "$h/scripts/lib/brain.sh" ] && [ -d "$h/runtime" ]; then h=""; fi
+    printf '%s\n' "${h:-$HOME/.myai}"
+  }
   brain_dir() {
     if [ -n "${MYAI_BRAIN_DIR:-}" ]; then printf '%s\n' "$MYAI_BRAIN_DIR"; return 0; fi
     local ptr; ptr="$(brain_home)/brain.path"
@@ -165,14 +170,52 @@ restore_brain() {
 }
 
 # ── phase 1: self-update the global package ─────────────────────────────────────
+# Install the registry's latest by exact version, never `npm update -g`: npm
+# update picks the newest version whose `engines` fit the running Node, so a
+# 0.10.0 box on Node 22 (0.10.0 said node>=24) was "updated" DOWN to 0.8.0
+# and told "CLI up to date (0.8.0)" (2026-10-27). Never downgrade; say why
+# when latest can't be reached.
+installed_ver() {
+  npm ls -g "$PKG_NAME" --depth=0 --json 2>/dev/null \
+    | "$PY" -c 'import json,sys
+try: print(json.load(sys.stdin).get("dependencies",{}).get(sys.argv[1],{}).get("version",""))
+except Exception: print("")' "$PKG_NAME"
+}
+# ver_cmp A B → prints -1 / 0 / 1 (numeric x.y.z; a pre-release tag sorts below its release)
+ver_cmp() {
+  "$PY" -c 'import re,sys
+def k(v):
+    m = re.match(r"v?(\d+)\.(\d+)\.(\d+)(-.*)?$", v.strip())
+    return (int(m[1]), int(m[2]), int(m[3]), 0 if m[4] else 1) if m else (0, 0, 0, 0)
+a, b = k(sys.argv[1]), k(sys.argv[2])
+print((a > b) - (a < b))' "$1" "$2"
+}
 if [ "$SELF_UPDATE" = "1" ] && [ "$JSON" != "1" ]; then
   if command -v npm >/dev/null 2>&1; then
-    say "→ Self-update: npm update -g $PKG_NAME"
-    if npm update -g "$PKG_NAME" >/dev/null 2>&1; then
-      ver="$(npm ls -g "$PKG_NAME" --depth=0 2>/dev/null | grep -oE "$PKG_NAME@[0-9][^ ]*" | head -1)"
-      say "✓ CLI up to date${ver:+ ($ver)}"
+    say "→ Self-update: npm registry check for $PKG_NAME"
+    cur="$(installed_ver)"
+    latest="$(npm view "$PKG_NAME" version 2>/dev/null | tail -1 | tr -d '[:space:]')"
+    if [ -z "$cur" ]; then
+      say "⚠ $PKG_NAME is not installed globally (running from a checkout?) — skipping self-update${latest:+; latest on npm is $latest}"
+    elif [ -z "$latest" ]; then
+      say "⚠ could not reach the npm registry (npm view $PKG_NAME failed) — CLI left at $cur, continuing with migrations"
     else
-      say "⚠ npm self-update failed (offline, or not a global install) — continuing with migrations"
+      case "$(ver_cmp "$cur" "$latest")" in
+        0)  say "✓ CLI up to date ($cur, latest on npm)" ;;
+        1)  say "✓ CLI $cur is newer than npm latest $latest — not downgrading" ;;
+        *)
+          say "  installing $PKG_NAME@$latest (installed: $cur)"
+          npm_out="$(npm install -g "$PKG_NAME@$latest" 2>&1)"; npm_rc=$?
+          now="$(installed_ver)"
+          if [ "$npm_rc" = 0 ] && [ "$now" = "$latest" ]; then
+            say "✓ CLI upgraded $cur → $latest"
+          else
+            say "⚠ could not install $PKG_NAME@$latest — CLI left at ${now:-$cur} (npm exit $npm_rc)"
+            need="$(npm view "$PKG_NAME@$latest" engines.node 2>/dev/null | tail -1)"
+            [ -n "$need" ] && say "  $latest needs node $need; this is node $(node -v 2>/dev/null || echo '?')"
+            printf '%s\n' "$npm_out" | grep -E 'ERR!|EBADENGINE|EACCES' | head -3 | sed 's/^/  /'
+          fi ;;
+      esac
     fi
   else
     say "⚠ npm not on PATH — skipping self-update, continuing with migrations"

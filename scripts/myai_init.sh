@@ -659,4 +659,4 @@ fi
 
 echo ""
 echo "myai init complete → $ABS_TARGET"
-echo "  Next: cd $ABS_TARGET  →  set MYAI_HOME in AI/.env  →  myai up"
+echo "  Next: cd $ABS_TARGET  →  myai up   (set MYAI_FRAMEWORK_DIR in AI/.env only if auto-detect misses)"

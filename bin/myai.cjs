@@ -324,6 +324,30 @@ function portInUse(port) {
   return r.status === 0;
 }
 
+// parseDockerPorts(`docker ps --format '{{.Names}}\t{{.Ports}}'` output) →
+// Map<hostPort, containerName>. Handles "0.0.0.0:3210->3210/tcp", ranges
+// ("0.0.0.0:3200-3201->3200-3201/tcp") and IPv6 ("[::]:3000->3000/tcp").
+function parseDockerPorts(text) {
+  const owners = new Map();
+  for (const line of String(text || '').split('\n')) {
+    const [name, ports] = line.split('\t');
+    if (!name || !ports) continue;
+    for (const m of ports.matchAll(/:(\d+)(?:-(\d+))?->/g)) {
+      const lo = Number(m[1]); const hi = Number(m[2] || m[1]);
+      for (let p = lo; p <= hi; p++) if (!owners.has(p)) owners.set(p, name.trim());
+    }
+  }
+  return owners;
+}
+
+// A busy stack port held by OUR OWN stack (a container named <project>-*) is
+// the stack running, not a conflict (2026-10-27: doctor WARNed 3200/3201/3210/
+// 27200 on every box with myAI up). Empty map when docker is absent or down.
+function stackPortOwners() {
+  const r = spawnSync('docker', ['ps', '--format', '{{.Names}}\t{{.Ports}}'], { encoding: 'utf8', timeout: 10000 });
+  return r && r.status === 0 ? parseDockerPorts(r.stdout) : new Map();
+}
+
 // claudeAgentConfigured → true when this machine is set up for a Claude agent
 // even without the CLI on PATH: CLAUDE_CONFIG_DIR is set, or a ~/.claude /
 // ~/.claude-<x> profile dir exists. Used to decide whether a missing
@@ -960,12 +984,20 @@ function runDoctorChecks() {
   check('.mcp.json', mcp ? true : 'warn', mcp ? 'present' : 'not present (optional)');
 
   // ── ports free (the stack can't bind a port already in use) ──────────────
+  let owners = null;
+  const ownPrefix = `${process.env.MYAI_PROJECT_NAME || 'myai'}-`;
   for (const [port, svc] of STACK_PORTS) {
     const used = portInUse(port);
+    if (used && owners === null) owners = stackPortOwners();
+    const owner = used ? owners.get(port) : undefined;
+    if (owner && owner.startsWith(ownPrefix)) {
+      check(`port ${port} free`, true, `in use by this stack (${owner}) — ${svc}`);
+      continue;
+    }
     // A busy port is a warning, not a fatal: it may be a prior `myai up` still
     // running. We flag it so the operator can stop the conflicting process.
     allOk &= check(`port ${port} free`, used ? 'warn' : true,
-      used ? `IN USE — needed by ${svc} (stop the process or run \`myai down\`)` : `free (${svc})`);
+      used ? `IN USE${owner ? ` by ${owner}` : ''} — needed by ${svc} (stop the process or run \`myai down\`)` : `free (${svc})`);
   }
 
   return { checks, ok: !!allOk, dockerState };
@@ -1671,6 +1703,7 @@ module.exports = {
   runnerCadenceRemediation,
   gatewayImageRemediation,
   parseEnvKeys,
+  parseDockerPorts,
   helpRequestedFor,
   printCommandHelp,
   SECRET_KEY_RE,

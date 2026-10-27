@@ -57,10 +57,33 @@ def write_config(path, data):
     never leave a half-written config."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def is_framework_checkout(d):
+    """Same test as scripts/lib/brain.sh brain_home(): the myAI repo itself."""
+    return os.path.isfile(os.path.join(d, "scripts", "lib", "brain.sh")) \
+        and os.path.isdir(os.path.join(d, "runtime"))
+
+
+def resolve_home(home):
+    """User state lives in ${MYAI_USER_DIR:-~/.myai}, never in a repo. A --home
+    that is the framework checkout (MYAI_HOME's old meaning, still exported by
+    some shells) falls back to that — 2026-10-27 an upgrade os.replace'd the
+    config file over the repo's config/ DIRECTORY."""
+    if home and is_framework_checkout(home):
+        user = os.environ.get("MYAI_USER_DIR") or os.path.join(os.path.expanduser("~"), ".myai")
+        print(f"note: {home} is the myAI framework checkout, not a state dir — using {user}",
+              file=sys.stderr)
+        return user
+    return home
 
 
 def brain_is_repo(brain_dir):
@@ -210,7 +233,13 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     mode = "check" if args.check else "dry-run" if args.dry_run else "apply"
-    result = run(args.home, args.brain, mode)
+    home = resolve_home(args.home)
+    if os.path.isdir(os.path.join(home, "config")):
+        print(f"myai_migrate: {os.path.join(home, 'config')} is a directory, not the myAI config "
+              f"file — refusing to touch it. Point MYAI_HOME at your state dir (default ~/.myai).",
+              file=sys.stderr)
+        return 1
+    result = run(home, args.brain, mode)
 
     if args.json:
         print(json.dumps(result))
